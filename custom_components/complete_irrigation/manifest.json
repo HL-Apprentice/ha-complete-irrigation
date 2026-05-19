@@ -1,0 +1,13 @@
+{
+  "domain": "complete_irrigation",
+  "name": "HA Complete Irrigation Integration",
+  "version": "0.1.0",
+  "documentation": "https://github.com/HL-Apprentice/ha-complete-irrigation",
+  "issue_tracker": "https://github.com/HL-Apprentice/ha-complete-irrigation/issues",
+  "codeowners": ["@HL-Apprentice"],
+  "config_flow": true,
+  "iot_class": "local_polling",
+  "integration_type": "service",
+  "dependencies": ["calendar"],
+  "requirements": []
+}
