@@ -62,6 +62,8 @@ def _runs_for_schedule(
     weekday_set = set(sched.weekdays)
     current = from_dt.date()
     end = until_dt.date()
+    if sched.end_date is not None and sched.end_date < end:
+        end = sched.end_date
 
     while current <= end:
         if current.weekday() in weekday_set:

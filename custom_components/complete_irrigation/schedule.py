@@ -10,7 +10,7 @@ ScheduleStore instance and persists it to HA's storage on every change.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import time
+from datetime import date, time
 from typing import Any
 
 _VALID_WEEKDAYS = frozenset(range(7))  # 0=Mon .. 6=Sun (ISO)
@@ -31,6 +31,9 @@ class Schedule:
     duration_minutes: int
     weekdays: tuple[int, ...] = field(default_factory=tuple)
     enabled: bool = True
+    # Optional end_date — if set, schedule stops firing after this date.
+    # Used by the "new grass" establishment mode (Slice 13).
+    end_date: date | None = None
 
     def __post_init__(self) -> None:
         if not self.name or not self.name.strip():
@@ -54,12 +57,15 @@ class Schedule:
             "duration_minutes": self.duration_minutes,
             "weekdays": list(self.weekdays),
             "enabled": self.enabled,
+            "end_date": self.end_date.isoformat() if self.end_date else None,
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Schedule:
         """Parse from the serializable form. Missing `enabled` defaults to True."""
         hour_str, minute_str = data["start_time"].split(":")
+        end_date_str = data.get("end_date")
+        end_date_val = date.fromisoformat(end_date_str) if end_date_str else None
         return cls(
             id=data["id"],
             name=data["name"],
@@ -68,6 +74,7 @@ class Schedule:
             duration_minutes=int(data["duration_minutes"]),
             weekdays=tuple(data["weekdays"]),
             enabled=bool(data.get("enabled", True)),
+            end_date=end_date_val,
         )
 
 
