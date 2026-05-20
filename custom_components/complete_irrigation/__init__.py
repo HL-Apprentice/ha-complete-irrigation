@@ -64,20 +64,28 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     from homeassistant.components.frontend import async_register_built_in_panel
     from homeassistant.components.http import StaticPathConfig
 
+    from .coordinator import ScheduleCoordinator
     from .manual_run import ManualRunTracker
     from .services import _async_register_services
 
     _LOGGER.info("Setting up Complete Irrigation entry %s", entry.entry_id)
 
     shared = _shared(hass)
+
+    # Per-entry coordinator drives the tick loop + persists schedules.
+    coordinator = ScheduleCoordinator(hass, entry.entry_id)
+    await coordinator.async_setup()
+
     hass.data[DOMAIN][entry.entry_id] = {
         "zones": entry.data.get("zones", []),
         "controller_domain": entry.data.get("controller_domain"),
         "manual_runs": ManualRunTracker(),
         "cancel_handles": {},
+        "coordinator": coordinator,
     }
 
-    # Register the run_zone / stop_zone services (idempotent).
+    # Register all integration services (idempotent — services are
+    # shared across config entries via the _find_coordinator lookup).
     await _async_register_services(hass)
 
     # Static path serving the panel JS — idempotent across multiple
@@ -141,6 +149,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry_data = hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
     if entry_data is not None:
         _cleanup_entry_handles(entry_data)
+        coord = entry_data.get("coordinator")
+        if coord is not None:
+            coord.async_unload()
 
     # When the last config entry of ours unloads, also tear down the
     # shared panel registration and services. (Static paths can't be

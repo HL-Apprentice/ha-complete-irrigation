@@ -1,21 +1,24 @@
-"""HA service registration for manual zone runs.
+"""HA service registration: manual zone runs + schedule CRUD.
 
-Two services:
+Run-on-demand services:
   • complete_irrigation.run_zone(entity_id, minutes=10)
-      Turns the zone on, schedules an auto-stop, and watches for
-      external state changes so a user-initiated off cancels the
-      auto-stop cleanly.
   • complete_irrigation.stop_zone(entity_id)
-      Manually cancel + turn off.
 
-Idempotent: calling run_zone twice for the same entity cleanly replaces
-the previous run (cancels old timer, starts a new one). External off
-events cancel the pending timer so we don't fire turn_off twice.
+Schedule CRUD services (operate against the ScheduleCoordinator):
+  • complete_irrigation.add_schedule(name, zone_entity_id, start_time,
+      duration_minutes, weekdays, enabled?)
+  • complete_irrigation.update_schedule(schedule_id, name?, zone_entity_id?,
+      start_time?, duration_minutes?, weekdays?, enabled?)
+  • complete_irrigation.delete_schedule(schedule_id)
+  • complete_irrigation.set_schedule_enabled(schedule_id, enabled)
+
+All schedule CRUD operations persist immediately via coordinator.async_save().
 """
 
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -28,6 +31,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import DEFAULT_MANUAL_RUN_MINUTES, DOMAIN, MAX_MANUAL_RUN_MINUTES
 from .manual_run import ManualRun, validate_run_duration
+from .schedule import Schedule
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant, ServiceCall
@@ -36,6 +40,12 @@ _LOGGER = logging.getLogger(__name__)
 
 SERVICE_RUN_ZONE = "run_zone"
 SERVICE_STOP_ZONE = "stop_zone"
+SERVICE_ADD_SCHEDULE = "add_schedule"
+SERVICE_UPDATE_SCHEDULE = "update_schedule"
+SERVICE_DELETE_SCHEDULE = "delete_schedule"
+SERVICE_SET_SCHEDULE_ENABLED = "set_schedule_enabled"
+
+MAX_SCHEDULE_DURATION_MIN = 240  # 4 hours — safety cap for scheduled runs
 
 # Voluptuous schema for validation at the HA boundary.
 _RUN_ZONE_SCHEMA = vol.Schema(
@@ -53,6 +63,62 @@ _STOP_ZONE_SCHEMA = vol.Schema(
         vol.Required("entity_id"): cv.entity_id,
     }
 )
+
+_WEEKDAYS_SCHEMA = vol.All(
+    cv.ensure_list,
+    [vol.All(vol.Coerce(int), vol.Range(min=0, max=6))],
+    vol.Length(min=1),
+)
+
+_ADD_SCHEDULE_SCHEMA = vol.Schema(
+    {
+        vol.Required("name"): vol.All(cv.string, vol.Length(min=1, max=80)),
+        vol.Required("zone_entity_id"): cv.entity_id,
+        vol.Required("start_time"): cv.time,
+        vol.Required("duration_minutes"): vol.All(
+            vol.Coerce(int), vol.Range(min=1, max=MAX_SCHEDULE_DURATION_MIN)
+        ),
+        vol.Required("weekdays"): _WEEKDAYS_SCHEMA,
+        vol.Optional("enabled", default=True): cv.boolean,
+    }
+)
+
+_UPDATE_SCHEDULE_SCHEMA = vol.Schema(
+    {
+        vol.Required("schedule_id"): cv.string,
+        vol.Optional("name"): vol.All(cv.string, vol.Length(min=1, max=80)),
+        vol.Optional("zone_entity_id"): cv.entity_id,
+        vol.Optional("start_time"): cv.time,
+        vol.Optional("duration_minutes"): vol.All(
+            vol.Coerce(int), vol.Range(min=1, max=MAX_SCHEDULE_DURATION_MIN)
+        ),
+        vol.Optional("weekdays"): _WEEKDAYS_SCHEMA,
+        vol.Optional("enabled"): cv.boolean,
+    }
+)
+
+_DELETE_SCHEDULE_SCHEMA = vol.Schema({vol.Required("schedule_id"): cv.string})
+
+_SET_SCHEDULE_ENABLED_SCHEMA = vol.Schema(
+    {
+        vol.Required("schedule_id"): cv.string,
+        vol.Required("enabled"): cv.boolean,
+    }
+)
+
+
+def _find_coordinator(hass: HomeAssistant):
+    """Return the first (and currently only) ScheduleCoordinator. v0.x
+    limits to one config entry; multi-controller support comes later."""
+    from . import _SHARED_KEY
+
+    for key, data in hass.data.get(DOMAIN, {}).items():
+        if key == _SHARED_KEY:
+            continue
+        coord = data.get("coordinator")
+        if coord is not None:
+            return coord
+    return None
 
 
 def _find_entry_data(hass: HomeAssistant, entity_id: str) -> dict[str, Any] | None:
@@ -191,18 +257,119 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         )
         _LOGGER.info("Stopped manual run for %s by request", entity_id)
 
+    # ── Schedule CRUD ──────────────────────────────────────────────
+
+    async def handle_add_schedule(call: ServiceCall) -> None:
+        data = _ADD_SCHEDULE_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None:
+            _LOGGER.warning("add_schedule called but no coordinator available")
+            return
+        schedule = Schedule(
+            id=uuid.uuid4().hex[:12],
+            name=data["name"],
+            zone_entity_id=data["zone_entity_id"],
+            start_time=data["start_time"],
+            duration_minutes=data["duration_minutes"],
+            weekdays=tuple(sorted(data["weekdays"])),
+            enabled=data["enabled"],
+        )
+        coord.schedule_store.add(schedule)
+        await coord.async_save()
+        _LOGGER.info("Added schedule %s (%s)", schedule.id, schedule.name)
+
+    async def handle_update_schedule(call: ServiceCall) -> None:
+        data = _UPDATE_SCHEDULE_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None:
+            return
+        existing = coord.schedule_store.get(data["schedule_id"])
+        if existing is None:
+            _LOGGER.warning("update_schedule: no such schedule %s", data["schedule_id"])
+            return
+        # Build a new Schedule with overrides applied (frozen dataclass).
+        merged = Schedule(
+            id=existing.id,
+            name=data.get("name", existing.name),
+            zone_entity_id=data.get("zone_entity_id", existing.zone_entity_id),
+            start_time=data.get("start_time", existing.start_time),
+            duration_minutes=data.get("duration_minutes", existing.duration_minutes),
+            weekdays=(tuple(sorted(data["weekdays"])) if "weekdays" in data else existing.weekdays),
+            enabled=data.get("enabled", existing.enabled),
+        )
+        coord.schedule_store.upsert(merged)
+        await coord.async_save()
+        _LOGGER.info("Updated schedule %s", merged.id)
+
+    async def handle_delete_schedule(call: ServiceCall) -> None:
+        data = _DELETE_SCHEDULE_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None:
+            return
+        if coord.schedule_store.delete(data["schedule_id"]):
+            await coord.async_save()
+            _LOGGER.info("Deleted schedule %s", data["schedule_id"])
+
+    async def handle_set_schedule_enabled(call: ServiceCall) -> None:
+        data = _SET_SCHEDULE_ENABLED_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None:
+            return
+        existing = coord.schedule_store.get(data["schedule_id"])
+        if existing is None:
+            return
+        new = Schedule(
+            id=existing.id,
+            name=existing.name,
+            zone_entity_id=existing.zone_entity_id,
+            start_time=existing.start_time,
+            duration_minutes=existing.duration_minutes,
+            weekdays=existing.weekdays,
+            enabled=data["enabled"],
+        )
+        coord.schedule_store.upsert(new)
+        await coord.async_save()
+        _LOGGER.info("Set schedule %s enabled=%s", existing.id, data["enabled"])
+
     hass.services.async_register(DOMAIN, SERVICE_RUN_ZONE, handle_run_zone, schema=_RUN_ZONE_SCHEMA)
     hass.services.async_register(
         DOMAIN, SERVICE_STOP_ZONE, handle_stop_zone, schema=_STOP_ZONE_SCHEMA
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_ADD_SCHEDULE, handle_add_schedule, schema=_ADD_SCHEDULE_SCHEMA
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_UPDATE_SCHEDULE,
+        handle_update_schedule,
+        schema=_UPDATE_SCHEDULE_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_DELETE_SCHEDULE,
+        handle_delete_schedule,
+        schema=_DELETE_SCHEDULE_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_SET_SCHEDULE_ENABLED,
+        handle_set_schedule_enabled,
+        schema=_SET_SCHEDULE_ENABLED_SCHEMA,
     )
 
 
 def _async_unregister_services(hass: HomeAssistant) -> None:
     """Tear down services. Called when the last config entry unloads."""
-    if hass.services.has_service(DOMAIN, SERVICE_RUN_ZONE):
-        hass.services.async_remove(DOMAIN, SERVICE_RUN_ZONE)
-    if hass.services.has_service(DOMAIN, SERVICE_STOP_ZONE):
-        hass.services.async_remove(DOMAIN, SERVICE_STOP_ZONE)
+    for svc in (
+        SERVICE_RUN_ZONE,
+        SERVICE_STOP_ZONE,
+        SERVICE_ADD_SCHEDULE,
+        SERVICE_UPDATE_SCHEDULE,
+        SERVICE_DELETE_SCHEDULE,
+        SERVICE_SET_SCHEDULE_ENABLED,
+    ):
+        if hass.services.has_service(DOMAIN, svc):
+            hass.services.async_remove(DOMAIN, svc)
 
 
 def _cleanup_entry_handles(entry_data: dict[str, Any]) -> None:
