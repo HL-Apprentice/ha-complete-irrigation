@@ -116,6 +116,9 @@
 
       // Local manual-run countdowns: entity_id -> deadline epoch ms
       this._localRuns = {};
+      // The total run length for each active run, in minutes. Lets the
+      // tile show "4:52 left of 10 min" instead of just "4:52 left".
+      this._localRunDurations = {};
       this._countdownTimer = null;
 
       // Hidden zones (per-browser, persisted)
@@ -461,6 +464,7 @@
 
     _startLocalCountdown(entityId, minutes) {
       this._localRuns[entityId] = Date.now() + minutes * 60 * 1000;
+      this._localRunDurations[entityId] = minutes;
       // Full re-render ONCE to swap Run → Stop button and inject countdown
       // <span data-countdown-for>. Subsequent ticks only update text content
       // (no shadowRoot rebuild → no flicker, no shifting click targets).
@@ -472,6 +476,7 @@
 
     _stopLocalCountdown(entityId) {
       delete this._localRuns[entityId];
+      delete this._localRunDurations[entityId];
       if (Object.keys(this._localRuns).length === 0 && this._countdownTimer) {
         clearInterval(this._countdownTimer);
         this._countdownTimer = null;
@@ -490,7 +495,10 @@
       if (expired.length > 0) {
         // Someone's countdown reached zero — clear and do a full re-render
         // once so Stop reverts to Run Now and the status text reflects idle.
-        for (const eid of expired) delete this._localRuns[eid];
+        for (const eid of expired) {
+          delete this._localRuns[eid];
+          delete this._localRunDurations[eid];
+        }
         if (Object.keys(this._localRuns).length === 0 && this._countdownTimer) {
           clearInterval(this._countdownTimer);
           this._countdownTimer = null;
@@ -555,6 +563,9 @@
           const deadlineMs = new Date(r.deadline).getTime();
           if (Number.isFinite(deadlineMs) && deadlineMs > Date.now()) {
             this._localRuns[r.entity_id] = deadlineMs;
+            if (Number.isFinite(r.duration_minutes)) {
+              this._localRunDurations[r.entity_id] = r.duration_minutes;
+            }
           }
         }
         if (
@@ -565,7 +576,7 @@
         }
         this._scheduleRender();
       } catch (err) {
-        // Pre-v1.5.1 backends don't have this command — no-op, fall
+        // Pre-v1.5.2 backends don't have this command — no-op, fall
         // back to the local-only countdown behavior.
         console.warn("[complete-irrigation] get_active_runs not available:", err);
       }
@@ -805,7 +816,7 @@
 
       return (
         `<header class="page-header"><h2>Today</h2>` +
-        `<span class="version-pill">v1.5.1</span></header>` +
+        `<span class="version-pill">v1.5.2</span></header>` +
         this._renderRainLockoutBanner() +
         this._renderWeatherBanner() +
         `<section>` +
@@ -1044,12 +1055,17 @@
       const countdown = this._localRuns[zone.entityId];
       const remainingMs = countdown ? Math.max(0, countdown - Date.now()) : 0;
       const isCountingDown = remainingMs > 0 && zone.on;
+      const totalMinutes = this._localRunDurations[zone.entityId];
 
       // Countdown text is wrapped in <span data-countdown-for> so the
       // 1Hz tick can update its textContent without rebuilding any DOM
       // (avoids the v1.3.0 flicker + shifted-click-target regression).
       const cdSpan = isCountingDown
         ? `<span data-countdown-for="${escapeAttr(zone.entityId)}">${_formatRemaining(remainingMs)}</span>`
+        : "";
+      // "of 10 min" suffix when we know the original run length
+      const totalLabel = isCountingDown && totalMinutes
+        ? ` of ${totalMinutes} min`
         : "";
 
       let statusClass, statusLabel;
@@ -1058,7 +1074,9 @@
         statusLabel = "Unavailable";
       } else if (zone.on) {
         statusClass = "running";
-        statusLabel = isCountingDown ? `Running — ${cdSpan} left` : "Running";
+        statusLabel = isCountingDown
+          ? `Running — ${cdSpan} left${totalLabel}`
+          : "Running";
       } else {
         statusClass = "idle";
         statusLabel = "Idle";
@@ -1097,14 +1115,14 @@
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Zones</h2>` +
-          `<span class="version-pill">v1.5.1</span></header>` +
+          `<span class="version-pill">v1.5.2</span></header>` +
           `<div class="empty"><p>No zones configured. Add them via Settings → Devices &amp; Services.</p></div>`
         );
       }
       const rows = zones.map((z) => this._renderZoneRow(z)).join("");
       return (
         `<header class="page-header"><h2>Zones</h2>` +
-        `<span class="version-pill">v1.5.1</span></header>` +
+        `<span class="version-pill">v1.5.2</span></header>` +
         `<p class="section-hint">Hidden zones still run on schedule — they're just hidden from the Today view.</p>` +
         `<div class="zones-list">${rows}</div>`
       );
@@ -1212,7 +1230,7 @@
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Sensors</h2>` +
-          `<span class="version-pill">v1.5.1</span></header>` +
+          `<span class="version-pill">v1.5.2</span></header>` +
           `<div class="empty"><p>No zones configured.</p></div>`
         );
       }
@@ -1221,7 +1239,7 @@
         .join("");
       return (
         `<header class="page-header"><h2>Sensors</h2>` +
-        `<span class="version-pill">v1.5.1</span></header>` +
+        `<span class="version-pill">v1.5.2</span></header>` +
         `<p class="section-hint">Bind soil-moisture sensors to a zone so runtimes auto-adjust based on actual moisture. You can attach one sensor or several (combined as average, lowest, highest, or just the primary).</p>` +
         `<div class="sensor-zone-list">${cards}</div>`
       );
@@ -1440,7 +1458,7 @@
 
       return (
         `<header class="page-header"><h2>Weather</h2>` +
-        `<span class="version-pill">v1.5.1</span></header>` +
+        `<span class="version-pill">v1.5.2</span></header>` +
         lockoutHtml +
         forecastHtml +
         `<form class="weather-form" data-form="weather">` +
@@ -1888,5 +1906,5 @@
   }
 
   customElements.define(ELEMENT_NAME, CompleteIrrigationPanel);
-  console.info("[complete-irrigation] panel registered, version v1.5.1");
+  console.info("[complete-irrigation] panel registered, version v1.5.2");
 })();
