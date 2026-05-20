@@ -25,8 +25,10 @@ from .const import KNOWN_IRRIGATION_DOMAINS
 EntityDescriptor = dict[str, Any]
 
 # Heuristic substrings that suggest a switch is not really a zone
-# (e.g., master valve, test entities, pause buttons, schedule switches).
-_NON_ZONE_HINTS = ("master", "_test", "schedule", "pause", "rain_delay", "standby")
+# (master valves, pause buttons, schedule toggles, etc.). Kept narrow
+# on purpose — a user with "Test Lawn" or "Test Garden" should NOT
+# be filtered out.
+_NON_ZONE_HINTS = ("master_valve", "schedule", "pause", "rain_delay", "standby")
 
 
 def detect_irrigation_integrations(

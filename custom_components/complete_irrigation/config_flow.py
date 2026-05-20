@@ -78,24 +78,43 @@ class CompleteIrrigationConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     # ── Step 2: pick zones ────────────────────────────────────────────
     async def async_step_zones(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Show candidate zone switches and let the user confirm."""
-        # Build entity descriptors from HA's registry for the pure-logic filter.
+        # Build entity descriptors from BOTH the entity registry (config-
+        # entry-based integrations like Rachio) AND hass.states (YAML
+        # entities like template / command_line / MQTT YAML / RPi GPIO).
         registry = er.async_get(self.hass)
         config_entries_by_id = {
             ce.entry_id: ce.domain for ce in self.hass.config_entries.async_entries()
         }
-        entities = [
-            {
-                "entity_id": e.entity_id,
-                "domain": e.domain,
-                "config_entry_domain": (
-                    config_entries_by_id.get(e.config_entry_id) if e.config_entry_id else None
-                ),
-                "name": e.name,
-                "original_name": e.original_name,
-                "disabled": e.disabled,
-            }
-            for e in registry.entities.values()
-        ]
+        entities: list[dict[str, Any]] = []
+        registry_entity_ids: set[str] = set()
+        for e in registry.entities.values():
+            registry_entity_ids.add(e.entity_id)
+            entities.append(
+                {
+                    "entity_id": e.entity_id,
+                    "domain": e.domain,
+                    "config_entry_domain": (
+                        config_entries_by_id.get(e.config_entry_id) if e.config_entry_id else None
+                    ),
+                    "name": e.name,
+                    "original_name": e.original_name,
+                    "disabled": e.disabled,
+                }
+            )
+        # Append non-registry switches (template, command_line, MQTT YAML, etc.)
+        for state in self.hass.states.async_all("switch"):
+            if state.entity_id in registry_entity_ids:
+                continue
+            entities.append(
+                {
+                    "entity_id": state.entity_id,
+                    "domain": "switch",
+                    "config_entry_domain": None,
+                    "name": state.attributes.get("friendly_name"),
+                    "original_name": None,
+                    "disabled": False,
+                }
+            )
 
         candidates = select_zone_candidates(entities, controller_domain=self._controller_domain)
 
