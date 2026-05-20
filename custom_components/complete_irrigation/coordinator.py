@@ -18,6 +18,7 @@ import logging
 from datetime import timedelta
 from typing import TYPE_CHECKING
 
+from .conflict_resolver import POLICY_DEFER_NEW, resolve_conflicts
 from .const import DOMAIN
 from .run_planner import due_runs_since, next_runs
 from .schedule import ScheduleStore
@@ -105,22 +106,31 @@ class ScheduleCoordinator:
         last = self._last_tick
         self._last_tick = now
 
-        # Window from last tick to (now + 60s) so we don't miss runs that
-        # fall a few seconds outside the tick interval. due_runs_since
-        # then keeps only those <= now.
+        # Pull a wider window so the conflict resolver sees neighboring
+        # runs (its shifts can spill outside a narrow window).
         upcoming = next_runs(
             self._store.enabled_schedules(),
-            from_dt=last,
-            until_dt=now + timedelta(seconds=TICK_SECONDS),
+            from_dt=last - timedelta(hours=2),
+            until_dt=now + timedelta(hours=2),
         )
-        due = due_runs_since(upcoming, last, now)
+        resolved = resolve_conflicts(upcoming, POLICY_DEFER_NEW)
+        due = due_runs_since(resolved, last, now)
 
         for run in due:
+            if run.reason.startswith("skipped:"):
+                _LOGGER.info(
+                    "Skipping run for %s (%s): %s",
+                    run.zone_entity_id,
+                    run.schedule_name,
+                    run.reason,
+                )
+                continue
             _LOGGER.info(
-                "Firing scheduled run: %s for %d min (schedule %s)",
+                "Firing scheduled run: %s for %d min (schedule %s, reason=%s)",
                 run.zone_entity_id,
                 run.duration_minutes,
                 run.schedule_name,
+                run.reason,
             )
             try:
                 await self._hass.services.async_call(
