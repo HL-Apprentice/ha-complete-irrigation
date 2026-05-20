@@ -10,12 +10,6 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from homeassistant.components.frontend import (
-    async_register_built_in_panel,
-    async_remove_panel,
-)
-from homeassistant.components.http import StaticPathConfig
-
 from .const import DOMAIN
 
 if TYPE_CHECKING:
@@ -33,6 +27,11 @@ PANEL_JS_FILENAME = "complete-irrigation-panel.js"
 
 async def async_setup_entry(hass: "HomeAssistant", entry: "ConfigEntry") -> bool:
     """Set up Complete Irrigation from a config entry."""
+    # Deferred imports — only loaded when HA actually calls us, so the
+    # package stays importable in test environments without HA installed.
+    from homeassistant.components.frontend import async_register_built_in_panel
+    from homeassistant.components.http import StaticPathConfig
+
     _LOGGER.info("Setting up Complete Irrigation entry %s", entry.entry_id)
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = {
@@ -85,6 +84,8 @@ async def async_setup_entry(hass: "HomeAssistant", entry: "ConfigEntry") -> bool
 
 async def async_unload_entry(hass: "HomeAssistant", entry: "ConfigEntry") -> bool:
     """Unload a config entry."""
+    from homeassistant.components.frontend import async_remove_panel
+
     if PLATFORMS:
         unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
         if not unload_ok:
