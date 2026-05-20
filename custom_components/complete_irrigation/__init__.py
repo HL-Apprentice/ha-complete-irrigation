@@ -67,7 +67,10 @@ async def async_setup_entry(hass: "HomeAssistant", entry: "ConfigEntry") -> bool
                     "name": "complete-irrigation-panel",
                     "embed_iframe": False,
                     "trust_external": False,
-                    "module_url": f"{PANEL_STATIC_URL}/{PANEL_JS_FILENAME}",
+                    # Plain script (not ES module) — safer for vanilla
+                    # web components. Prevents poisoning HA's element
+                    # registry if the panel JS fails mid-load.
+                    "js_url": f"{PANEL_STATIC_URL}/{PANEL_JS_FILENAME}",
                 },
                 "zones": entry.data.get("zones", []),
                 "controller_domain": entry.data.get("controller_domain"),
