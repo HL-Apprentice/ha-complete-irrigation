@@ -9,6 +9,7 @@ Multi-step wizard:
 Sensor setup, plant categories, weather binding, conflict policy, and
 notifications all come in later slices (#7, #6, #5, #10).
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -16,11 +17,11 @@ from typing import Any
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.data_entry_flow import FlowResult
-from homeassistant.helpers import entity_registry as er, selector
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import selector
 
 from .const import DOMAIN, NAME
 from .helpers import detect_irrigation_integrations, select_zone_candidates
-
 
 MANUAL_MODE = "__manual__"
 
@@ -35,9 +36,7 @@ class CompleteIrrigationConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._controller_domain: str | None = None
 
     # ── Step 1: pick irrigation integration ───────────────────────────
-    async def async_step_user(
-        self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Detect installed irrigation integrations and let user pick."""
         # v0.1 limits to one instance — multi-controller support is later work.
         await self.async_set_unique_id(DOMAIN)
@@ -53,8 +52,7 @@ class CompleteIrrigationConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         # Build the selector options
         options: list[selector.SelectOptionDict] = [
-            selector.SelectOptionDict(value=domain, label=label)
-            for domain, label in detected
+            selector.SelectOptionDict(value=domain, label=label) for domain, label in detected
         ]
         options.append(
             selector.SelectOptionDict(
@@ -78,24 +76,19 @@ class CompleteIrrigationConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return self.async_show_form(step_id="user", data_schema=schema)
 
     # ── Step 2: pick zones ────────────────────────────────────────────
-    async def async_step_zones(
-        self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    async def async_step_zones(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Show candidate zone switches and let the user confirm."""
         # Build entity descriptors from HA's registry for the pure-logic filter.
         registry = er.async_get(self.hass)
         config_entries_by_id = {
-            ce.entry_id: ce.domain
-            for ce in self.hass.config_entries.async_entries()
+            ce.entry_id: ce.domain for ce in self.hass.config_entries.async_entries()
         }
         entities = [
             {
                 "entity_id": e.entity_id,
                 "domain": e.domain,
                 "config_entry_domain": (
-                    config_entries_by_id.get(e.config_entry_id)
-                    if e.config_entry_id
-                    else None
+                    config_entries_by_id.get(e.config_entry_id) if e.config_entry_id else None
                 ),
                 "name": e.name,
                 "original_name": e.original_name,
@@ -104,9 +97,7 @@ class CompleteIrrigationConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             for e in registry.entities.values()
         ]
 
-        candidates = select_zone_candidates(
-            entities, controller_domain=self._controller_domain
-        )
+        candidates = select_zone_candidates(entities, controller_domain=self._controller_domain)
 
         if user_input is not None:
             return self.async_create_entry(

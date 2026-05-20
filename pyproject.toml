@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "complete_irrigation"
-version = "0.1.0"
+version = "0.2.1"
 description = "Home Assistant custom integration for complete irrigation control"
 readme = "README.md"
 license = { text = "MIT" }
@@ -36,7 +36,15 @@ select = [
     "B",   # flake8-bugbear
     "UP",  # pyupgrade
     "N",   # pep8-naming
+    "W",   # pycodestyle warnings
+    "SIM", # flake8-simplify
+    "RUF", # ruff-specific rules
 ]
 ignore = [
     "B008",  # function calls in arg defaults — common in HA
 ]
+
+[tool.ruff.lint.per-file-ignores]
+# Dev/script files contain markdown bodies as Python strings — long
+# lines and en-dashes are intentional typography there.
+"scripts/*" = ["E501", "RUF001"]

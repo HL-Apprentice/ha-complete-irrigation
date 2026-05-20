@@ -8,9 +8,9 @@ where applicable).
 Run once after the repo is initialized:
     python3 scripts/create_issues.py
 """
+
 from __future__ import annotations
 
-import json
 import subprocess
 import sys
 import tempfile
@@ -124,7 +124,6 @@ PRD: 62–68
 None — can start immediately.
 """,
     },
-
     # -- Slice 1: Install + see zones ----------------------------------------
     {
         "title": "Slice 1 — Install integration and see my zones in the sidebar panel",
@@ -163,7 +162,6 @@ PRD: 6–14, 62–68
 P2 (panel layout winner picked)
 """,
     },
-
     # -- Slice 2: Manual Run-Now --------------------------------------------
     {
         "title": "Slice 2 — Manually run a zone from the panel",
@@ -199,7 +197,6 @@ PRD: 82–84
 Slice 1
 """,
     },
-
     # -- Slice 3: Schedules + Coordinator ------------------------------------
     {
         "title": "Slice 3 — Create a daily schedule and watch it fire",
@@ -235,7 +232,6 @@ PRD: 28–31
 Slice 2
 """,
     },
-
     # -- Slice 4: Calendar entity --------------------------------------------
     {
         "title": "Slice 4 — See my schedule as an HA calendar entity",
@@ -270,7 +266,6 @@ PRD: 58–61
 Slice 3
 """,
     },
-
     # -- Slice 5: Conflict popup ---------------------------------------------
     {
         "title": "Slice 5 — Schedule conflicts show a popup with three resolution options",
@@ -308,7 +303,6 @@ PRD: 34–38
 P1, Slice 4
 """,
     },
-
     # -- Slice 6: Rain lockout -----------------------------------------------
     {
         "title": "Slice 6 — Tempest rain detection triggers system-wide watering lockout",
@@ -346,7 +340,6 @@ PRD: 45–49
 Slice 3
 """,
     },
-
     # -- Slice 7: Moisture sensors + categories ------------------------------
     {
         "title": "Slice 7 — Moisture sensors and plant categories drive runtime",
@@ -390,7 +383,6 @@ PRD: 15–27, 32, 33
 Slice 3
 """,
     },
-
     # -- Slice 8: Hot weather + wind -----------------------------------------
     {
         "title": "Slice 8 — Hot weather boost and wind defer",
@@ -427,7 +419,6 @@ PRD: 50–52
 Slice 6
 """,
     },
-
     # -- Slice 9: Multi-sensor combine ---------------------------------------
     {
         "title": "Slice 9 — Multiple sensors per zone with combine modes",
@@ -463,7 +454,6 @@ PRD: 21, 22
 Slice 7
 """,
     },
-
     # -- Slice 10: Push notifications ----------------------------------------
     {
         "title": "Slice 10 — Push notifications to the HA Companion app",
@@ -502,7 +492,6 @@ PRD: 53–57
 Slice 3
 """,
     },
-
     # -- Slice 11: Help tooltips ---------------------------------------------
     {
         "title": "Slice 11 — Help tooltips (ⓘ) on every adjustable setting",
@@ -540,7 +529,6 @@ PRD: 69–72
 Slice 1
 """,
     },
-
     # -- Slice 12: Runtime conflict guardrails -------------------------------
     {
         "title": "Slice 12 — Quiet hours, cascade caps, and morning summary",
@@ -577,7 +565,6 @@ PRD: 39–44
 Slice 5, Slice 10
 """,
     },
-
     # -- Slice 13: New grass mode --------------------------------------------
     {
         "title": "Slice 13 — New grass establishment mode",
@@ -616,7 +603,6 @@ PRD: 73–77
 Slice 3, Slice 7
 """,
     },
-
     # -- Slice 14: Weekly verification ---------------------------------------
     {
         "title": "Slice 14 — Weekly verification reminder",
@@ -651,7 +637,6 @@ PRD: 78–81
 Slice 10
 """,
     },
-
     # -- Slice 15: Calendar two-way edits ------------------------------------
     {
         "title": "Slice 15 — Calendar two-way edit (drag, skip, add)",
@@ -688,7 +673,6 @@ PRD: 59, 60
 Slice 4
 """,
     },
-
     # -- Slice 16: iCal feed -------------------------------------------------
     {
         "title": "Slice 16 — iCal feed for external calendar subscription",
@@ -724,7 +708,6 @@ PRD: 61
 Slice 4
 """,
     },
-
     # -- Slice 17: HACS release ----------------------------------------------
     {
         "title": "Slice 17 — v1.0 HACS release prep",
@@ -766,9 +749,7 @@ All previous slices
 
 def create_issue(item: dict, repo: str) -> str:
     """Call `gh issue create` with body via temp file."""
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".md", delete=False, encoding="utf-8"
-    ) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False, encoding="utf-8") as f:
         f.write(item["body"])
         body_path = f.name
 
