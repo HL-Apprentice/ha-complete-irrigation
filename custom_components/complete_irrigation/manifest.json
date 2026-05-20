@@ -3,7 +3,7 @@
   "name": "HA Complete Irrigation Integration",
   "codeowners": ["@HL-Apprentice"],
   "config_flow": true,
-  "dependencies": ["calendar"],
+  "dependencies": ["calendar", "frontend", "http"],
   "documentation": "https://github.com/HL-Apprentice/ha-complete-irrigation",
   "integration_type": "service",
   "iot_class": "local_polling",
