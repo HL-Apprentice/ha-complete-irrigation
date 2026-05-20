@@ -1,5 +1,5 @@
 /**
- * Complete Irrigation Panel — v0.4.0 (Slice 3: schedules).
+ * Complete Irrigation Panel — v1.1.0.
  *
  * Vanilla Web Component. Variant 2 layout (sidebar + main) per ADR-0002,
  * collapsible. Sections:
@@ -423,6 +423,7 @@
     _renderSection() {
       if (this._currentSection === "today") return this._renderToday();
       if (this._currentSection === "schedules") return this._renderSchedules();
+      if (this._currentSection === "settings") return this._renderSettings();
       const section = SECTIONS.find((s) => s.id === this._currentSection) || {
         icon: "",
         label: "Section",
@@ -430,8 +431,45 @@
       return (
         `<div class="placeholder">` +
         `<h2>${section.icon} ${escapeHtml(section.label)}</h2>` +
-        `<p>Coming in a later slice — see the project roadmap for details.</p>` +
+        `<p>Quick configuration UI lands in v1.2. For now, use Developer Tools → Services:</p>` +
+        `<ul>` +
+        (this._currentSection === "weather"
+          ? `<li><code>complete_irrigation.set_weather_config</code> — bind rain sensor, hot weather boost</li>`
+          : "") +
+        (this._currentSection === "sensors"
+          ? `<li><code>complete_irrigation.set_zone_moisture</code> — bind moisture sensor(s) per zone</li>`
+          : "") +
+        (this._currentSection === "notifications"
+          ? `<li><code>complete_irrigation.set_notification_config</code> — notify target, quiet hours</li>` +
+            `<li><code>complete_irrigation.test_notification</code> — verify routing</li>`
+          : "") +
+        (this._currentSection === "zones"
+          ? `<li>Zones are configured at integration setup. Re-add via Settings → Devices &amp; Services to change.</li>`
+          : "") +
+        `</ul>` +
         `</div>`
+      );
+    }
+
+    _renderSettings() {
+      return (
+        `<header class="page-header"><h2>Settings</h2></header>` +
+        `<section><h3 class="section-title">v1.1 quick reference</h3>` +
+        `<div class="placeholder">` +
+        `<p><strong>Quick configuration UI coming in v1.2.</strong> All features work today via Developer Tools → Services:</p>` +
+        `<table style="width:100%;font-size:13px;border-collapse:collapse;margin-top:12px">` +
+        `<tr><td style="padding:6px 0;color:var(--secondary-text-color)">Notifications</td><td><code>complete_irrigation.set_notification_config</code></td></tr>` +
+        `<tr><td style="padding:6px 0;color:var(--secondary-text-color)">Test notification</td><td><code>complete_irrigation.test_notification</code></td></tr>` +
+        `<tr><td style="padding:6px 0;color:var(--secondary-text-color)">Rain + hot weather</td><td><code>complete_irrigation.set_weather_config</code></td></tr>` +
+        `<tr><td style="padding:6px 0;color:var(--secondary-text-color)">Per-zone moisture</td><td><code>complete_irrigation.set_zone_moisture</code></td></tr>` +
+        `<tr><td style="padding:6px 0;color:var(--secondary-text-color)">New grass mode</td><td><code>complete_irrigation.start_establishment</code></td></tr>` +
+        `<tr><td style="padding:6px 0;color:var(--secondary-text-color)">Clear rain lockout</td><td><code>complete_irrigation.clear_rain_lockout</code></td></tr>` +
+        `</table>` +
+        `<p style="margin-top:16px;font-size:12px;color:var(--secondary-text-color)">` +
+        `iCal feed: <code>/api/complete_irrigation/calendar.ics</code> ` +
+        `(subscribe from your phone's calendar app for the next 30 days of planned runs).` +
+        `</p>` +
+        `</div></section>`
       );
     }
 
@@ -439,7 +477,7 @@
       const zones = this._zones();
       return (
         `<header class="page-header"><h2>Today</h2>` +
-        `<span class="version-pill">v0.4.0 — schedules</span></header>` +
+        `<span class="version-pill">v1.1.0</span></header>` +
         `<section><h3 class="section-title">Zones (${zones.length})</h3>` +
         (zones.length === 0
           ? this._renderEmpty()
@@ -562,34 +600,37 @@
           }/>${label}</label>`
       ).join("");
 
+      const tip = (text) =>
+        `<span class="help-tip" title="${escapeAttr(text)}" aria-label="${escapeAttr(text)}">ⓘ</span>`;
+
       return (
         `<div class="modal-backdrop"></div>` +
         `<div class="modal modal-wide" role="dialog" aria-modal="true">` +
         `<form class="modal-form schedule-form">` +
         `<h3>${e.id ? "Edit Schedule" : "New Schedule"}</h3>` +
-        `<label>Name</label>` +
+        `<label>Name ${tip("A friendly label, e.g. 'Morning Front Lawn'. Used in notifications and the calendar.")}</label>` +
         `<input name="name" type="text" value="${escapeAttr(e.name)}" required autofocus />` +
-        `<label>Zone</label>` +
+        `<label>Zone ${tip("Which switch entity this schedule controls. Comes from the zones picked at integration setup.")}</label>` +
         `<select name="zone_entity_id" required>${
           zoneOpts || `<option value="">No zones configured</option>`
         }</select>` +
         `<div class="row-2">` +
         `<div>` +
-        `<label>Start time</label>` +
+        `<label>Start time ${tip("Time of day (24h, local) to start the run. Defaults to 06:00.")}</label>` +
         `<input name="start_time" type="time" value="${escapeAttr(
           e.start_time
         )}" required />` +
         `</div>` +
         `<div>` +
-        `<label>Duration (min)</label>` +
+        `<label>Duration (min) ${tip("How long to run, 1-" + MAX_SCHEDULE_MINUTES + " min. Moisture sensors can adjust this up or down at runtime.")}</label>` +
         `<input name="duration_minutes" type="number" min="1" max="${MAX_SCHEDULE_MINUTES}" step="1" value="${e.duration_minutes}" required />` +
         `</div>` +
         `</div>` +
-        `<label>Weekdays</label>` +
+        `<label>Weekdays ${tip("Pick the days this schedule fires. Defaults to Mon-Fri.")}</label>` +
         `<div class="weekday-group">${weekdayChecks}</div>` +
         `<label class="enabled-check"><input type="checkbox" name="enabled"${
           e.enabled ? " checked" : ""
-        } />Enabled</label>` +
+        } />Enabled ${tip("Toggle off to keep the schedule but stop it from firing. Useful while traveling.")}</label>` +
         `<div class="modal-actions">` +
         `<button type="button" class="btn btn-secondary modal-cancel">Cancel</button>` +
         `<button type="submit" class="btn btn-primary">${
@@ -668,6 +709,8 @@
         `.weekday-check{display:inline-flex;align-items:center;gap:4px;padding:6px 10px;border:1px solid var(--divider-color,rgba(0,0,0,0.18));border-radius:6px;cursor:pointer;font-size:12px;color:var(--primary-text-color,#212121);margin:0}` +
         `.weekday-check input{margin-right:4px}` +
         `.enabled-check{display:inline-flex;align-items:center;gap:6px;margin-top:14px;color:var(--primary-text-color,#212121);font-size:13px}` +
+        `.help-tip{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;background:var(--primary-background-color,#f0f0f0);color:var(--secondary-text-color,#727272);font-size:11px;margin-left:4px;cursor:help;vertical-align:middle}` +
+        `.help-tip:hover{background:var(--primary-color,#03a9f4);color:#fff}` +
         // Mobile
         `@media (max-width:700px){.sidebar:not(.collapsed){position:fixed;z-index:10;height:100%}.sidebar.collapsed{width:56px}.root{grid-template-columns:56px 1fr}.schedule-row{flex-direction:column;align-items:stretch}}`
       );
@@ -686,5 +729,5 @@
   }
 
   customElements.define(ELEMENT_NAME, CompleteIrrigationPanel);
-  console.info("[complete-irrigation] panel registered, version v0.4.0");
+  console.info("[complete-irrigation] panel registered, version v1.1.0");
 })();
