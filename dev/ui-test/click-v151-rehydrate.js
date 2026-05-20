@@ -160,6 +160,10 @@ async function main() {
     else pass(`countdown remaining > 0 (${Math.round(cd.remainingMs/1000)}s)`);
     if (!/left/i.test(cd.statusText)) fail(`status text doesn't show countdown: "${cd.statusText}"`);
     else pass(`status text shows countdown: "${cd.statusText}"`);
+    // v1.5.2: should also show "of 5 min" (the run was started for 5 minutes)
+    if (!/of 5 min/i.test(cd.statusText))
+      fail(`status text missing total run time: "${cd.statusText}"`);
+    else pass(`status text shows set run time too: "${cd.statusText}"`);
 
     // ── 2. Entity ID hidden on Today ──────────────────────────────
     console.log("\n→ verify entity_id hidden in Today zone tile");
