@@ -1,15 +1,13 @@
 /**
- * Complete Irrigation Panel — v0.1 skeleton.
+ * Complete Irrigation Panel — v0.3.0 (Slice 2 added).
  *
- * Vanilla Web Component (no Lit yet). Variant 2 layout per ADR-0002:
- * sidebar nav + main content with a collapsible sidebar.
+ * Vanilla Web Component. Variant 2 layout (sidebar + main) per ADR-0002,
+ * collapsible. Today view shows configured zones with live status,
+ * Run-Now buttons, and a duration modal.
  *
  * Properties HA sets on us:
- *   this.hass   — full HA state object (states, services, etc.)
+ *   this.hass   — full HA state object (states, callService, etc.)
  *   this.panel  — { config: { zones, controller_domain, _panel_custom } }
- *
- * Event handling uses delegation on the host element so re-renders
- * (which replace shadowRoot.innerHTML) don't drop handlers.
  */
 
 (function () {
@@ -17,8 +15,9 @@
 
   const SIDEBAR_STORAGE_KEY = "complete_irrigation_sidebar_collapsed";
   const ELEMENT_NAME = "complete-irrigation-panel";
+  const DEFAULT_MANUAL_MINUTES = 10;
+  const MAX_MANUAL_MINUTES = 60;
 
-  // Guard against double registration if HA somehow loads the script twice.
   if (customElements.get(ELEMENT_NAME)) return;
 
   const SECTIONS = [
@@ -42,8 +41,13 @@
         this._collapsed = localStorage.getItem(SIDEBAR_STORAGE_KEY) === "true";
       } catch (_) {}
       this._currentSection = "today";
+      this._modalOpen = false;
+      this._modalEntityId = null;
+      this._modalZoneName = "";
+      this._modalMinutes = DEFAULT_MANUAL_MINUTES;
       this._renderScheduled = false;
       this._onClick = this._onClick.bind(this);
+      this._onSubmit = this._onSubmit.bind(this);
     }
 
     // ── HA-set properties ──────────────────────────────────────────
@@ -64,28 +68,49 @@
     }
 
     connectedCallback() {
-      // Single delegated handler that survives every re-render.
       this.shadowRoot.addEventListener("click", this._onClick);
+      this.shadowRoot.addEventListener("submit", this._onSubmit);
       this._scheduleRender();
     }
 
     disconnectedCallback() {
       this.shadowRoot.removeEventListener("click", this._onClick);
+      this.shadowRoot.removeEventListener("submit", this._onSubmit);
     }
 
-    // Walk up from the click target to find an action element.
     _onClick(e) {
       const path = e.composedPath ? e.composedPath() : [];
       for (const node of path) {
         if (!node || node === this.shadowRoot || node === this) break;
-        if (node.classList && node.classList.contains("collapse-btn")) {
-          this._toggleSidebar();
+        if (!(node instanceof HTMLElement)) continue;
+
+        if (node.classList.contains("collapse-btn")) return this._toggleSidebar();
+        if (node.classList.contains("modal-cancel")) return this._closeModal();
+        if (node.classList.contains("modal-backdrop")) return this._closeModal();
+
+        if (node.dataset.action === "run-now") {
+          e.stopPropagation();
+          return this._openModal(node.dataset.entityId, node.dataset.zoneName);
+        }
+        if (node.dataset.action === "stop") {
+          e.stopPropagation();
+          return this._stopZone(node.dataset.entityId);
+        }
+        if (node.dataset.section) return this._navigateTo(node.dataset.section);
+      }
+    }
+
+    _onSubmit(e) {
+      if (e.target && e.target.classList.contains("modal-form")) {
+        e.preventDefault();
+        const input = e.target.querySelector('input[name="minutes"]');
+        const minutes = parseInt(input?.value || "0", 10);
+        if (!minutes || minutes < 1 || minutes > MAX_MANUAL_MINUTES) {
+          alert("Duration must be between 1 and " + MAX_MANUAL_MINUTES + " minutes");
           return;
         }
-        if (node.dataset && node.dataset.section) {
-          this._navigateTo(node.dataset.section);
-          return;
-        }
+        this._runZone(this._modalEntityId, minutes);
+        this._closeModal();
       }
     }
 
@@ -97,13 +122,11 @@
         try {
           this._render();
         } catch (err) {
-          // Never let a render error propagate — it would leave the
-          // panel blank AND potentially confuse HA's main frontend.
           console.error("[complete-irrigation] render failed:", err);
           this.shadowRoot.innerHTML =
             '<div style="padding:24px;color:#db4437;font-family:sans-serif;">' +
-            '<h3>Irrigation panel error</h3>' +
-            '<p>The panel failed to render. Check browser console for details.</p>' +
+            "<h3>Irrigation panel error</h3>" +
+            "<p>The panel failed to render. Check browser console for details.</p>" +
             "</div>";
         }
       });
@@ -122,12 +145,57 @@
       this._scheduleRender();
     }
 
+    _openModal(entityId, zoneName) {
+      this._modalOpen = true;
+      this._modalEntityId = entityId;
+      this._modalZoneName = zoneName || entityId;
+      this._modalMinutes = DEFAULT_MANUAL_MINUTES;
+      this._scheduleRender();
+    }
+
+    _closeModal() {
+      this._modalOpen = false;
+      this._modalEntityId = null;
+      this._modalZoneName = "";
+      this._scheduleRender();
+    }
+
+    // ── Service calls ──────────────────────────────────────────────
+    async _runZone(entityId, minutes) {
+      if (!this._hass || !this._hass.callService) {
+        console.error("[complete-irrigation] hass not available — cannot run zone");
+        return;
+      }
+      try {
+        await this._hass.callService("complete_irrigation", "run_zone", {
+          entity_id: entityId,
+          minutes: minutes,
+        });
+        console.info("[complete-irrigation] run_zone", entityId, minutes + "m");
+      } catch (err) {
+        console.error("[complete-irrigation] run_zone failed:", err);
+        alert("Failed to start zone: " + (err && err.message ? err.message : err));
+      }
+    }
+
+    async _stopZone(entityId) {
+      if (!this._hass || !this._hass.callService) return;
+      try {
+        await this._hass.callService("complete_irrigation", "stop_zone", {
+          entity_id: entityId,
+        });
+        console.info("[complete-irrigation] stop_zone", entityId);
+      } catch (err) {
+        console.error("[complete-irrigation] stop_zone failed:", err);
+        alert("Failed to stop zone: " + (err && err.message ? err.message : err));
+      }
+    }
+
     // ── Data helpers ───────────────────────────────────────────────
     _zones() {
       const ids = (this._panel && this._panel.config && this._panel.config.zones) || [];
       return ids.map((entityId) => {
-        const state =
-          this._hass && this._hass.states ? this._hass.states[entityId] : null;
+        const state = this._hass && this._hass.states ? this._hass.states[entityId] : null;
         const friendly =
           (state && state.attributes && state.attributes.friendly_name) ||
           entityId.replace(/^switch\./, "").replace(/_/g, " ");
@@ -173,7 +241,7 @@
         '">' +
         '<div class="sidebar-header">' +
         '<button class="collapse-btn" title="Toggle sidebar">' +
-        '<span>' +
+        "<span>" +
         (this._collapsed ? "›" : "‹") +
         "</span>" +
         "</button>" +
@@ -186,15 +254,15 @@
         "<main>" +
         this._renderSection() +
         "</main>" +
-        "</div>";
+        "</div>" +
+        (this._modalOpen ? this._renderModal() : "");
     }
 
     _renderSection() {
       if (this._currentSection === "today") return this._renderToday();
-      const section =
-        SECTIONS.find(function (s) {
-          return s.id === this._currentSection;
-        }, this) || { icon: "", label: "Section" };
+      const section = SECTIONS.find(function (s) {
+        return s.id === this._currentSection;
+      }) || { icon: "", label: "Section" };
       return (
         '<div class="placeholder">' +
         "<h2>" +
@@ -212,7 +280,7 @@
       return (
         '<header class="page-header">' +
         "<h2>Today</h2>" +
-        '<span class="version-pill">v0.1 — read-only preview</span>' +
+        '<span class="version-pill">v0.3.0 — manual run</span>' +
         "</header>" +
         "<section>" +
         '<h3 class="section-title">Zones (' +
@@ -227,34 +295,29 @@
               }, this)
               .join("") +
             "</div>") +
-        "</section>" +
-        "<section>" +
-        '<p class="footnote">' +
-        "Weather header, calendar, manual run, schedules, and live sensor " +
-        "breakdowns land in subsequent vertical slices. This v0.1 view " +
-        "confirms the integration is installed and your zones are wired up." +
-        "</p>" +
         "</section>"
       );
     }
 
     _renderEmpty() {
-      return (
-        '<div class="empty"><p>No zones configured. Re-run setup from Settings → Devices & services.</p></div>'
-      );
+      return '<div class="empty"><p>No zones configured. Re-run setup from Settings → Devices & services.</p></div>';
     }
 
     _renderZoneTile(zone) {
-      const statusClass = !zone.available
-        ? "unavailable"
-        : zone.on
-        ? "running"
-        : "idle";
-      const statusLabel = !zone.available
-        ? "Unavailable"
-        : zone.on
-        ? "Running"
-        : "Idle";
+      const statusClass = !zone.available ? "unavailable" : zone.on ? "running" : "idle";
+      const statusLabel = !zone.available ? "Unavailable" : zone.on ? "Running" : "Idle";
+      const action = zone.on
+        ? '<button class="btn btn-stop" data-action="stop" data-entity-id="' +
+          escapeAttr(zone.entityId) +
+          '">⏹ Stop</button>'
+        : '<button class="btn btn-run" data-action="run-now" data-entity-id="' +
+          escapeAttr(zone.entityId) +
+          '" data-zone-name="' +
+          escapeAttr(zone.name) +
+          '"' +
+          (zone.available ? "" : " disabled") +
+          ">▶ Run Now</button>";
+
       return (
         '<article class="zone-tile">' +
         "<header>" +
@@ -271,7 +334,36 @@
         '<div class="status-text">' +
         statusLabel +
         "</div>" +
+        '<div class="zone-actions">' +
+        action +
+        "</div>" +
         "</article>"
+      );
+    }
+
+    _renderModal() {
+      return (
+        '<div class="modal-backdrop"></div>' +
+        '<div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">' +
+        '<form class="modal-form">' +
+        '<h3 id="modal-title">Run ' +
+        escapeHtml(this._modalZoneName) +
+        "</h3>" +
+        '<label for="minutes-input">Duration (minutes)</label>' +
+        '<input id="minutes-input" name="minutes" type="number" min="1" max="' +
+        MAX_MANUAL_MINUTES +
+        '" step="1" value="' +
+        this._modalMinutes +
+        '" autofocus />' +
+        '<p class="hint">Default 10 min. Maximum ' +
+        MAX_MANUAL_MINUTES +
+        " min.</p>" +
+        '<div class="modal-actions">' +
+        '<button type="button" class="btn btn-secondary modal-cancel">Cancel</button>' +
+        '<button type="submit" class="btn btn-primary">Run</button>' +
+        "</div>" +
+        "</form>" +
+        "</div>"
       );
     }
 
@@ -304,12 +396,31 @@
         ".status-dot.idle{background:#bdbdbd}" +
         ".status-dot.running{background:#43a047;box-shadow:0 0 0 4px rgba(67,160,71,0.2)}" +
         ".status-dot.unavailable{background:#db4437}" +
-        ".entity-id{font-size:11px;color:var(--secondary-text-color,#727272);font-family:var(--ha-font-family-code,monospace)}" +
+        ".entity-id{font-size:11px;color:var(--secondary-text-color,#727272);font-family:var(--ha-font-family-code,monospace);word-break:break-all}" +
         ".status-text{font-size:12px;color:var(--secondary-text-color,#727272)}" +
+        ".zone-actions{margin-top:8px}" +
+        ".btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:8px 14px;border-radius:8px;border:1px solid var(--divider-color,rgba(0,0,0,0.12));background:var(--card-background-color,#fff);color:var(--primary-text-color,#212121);font-family:inherit;font-size:13px;font-weight:500;cursor:pointer;width:100%}" +
+        ".btn:hover{background:var(--primary-background-color,#f6f6f6)}" +
+        ".btn:disabled{opacity:0.5;cursor:not-allowed}" +
+        ".btn-run{background:var(--primary-color,#03a9f4);color:#fff;border-color:var(--primary-color,#03a9f4)}" +
+        ".btn-run:hover{filter:brightness(1.05);background:var(--primary-color,#03a9f4)}" +
+        ".btn-stop{background:#db4437;color:#fff;border-color:#db4437}" +
+        ".btn-stop:hover{filter:brightness(1.05);background:#db4437}" +
         ".empty{background:var(--card-background-color,#fff);border:1px dashed var(--divider-color,rgba(0,0,0,0.2));border-radius:12px;padding:24px;text-align:center;color:var(--secondary-text-color,#727272)}" +
         ".placeholder{background:var(--card-background-color,#fff);border:1px solid var(--divider-color,rgba(0,0,0,0.12));border-radius:12px;padding:24px}" +
         ".placeholder h2{margin-top:0}" +
-        ".footnote{color:var(--secondary-text-color,#727272);font-size:12px;margin-top:24px;line-height:1.6}" +
+        // Modal
+        ".modal-backdrop{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.45);z-index:99}" +
+        ".modal{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card-background-color,#fff);color:var(--primary-text-color,#212121);border-radius:12px;padding:24px;min-width:320px;max-width:90vw;z-index:100;box-shadow:0 10px 40px rgba(0,0,0,0.3)}" +
+        ".modal h3{margin:0 0 16px;font-size:16px}" +
+        ".modal label{display:block;font-size:12px;color:var(--secondary-text-color,#727272);margin-bottom:6px}" +
+        ".modal input[type=number]{width:100%;padding:8px 10px;border:1px solid var(--divider-color,rgba(0,0,0,0.18));border-radius:6px;font-size:16px;background:var(--primary-background-color,#fff);color:inherit;font-family:inherit}" +
+        ".modal .hint{margin:6px 0 16px;font-size:11px;color:var(--secondary-text-color,#727272)}" +
+        ".modal-actions{display:flex;gap:8px;justify-content:flex-end}" +
+        ".btn-primary{background:var(--primary-color,#03a9f4);color:#fff;border-color:var(--primary-color,#03a9f4);width:auto;padding:8px 18px}" +
+        ".btn-primary:hover{filter:brightness(1.05);background:var(--primary-color,#03a9f4)}" +
+        ".btn-secondary{background:transparent;width:auto;padding:8px 18px}" +
+        // Mobile
         "@media (max-width:700px){.sidebar:not(.collapsed){position:fixed;z-index:10;height:100%}.sidebar.collapsed{width:56px}.root{grid-template-columns:56px 1fr}}"
       );
     }
@@ -322,7 +433,10 @@
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;");
   }
+  function escapeAttr(s) {
+    return escapeHtml(s);
+  }
 
   customElements.define(ELEMENT_NAME, CompleteIrrigationPanel);
-  console.info("[complete-irrigation] panel registered, version v0.1");
+  console.info("[complete-irrigation] panel registered, version v0.3.0");
 })();
