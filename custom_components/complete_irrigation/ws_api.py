@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
 WS_TYPE_LIST_SCHEDULES = f"{DOMAIN}/list_schedules"
+WS_TYPE_GET_CONFIG = f"{DOMAIN}/get_config"
 
 
 def _find_coordinator(hass: HomeAssistant):
@@ -51,6 +52,21 @@ async def list_schedules(hass, connection, msg):
     )
 
 
+@websocket_api.websocket_command({vol.Required("type"): WS_TYPE_GET_CONFIG})
+@websocket_api.async_response
+async def get_config(hass, connection, msg):
+    """Return the coordinator's full config (weather + zones)."""
+    coord = _find_coordinator(hass)
+    if coord is None:
+        connection.send_result(msg["id"], {})
+        return
+    # Also include current lockout state for the panel banner
+    payload = dict(coord.config)
+    payload["lockout_until"] = coord.lockout_until.isoformat() if coord.lockout_until else None
+    connection.send_result(msg["id"], payload)
+
+
 def async_register_ws_commands(hass: HomeAssistant) -> None:
     """Register all WS commands. Idempotent."""
     websocket_api.async_register_command(hass, list_schedules)
+    websocket_api.async_register_command(hass, get_config)
