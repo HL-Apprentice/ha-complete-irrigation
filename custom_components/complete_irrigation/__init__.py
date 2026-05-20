@@ -89,9 +89,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await _async_register_services(hass)
 
     # WebSocket API commands for the panel.
+    from .ical_view import async_register_ical_view
     from .ws_api import async_register_ws_commands
 
     async_register_ws_commands(hass)
+    async_register_ical_view(hass)
 
     # Static path serving the panel JS — idempotent across multiple
     # config entries (HA doesn't expose an unregister API, so we
