@@ -1085,6 +1085,11 @@
         `.btn-run{background:var(--primary-color,#03a9f4);border-color:var(--primary-color,#03a9f4);width:100%}` +
         `.btn-stop{background:#db4437;border-color:#db4437;width:100%}` +
         `.btn-primary{background:var(--primary-color,#03a9f4);border-color:var(--primary-color,#03a9f4)}` +
+        // Keep colored buttons their color on hover — the generic
+        // .btn:hover above would otherwise override their background.
+        `.btn-run:hover{background:var(--primary-color,#03a9f4);filter:brightness(1.08)}` +
+        `.btn-stop:hover{background:#db4437;filter:brightness(1.08)}` +
+        `.btn-primary:hover{background:var(--primary-color,#03a9f4);filter:brightness(1.08)}` +
         `.btn-secondary{background:transparent}` +
         `.btn-small{padding:6px 10px;font-size:12px}` +
         `.empty{background:var(--card-background-color,#fff);border:1px dashed var(--divider-color,rgba(0,0,0,0.2));border-radius:12px;padding:24px;text-align:center;color:var(--secondary-text-color,#727272)}` +
@@ -1159,5 +1164,5 @@
   }
 
   customElements.define(ELEMENT_NAME, CompleteIrrigationPanel);
-  console.info("[complete-irrigation] panel registered, version v1.3.1");
+  console.info("[complete-irrigation] panel registered, version v1.3.2");
 })();
