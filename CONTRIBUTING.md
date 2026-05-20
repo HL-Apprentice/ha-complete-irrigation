@@ -37,15 +37,25 @@ All four must be green before tagging a release. Don't merge or tag a release wh
 
 ### Check 3 — Real Home Assistant smoke test
 
-Before tagging any release (`v0.x.y`), the integration must be installed in a real Home Assistant instance and verified to:
+Before tagging any release (`v0.x.y`), the integration must load cleanly in a real Home Assistant. Automated via:
 
-1. Install without errors in HA's log
-2. Complete the config flow start-to-finish
-3. Render the custom panel
-4. Cleanly uninstall (delete from Devices & Services + HA restart)
-5. Leave HA's frontend (icons, devices page, etc.) working normally after uninstall
+```bash
+scripts/smoke-test.sh
+```
 
-The recommended setup for this is a disposable HA Container instance — see `dev/README.md` (when set up).
+This spins up Home Assistant in Docker (via `dev/docker-compose.yml`), mounts our integration, and verifies:
+
+1. The container starts
+2. HA listens on :8123 within 120s
+3. HA discovers our component (`complete_irrigation` mentioned in log)
+4. No `ERROR`/`CRITICAL` log lines mention our component
+5. No `ERROR`/`CRITICAL` log lines mention `panel` / `frontend` / `static`
+6. HA's frontend bundle serves (`/service_worker.js` returns 200)
+7. HA's root URL resolves (200 after redirects)
+
+Tears down the container automatically. Logs persist in `dev/ha-config/home-assistant.log` for debugging.
+
+For manual UI exploration (config flow walkthrough, panel rendering, etc.), use the spin-up commands in [`dev/README.md`](dev/README.md).
 
 **No release tag (`v*`) without all three checks green.**
 

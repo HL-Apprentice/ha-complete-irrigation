@@ -1,0 +1,9 @@
+# Disposable HA config used only by `dev/docker-compose.yml` for
+# local smoke-testing this integration. NOT a production config.
+
+default_config:
+
+logger:
+  default: info
+  logs:
+    custom_components.complete_irrigation: debug
