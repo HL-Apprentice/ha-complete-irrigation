@@ -88,6 +88,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # shared across config entries via the _find_coordinator lookup).
     await _async_register_services(hass)
 
+    # WebSocket API commands for the panel.
+    from .ws_api import async_register_ws_commands
+
+    async_register_ws_commands(hass)
+
     # Static path serving the panel JS — idempotent across multiple
     # config entries (HA doesn't expose an unregister API, so we
     # register at most once per HA session).
