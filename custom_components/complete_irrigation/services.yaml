@@ -40,3 +40,123 @@ stop_zone:
       selector:
         entity:
           domain: switch
+
+add_schedule:
+  name: Add schedule
+  description: >
+    Create a new recurring irrigation schedule. Persists across HA restarts.
+  fields:
+    name:
+      name: Schedule name
+      description: A human-friendly label for this schedule.
+      required: true
+      example: "Morning Front Lawn"
+      selector:
+        text:
+    zone_entity_id:
+      name: Zone
+      description: The zone switch this schedule will run.
+      required: true
+      selector:
+        entity:
+          domain: switch
+    start_time:
+      name: Start time
+      description: Time of day to start the run (24-hour, local time).
+      required: true
+      example: "06:00"
+      selector:
+        time:
+    duration_minutes:
+      name: Duration (minutes)
+      description: How long the run lasts. Hard cap 240 min (4 hours).
+      required: true
+      example: 15
+      selector:
+        number:
+          min: 1
+          max: 240
+          step: 1
+          mode: box
+          unit_of_measurement: min
+    weekdays:
+      name: Weekdays
+      description: Days of the week to run (0=Mon..6=Sun, ISO).
+      required: true
+      example: "[0, 1, 2, 3, 4]"
+      selector:
+        object:
+    enabled:
+      name: Enabled
+      description: Whether the schedule fires (default true).
+      required: false
+      default: true
+      selector:
+        boolean:
+
+update_schedule:
+  name: Update schedule
+  description: Edit fields of an existing schedule. Pass schedule_id + any fields to change.
+  fields:
+    schedule_id:
+      name: Schedule ID
+      description: The id of the schedule to update.
+      required: true
+      selector:
+        text:
+    name:
+      required: false
+      selector:
+        text:
+    zone_entity_id:
+      required: false
+      selector:
+        entity:
+          domain: switch
+    start_time:
+      required: false
+      selector:
+        time:
+    duration_minutes:
+      required: false
+      selector:
+        number:
+          min: 1
+          max: 240
+          step: 1
+          mode: box
+          unit_of_measurement: min
+    weekdays:
+      required: false
+      selector:
+        object:
+    enabled:
+      required: false
+      selector:
+        boolean:
+
+delete_schedule:
+  name: Delete schedule
+  description: Permanently remove a schedule by id.
+  fields:
+    schedule_id:
+      name: Schedule ID
+      description: The id of the schedule to delete.
+      required: true
+      selector:
+        text:
+
+set_schedule_enabled:
+  name: Set schedule enabled
+  description: Toggle a schedule on or off without deleting it.
+  fields:
+    schedule_id:
+      name: Schedule ID
+      required: true
+      selector:
+        text:
+    enabled:
+      name: Enabled
+      required: true
+      selector:
+        boolean:
