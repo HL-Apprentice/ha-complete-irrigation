@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
 WS_TYPE_LIST_SCHEDULES = f"{DOMAIN}/list_schedules"
 WS_TYPE_GET_CONFIG = f"{DOMAIN}/get_config"
+WS_TYPE_GET_ACTIVE_RUNS = f"{DOMAIN}/get_active_runs"
 
 
 def _find_coordinator(hass: HomeAssistant):
@@ -66,7 +67,38 @@ async def get_config(hass, connection, msg):
     connection.send_result(msg["id"], payload)
 
 
+@websocket_api.websocket_command({vol.Required("type"): WS_TYPE_GET_ACTIVE_RUNS})
+@websocket_api.async_response
+async def get_active_runs(hass, connection, msg):
+    """Return all currently-active manual runs across all config entries.
+
+    Each entry: {entity_id, deadline, duration_minutes}. The panel uses
+    this on connect (and after every run/stop) to hydrate countdowns —
+    so a page reload mid-run, or a run started via Developer Tools,
+    both see the auto-stop deadline.
+    """
+    from . import _SHARED_KEY
+
+    runs = []
+    for key, data in hass.data.get(DOMAIN, {}).items():
+        if key == _SHARED_KEY:
+            continue
+        tracker = data.get("manual_runs")
+        if tracker is None:
+            continue
+        for r in tracker.active():
+            runs.append(
+                {
+                    "entity_id": r.entity_id,
+                    "deadline": r.deadline().isoformat(),
+                    "duration_minutes": int(r.duration.total_seconds() // 60),
+                }
+            )
+    connection.send_result(msg["id"], {"runs": runs})
+
+
 def async_register_ws_commands(hass: HomeAssistant) -> None:
     """Register all WS commands. Idempotent."""
     websocket_api.async_register_command(hass, list_schedules)
     websocket_api.async_register_command(hass, get_config)
+    websocket_api.async_register_command(hass, get_active_runs)
