@@ -1,4 +1,5 @@
 """Constants for HA Complete Irrigation Integration."""
+
 from __future__ import annotations
 
 DOMAIN = "complete_irrigation"
@@ -110,6 +111,6 @@ COMBINE_HIGHEST = "highest"
 COMBINE_PRIMARY = "primary"
 
 # Conflict resolution policies.
-CONFLICT_DEFER_NEW = "defer_new"          # Option A
+CONFLICT_DEFER_NEW = "defer_new"  # Option A
 CONFLICT_SHIFT_EXISTING = "shift_existing"  # Option B
 CONFLICT_SPLIT_DIFFERENCE = "split_difference"  # Option C

@@ -4,6 +4,7 @@ These functions take plain Python data in and return plain Python data
 out. The HA-coupled adapter that calls them lives in `__init__.py` and
 `config_flow.py`.
 """
+
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
@@ -84,10 +85,7 @@ def select_zone_candidates(
 
 def _looks_like_non_zone(e: EntityDescriptor) -> bool:
     """True if the entity name/id contains hints it's not really a zone."""
-    haystack = " ".join(
-        str(e.get(k, "")).lower()
-        for k in ("entity_id", "name", "original_name")
-    )
+    haystack = " ".join(str(e.get(k, "")).lower() for k in ("entity_id", "name", "original_name"))
     return any(hint in haystack for hint in _NON_ZONE_HINTS)
 
 

@@ -1,3 +1,4 @@
 # Dev/test requirements only — runtime is HA core + standard library.
 pytest>=8.0
 pytest-asyncio>=0.23
+ruff>=0.5
