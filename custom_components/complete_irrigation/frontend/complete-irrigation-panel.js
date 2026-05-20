@@ -363,18 +363,11 @@
 
     _startLocalCountdown(entityId, minutes) {
       this._localRuns[entityId] = Date.now() + minutes * 60 * 1000;
+      // Full re-render ONCE to swap Run → Stop button and inject countdown
+      // <span data-countdown-for>. Subsequent ticks only update text content
+      // (no shadowRoot rebuild → no flicker, no shifting click targets).
       if (!this._countdownTimer) {
-        this._countdownTimer = setInterval(() => {
-          const now = Date.now();
-          for (const eid of Object.keys(this._localRuns)) {
-            if (this._localRuns[eid] <= now) delete this._localRuns[eid];
-          }
-          if (Object.keys(this._localRuns).length === 0 && this._countdownTimer) {
-            clearInterval(this._countdownTimer);
-            this._countdownTimer = null;
-          }
-          this._renderNow();
-        }, 1000);
+        this._countdownTimer = setInterval(() => this._tickCountdowns(), 1000);
       }
       this._renderNow();
     }
@@ -385,7 +378,41 @@
         clearInterval(this._countdownTimer);
         this._countdownTimer = null;
       }
+      // Re-render so Stop button reverts to Run Now.
       this._renderNow();
+    }
+
+    _tickCountdowns() {
+      const now = Date.now();
+      const expired = [];
+      for (const eid of Object.keys(this._localRuns)) {
+        if (this._localRuns[eid] <= now) expired.push(eid);
+      }
+
+      if (expired.length > 0) {
+        // Someone's countdown reached zero — clear and do a full re-render
+        // once so Stop reverts to Run Now and the status text reflects idle.
+        for (const eid of expired) delete this._localRuns[eid];
+        if (Object.keys(this._localRuns).length === 0 && this._countdownTimer) {
+          clearInterval(this._countdownTimer);
+          this._countdownTimer = null;
+        }
+        this._renderNow();
+        return;
+      }
+
+      // No expiries — just update countdown text content. NO DOM rebuild,
+      // so :hover and any in-flight clicks are unaffected.
+      for (const eid of Object.keys(this._localRuns)) {
+        const remaining = Math.max(0, this._localRuns[eid] - now);
+        const nodes = this.shadowRoot.querySelectorAll(
+          `[data-countdown-for="${cssEscape(eid)}"]`
+        );
+        const text = _formatRemaining(remaining);
+        nodes.forEach((n) => {
+          if (n.textContent !== text) n.textContent = text;
+        });
+      }
     }
 
     // ── HA calls ───────────────────────────────────────────────────
@@ -839,15 +866,20 @@
       const remainingMs = countdown ? Math.max(0, countdown - Date.now()) : 0;
       const isCountingDown = remainingMs > 0 && zone.on;
 
+      // Countdown text is wrapped in <span data-countdown-for> so the
+      // 1Hz tick can update its textContent without rebuilding any DOM
+      // (avoids the v1.3.0 flicker + shifted-click-target regression).
+      const cdSpan = isCountingDown
+        ? `<span data-countdown-for="${escapeAttr(zone.entityId)}">${_formatRemaining(remainingMs)}</span>`
+        : "";
+
       let statusClass, statusLabel;
       if (!zone.available) {
         statusClass = "unavailable";
         statusLabel = "Unavailable";
       } else if (zone.on) {
         statusClass = "running";
-        statusLabel = isCountingDown
-          ? `Running — ${_formatRemaining(remainingMs)} left`
-          : "Running";
+        statusLabel = isCountingDown ? `Running — ${cdSpan} left` : "Running";
       } else {
         statusClass = "idle";
         statusLabel = "Idle";
@@ -856,7 +888,7 @@
       const action = zone.on
         ? `<button class="btn btn-stop" data-action="stop" data-entity-id="${escapeAttr(
             zone.entityId
-          )}">⏹ Stop${isCountingDown ? " (" + _formatRemaining(remainingMs) + ")" : ""}</button>`
+          )}">⏹ Stop${isCountingDown ? " (" + cdSpan + ")" : ""}</button>`
         : `<button class="btn btn-run" data-action="run-now" data-entity-id="${escapeAttr(
             zone.entityId
           )}" data-zone-name="${escapeAttr(zone.name)}"${
@@ -1099,6 +1131,15 @@
     }
   }
 
+  // Minimal CSS.escape polyfill for older HA frontends. Only escapes the
+  // characters that can appear in HA entity_ids (the `.` is the main one).
+  function cssEscape(s) {
+    if (typeof window !== "undefined" && typeof window.CSS?.escape === "function") {
+      return window.CSS.escape(s);
+    }
+    return String(s).replace(/([^\w-])/g, "\\$1");
+  }
+
   function _formatRemaining(ms) {
     const total = Math.max(0, Math.round(ms / 1000));
     const m = Math.floor(total / 60);
@@ -1118,5 +1159,5 @@
   }
 
   customElements.define(ELEMENT_NAME, CompleteIrrigationPanel);
-  console.info("[complete-irrigation] panel registered, version v1.3.0");
+  console.info("[complete-irrigation] panel registered, version v1.3.1");
 })();
