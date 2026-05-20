@@ -26,6 +26,22 @@ PANEL_URL_PATH = "complete-irrigation"
 PANEL_STATIC_URL = "/complete_irrigation_panel"
 PANEL_JS_FILENAME = "complete-irrigation-panel.js"
 
+
+def _panel_version() -> str:
+    """Read the integration version from manifest.json for cache-busting.
+
+    Falls back to a literal string if the manifest can't be read so the
+    panel still loads — worst case, just no cache-bust.
+    """
+    import json
+
+    try:
+        manifest = Path(__file__).parent / "manifest.json"
+        return json.loads(manifest.read_text()).get("version", "0")
+    except Exception:
+        return "0"
+
+
 # Key in `hass.data[DOMAIN]` reserved for our process-wide shared state.
 # Config entry IDs use UUIDs, so there's no risk of collision with this.
 _SHARED_KEY = "__shared__"
@@ -126,7 +142,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     # any JS error in our panel code. See ADR/v0.2.0.
                     "embed_iframe": True,
                     "trust_external": False,
-                    "js_url": f"{PANEL_STATIC_URL}/{PANEL_JS_FILENAME}",
+                    # Append the integration version so each release gets a
+                    # unique URL — browsers will fetch the new file instead
+                    # of serving the stale cached one.
+                    "js_url": f"{PANEL_STATIC_URL}/{PANEL_JS_FILENAME}?v={_panel_version()}",
                 },
                 "zones": entry.data.get("zones", []),
                 "controller_domain": entry.data.get("controller_domain"),

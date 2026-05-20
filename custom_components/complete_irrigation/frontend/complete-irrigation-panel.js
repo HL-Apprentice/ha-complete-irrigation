@@ -709,7 +709,7 @@
 
       return (
         `<header class="page-header"><h2>Today</h2>` +
-        `<span class="version-pill">v1.4.0</span></header>` +
+        `<span class="version-pill">v1.4.1</span></header>` +
         this._renderRainLockoutBanner() +
         this._renderWeatherBanner() +
         `<section>` +
@@ -1266,5 +1266,5 @@
   }
 
   customElements.define(ELEMENT_NAME, CompleteIrrigationPanel);
-  console.info("[complete-irrigation] panel registered, version v1.4.0");
+  console.info("[complete-irrigation] panel registered, version v1.4.1");
 })();
