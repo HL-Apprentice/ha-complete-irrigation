@@ -102,7 +102,20 @@ def test_schedule_to_dict_has_expected_shape():
         "duration_minutes": 15,
         "weekdays": [0, 1, 2, 3, 4],
         "enabled": True,
+        "end_date": None,  # unbounded schedule
     }
+
+
+def test_schedule_with_end_date_roundtrip():
+    """Establishment-mode schedules carry an end_date that survives serialization."""
+    from datetime import date
+
+    s = _good_schedule(end_date=date(2026, 6, 1))
+    d = s.to_dict()
+    assert d["end_date"] == "2026-06-01"
+    s2 = Schedule.from_dict(d)
+    assert s2.end_date == date(2026, 6, 1)
+    assert s2 == s
 
 
 def test_schedule_from_dict_reconstructs_original():

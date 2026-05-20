@@ -49,6 +49,7 @@ SERVICE_SET_ZONE_MOISTURE = "set_zone_moisture"
 SERVICE_CLEAR_RAIN_LOCKOUT = "clear_rain_lockout"
 SERVICE_SET_NOTIFICATION_CONFIG = "set_notification_config"
 SERVICE_TEST_NOTIFICATION = "test_notification"
+SERVICE_START_ESTABLISHMENT = "start_establishment"
 
 MAX_SCHEDULE_DURATION_MIN = 240  # 4 hours — safety cap for scheduled runs
 
@@ -148,6 +149,20 @@ _SET_NOTIFICATION_CONFIG_SCHEMA = vol.Schema(
 )
 
 _TEST_NOTIFICATION_SCHEMA = vol.Schema({vol.Optional("message", default="Test"): cv.string})
+
+_START_ESTABLISHMENT_SCHEMA = vol.Schema(
+    {
+        vol.Required("zone_entity_id"): cv.entity_id,
+        vol.Optional("cycles_per_day", default=3): vol.All(
+            vol.Coerce(int), vol.Range(min=1, max=8)
+        ),
+        vol.Optional("minutes_per_cycle", default=10): vol.All(
+            vol.Coerce(int), vol.Range(min=1, max=60)
+        ),
+        vol.Optional("days", default=12): vol.All(vol.Coerce(int), vol.Range(min=1, max=60)),
+        vol.Optional("start_hour", default=6): vol.All(vol.Coerce(int), vol.Range(min=0, max=23)),
+    }
+)
 
 
 def _find_coordinator(hass: HomeAssistant):
@@ -488,6 +503,54 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         schema=_TEST_NOTIFICATION_SCHEMA,
     )
 
+    async def handle_start_establishment(call: ServiceCall) -> None:
+        from datetime import date, time, timedelta
+
+        data = _START_ESTABLISHMENT_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None:
+            return
+
+        zone_id = data["zone_entity_id"]
+        cycles = data["cycles_per_day"]
+        minutes = data["minutes_per_cycle"]
+        days = data["days"]
+        start_hour = data["start_hour"]
+
+        # Evenly distribute cycles across a 12-hour daytime window
+        end_date_val = date.today() + timedelta(days=days)
+        cycle_spacing = max(1, 12 // cycles)
+        for i in range(cycles):
+            hour = (start_hour + i * cycle_spacing) % 24
+            sched = Schedule(
+                id=uuid.uuid4().hex[:12],
+                name=f"New grass {zone_id.split('.', 1)[-1]} cycle {i + 1}",
+                zone_entity_id=zone_id,
+                start_time=time(hour, 0),
+                duration_minutes=minutes,
+                weekdays=(0, 1, 2, 3, 4, 5, 6),  # daily
+                enabled=True,
+                end_date=end_date_val,
+            )
+            coord.schedule_store.add(sched)
+
+        await coord.async_save()
+        _LOGGER.info(
+            "Establishment mode started: %d cycles/day x %d min for %d days on %s (until %s)",
+            cycles,
+            minutes,
+            days,
+            zone_id,
+            end_date_val.isoformat(),
+        )
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_START_ESTABLISHMENT,
+        handle_start_establishment,
+        schema=_START_ESTABLISHMENT_SCHEMA,
+    )
+
 
 def _async_unregister_services(hass: HomeAssistant) -> None:
     """Tear down services. Called when the last config entry unloads."""
@@ -503,6 +566,7 @@ def _async_unregister_services(hass: HomeAssistant) -> None:
         SERVICE_CLEAR_RAIN_LOCKOUT,
         SERVICE_SET_NOTIFICATION_CONFIG,
         SERVICE_TEST_NOTIFICATION,
+        SERVICE_START_ESTABLISHMENT,
     ):
         if hass.services.has_service(DOMAIN, svc):
             hass.services.async_remove(DOMAIN, svc)
