@@ -1,0 +1,42 @@
+run_zone:
+  name: Run zone
+  description: >
+    Run an irrigation zone manually for the specified number of minutes.
+    Turns the zone's underlying switch on, then off after the duration
+    elapses. If the switch is turned off externally before the
+    duration, the auto-stop is cancelled.
+  fields:
+    entity_id:
+      name: Zone switch
+      description: The zone switch entity to run.
+      required: true
+      selector:
+        entity:
+          domain: switch
+    minutes:
+      name: Duration (minutes)
+      description: How long to run the zone. Default 10 min. Hard cap 60 min.
+      required: false
+      default: 10
+      example: 15
+      selector:
+        number:
+          min: 1
+          max: 60
+          step: 1
+          mode: box
+          unit_of_measurement: min
+
+stop_zone:
+  name: Stop zone
+  description: >
+    Stop a currently-running zone. If the zone was started via run_zone,
+    cancels the pending auto-stop. Otherwise just turns the switch off.
+  fields:
+    entity_id:
+      name: Zone switch
+      description: The zone switch entity to stop.
+      required: true
+      selector:
+        entity:
+          domain: switch

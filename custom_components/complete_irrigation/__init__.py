@@ -64,13 +64,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     from homeassistant.components.frontend import async_register_built_in_panel
     from homeassistant.components.http import StaticPathConfig
 
+    from .manual_run import ManualRunTracker
+    from .services import _async_register_services
+
     _LOGGER.info("Setting up Complete Irrigation entry %s", entry.entry_id)
 
     shared = _shared(hass)
     hass.data[DOMAIN][entry.entry_id] = {
         "zones": entry.data.get("zones", []),
         "controller_domain": entry.data.get("controller_domain"),
+        "manual_runs": ManualRunTracker(),
+        "cancel_handles": {},
     }
+
+    # Register the run_zone / stop_zone services (idempotent).
+    await _async_register_services(hass)
 
     # Static path serving the panel JS — idempotent across multiple
     # config entries (HA doesn't expose an unregister API, so we
@@ -122,20 +130,26 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry, cleaning up shared resources if it's the last one."""
     from homeassistant.components.frontend import async_remove_panel
 
+    from .services import _async_unregister_services, _cleanup_entry_handles
+
     if PLATFORMS:
         unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
         if not unload_ok:
             return False
 
-    hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
+    # Cancel any pending auto-stop timers / state listeners for this entry.
+    entry_data = hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
+    if entry_data is not None:
+        _cleanup_entry_handles(entry_data)
 
     # When the last config entry of ours unloads, also tear down the
-    # shared panel registration. (Static paths can't be unregistered in
-    # HA's API — they live until HA restart.)
+    # shared panel registration and services. (Static paths can't be
+    # unregistered in HA's API — they live until HA restart.)
     if _entry_count(hass) == 0:
         shared = _shared(hass)
         if shared.panel_registered:
             async_remove_panel(hass, PANEL_URL_PATH)
             shared.panel_registered = False
+        _async_unregister_services(hass)
 
     return True
