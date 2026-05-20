@@ -1,6 +1,18 @@
 # HA Complete Irrigation Integration
 
-> ⚠️ **Early development.** Not yet ready for production use. Spec is locked, implementation is in progress.
+> ⚠️ **EARLY DEVELOPMENT — DO NOT INSTALL ON PRODUCTION HOME ASSISTANT**
+>
+> Versions 0.x are pre-release and have shipped bugs that broke unrelated
+> parts of Home Assistant (frontend icons, etc.) — recovery required
+> deleting `custom_components/complete_irrigation/` from disk and
+> restarting HA. v0.2 sandboxes the panel in an iframe to prevent
+> repeats, but more bugs are likely while we build out the remaining
+> slices.
+>
+> **Strongly recommended before installing:**
+> 1. Take a Home Assistant snapshot (Settings → System → Backups → Create)
+> 2. Install on a test HA instance, not your main one
+> 3. Wait for v1.0 if you can't afford downtime on your main HA
 
 A Home Assistant custom integration that gives you complete, sensor-driven control over irrigation — works with any controller that exposes zone switches.
 

@@ -65,11 +65,13 @@ async def async_setup_entry(hass: "HomeAssistant", entry: "ConfigEntry") -> bool
             config={
                 "_panel_custom": {
                     "name": "complete-irrigation-panel",
-                    "embed_iframe": False,
+                    # Run our panel in an isolated iframe so any JS error
+                    # in our code is physically prevented from affecting
+                    # HA's main frontend (icons, devices page, etc.).
+                    # Trade-off: ~200ms slower initial load. Worth it
+                    # while the integration is in early development.
+                    "embed_iframe": True,
                     "trust_external": False,
-                    # Plain script (not ES module) — safer for vanilla
-                    # web components. Prevents poisoning HA's element
-                    # registry if the panel JS fails mid-load.
                     "js_url": f"{PANEL_STATIC_URL}/{PANEL_JS_FILENAME}",
                 },
                 "zones": entry.data.get("zones", []),
