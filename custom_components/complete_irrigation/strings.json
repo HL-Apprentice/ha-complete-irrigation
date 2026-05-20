@@ -3,11 +3,22 @@
     "step": {
       "user": {
         "title": "HA Complete Irrigation Integration",
-        "description": "Click Submit to install. Full setup wizard (zones, sensors, weather, schedules) runs after install."
+        "description": "Pick the irrigation controller this integration should manage. Detected integrations are listed first; if your controller isn't in the list, pick \"manual\" and we'll show you all switches.",
+        "data": {
+          "controller": "Irrigation controller"
+        }
+      },
+      "zones": {
+        "title": "Pick your irrigation zones",
+        "description": "We've pre-selected switches that look like real zones (excluding master valves, schedule switches, and disabled entities). Uncheck anything that isn't a zone, then submit.",
+        "data": {
+          "zones": "Zones"
+        }
       }
     },
     "abort": {
-      "already_configured": "Complete Irrigation is already configured."
+      "already_configured": "Complete Irrigation is already configured.",
+      "no_zones_found": "No irrigation zones were found. If you're using a custom controller, make sure its switches are exposed in Home Assistant first."
     }
   }
 }
