@@ -141,6 +141,7 @@
       if (isFirstHass) {
         this._fetchSchedules();
         this._fetchConfig();
+        this._fetchActiveRuns();
         this._scheduleRender();
         return;
       }
@@ -540,6 +541,36 @@
       }
     }
 
+    async _fetchActiveRuns() {
+      // Hydrate _localRuns from the server-side ManualRunTracker so a
+      // page reload mid-run, or a run started outside this panel (via
+      // service call, schedule, etc.), still shows the countdown.
+      if (!this._hass || !this._hass.callWS) return;
+      try {
+        const resp = await this._hass.callWS({
+          type: "complete_irrigation/get_active_runs",
+        });
+        const runs = resp?.runs || [];
+        for (const r of runs) {
+          const deadlineMs = new Date(r.deadline).getTime();
+          if (Number.isFinite(deadlineMs) && deadlineMs > Date.now()) {
+            this._localRuns[r.entity_id] = deadlineMs;
+          }
+        }
+        if (
+          Object.keys(this._localRuns).length > 0 &&
+          !this._countdownTimer
+        ) {
+          this._countdownTimer = setInterval(() => this._tickCountdowns(), 1000);
+        }
+        this._scheduleRender();
+      } catch (err) {
+        // Pre-v1.5.1 backends don't have this command — no-op, fall
+        // back to the local-only countdown behavior.
+        console.warn("[complete-irrigation] get_active_runs not available:", err);
+      }
+    }
+
     async _runZone(entityId, minutes) {
       if (!this._hass?.callService) return;
       try {
@@ -774,7 +805,7 @@
 
       return (
         `<header class="page-header"><h2>Today</h2>` +
-        `<span class="version-pill">v1.5.0</span></header>` +
+        `<span class="version-pill">v1.5.1</span></header>` +
         this._renderRainLockoutBanner() +
         this._renderWeatherBanner() +
         `<section>` +
@@ -1054,7 +1085,6 @@
         `<h4>${escapeHtml(zone.name)}</h4>` +
         hideAction +
         `</header>` +
-        `<div class="entity-id">${escapeHtml(zone.entityId)}</div>` +
         `<div class="status-text">${statusLabel}</div>` +
         `<div class="zone-actions">${action}</div>` +
         `</article>`
@@ -1067,14 +1097,14 @@
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Zones</h2>` +
-          `<span class="version-pill">v1.5.0</span></header>` +
+          `<span class="version-pill">v1.5.1</span></header>` +
           `<div class="empty"><p>No zones configured. Add them via Settings → Devices &amp; Services.</p></div>`
         );
       }
       const rows = zones.map((z) => this._renderZoneRow(z)).join("");
       return (
         `<header class="page-header"><h2>Zones</h2>` +
-        `<span class="version-pill">v1.5.0</span></header>` +
+        `<span class="version-pill">v1.5.1</span></header>` +
         `<p class="section-hint">Hidden zones still run on schedule — they're just hidden from the Today view.</p>` +
         `<div class="zones-list">${rows}</div>`
       );
@@ -1182,7 +1212,7 @@
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Sensors</h2>` +
-          `<span class="version-pill">v1.5.0</span></header>` +
+          `<span class="version-pill">v1.5.1</span></header>` +
           `<div class="empty"><p>No zones configured.</p></div>`
         );
       }
@@ -1191,7 +1221,7 @@
         .join("");
       return (
         `<header class="page-header"><h2>Sensors</h2>` +
-        `<span class="version-pill">v1.5.0</span></header>` +
+        `<span class="version-pill">v1.5.1</span></header>` +
         `<p class="section-hint">Bind soil-moisture sensors to a zone so runtimes auto-adjust based on actual moisture. You can attach one sensor or several (combined as average, lowest, highest, or just the primary).</p>` +
         `<div class="sensor-zone-list">${cards}</div>`
       );
@@ -1410,7 +1440,7 @@
 
       return (
         `<header class="page-header"><h2>Weather</h2>` +
-        `<span class="version-pill">v1.5.0</span></header>` +
+        `<span class="version-pill">v1.5.1</span></header>` +
         lockoutHtml +
         forecastHtml +
         `<form class="weather-form" data-form="weather">` +
@@ -1858,5 +1888,5 @@
   }
 
   customElements.define(ELEMENT_NAME, CompleteIrrigationPanel);
-  console.info("[complete-irrigation] panel registered, version v1.5.0");
+  console.info("[complete-irrigation] panel registered, version v1.5.1");
 })();
