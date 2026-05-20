@@ -194,7 +194,7 @@ def test_zone_candidates_excludes_disabled_entities():
 
 
 def test_zone_candidates_excludes_master_valve_and_schedule_switches():
-    """Heuristic: switch names with 'master' or 'schedule' aren't real zones."""
+    """Heuristic: 'master_valve' and 'schedule' substrings aren't real zones."""
     entities = [
         _entity("switch.front_lawn", config_entry_domain="rachio", name="Front Lawn"),
         _entity("switch.master_valve", config_entry_domain="rachio", name="Master valve"),
@@ -205,6 +205,19 @@ def test_zone_candidates_excludes_master_valve_and_schedule_switches():
     ]
     result = select_zone_candidates(entities, controller_domain=None)
     assert [e["entity_id"] for e in result] == ["switch.front_lawn"]
+
+
+def test_zone_candidates_does_not_exclude_zones_named_test():
+    """Regression: 'test' in a zone name must NOT cause exclusion.
+
+    A user smoke-testing or with a zone literally named 'Test Lawn'
+    should still see it in the picker."""
+    entities = [
+        _entity("switch.test_lawn", config_entry_domain="template", name="Test Lawn"),
+        _entity("switch.test_garden", config_entry_domain="template", name="Test Garden"),
+    ]
+    result = select_zone_candidates(entities, controller_domain=None)
+    assert {e["entity_id"] for e in result} == {"switch.test_lawn", "switch.test_garden"}
 
 
 def test_zone_candidates_sorted_alphabetically_by_display_name():

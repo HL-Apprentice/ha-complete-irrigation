@@ -7,3 +7,37 @@ logger:
   default: info
   logs:
     custom_components.complete_irrigation: debug
+
+# Template switches so the integration's zone picker has something
+# to choose during smoke testing. Backed by input_booleans.
+input_boolean:
+  test_lawn:
+    name: Test Lawn
+  test_garden:
+    name: Test Garden
+
+switch:
+  - platform: template
+    switches:
+      test_lawn:
+        friendly_name: "Test Lawn"
+        value_template: "{{ is_state('input_boolean.test_lawn', 'on') }}"
+        turn_on:
+          service: input_boolean.turn_on
+          target:
+            entity_id: input_boolean.test_lawn
+        turn_off:
+          service: input_boolean.turn_off
+          target:
+            entity_id: input_boolean.test_lawn
+      test_garden:
+        friendly_name: "Test Garden"
+        value_template: "{{ is_state('input_boolean.test_garden', 'on') }}"
+        turn_on:
+          service: input_boolean.turn_on
+          target:
+            entity_id: input_boolean.test_garden
+        turn_off:
+          service: input_boolean.turn_off
+          target:
+            entity_id: input_boolean.test_garden
