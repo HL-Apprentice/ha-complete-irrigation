@@ -16,6 +16,7 @@
   "use strict";
 
   const SIDEBAR_STORAGE_KEY = "complete_irrigation_sidebar_collapsed";
+  const HIDDEN_ZONES_STORAGE_KEY = "complete_irrigation_hidden_zones";
   const ELEMENT_NAME = "complete-irrigation-panel";
   const DEFAULT_MANUAL_MINUTES = 10;
   const MAX_MANUAL_MINUTES = 60;
@@ -74,6 +75,18 @@
       this._config = {};
       this._configLoaded = false;
 
+      // Local manual-run countdowns: entity_id -> deadline epoch ms
+      this._localRuns = {};
+      this._countdownTimer = null;
+
+      // Hidden zones (per-browser, persisted)
+      this._hiddenZones = new Set();
+      try {
+        const stored = localStorage.getItem(HIDDEN_ZONES_STORAGE_KEY);
+        if (stored) this._hiddenZones = new Set(JSON.parse(stored));
+      } catch (_) {}
+      this._showHidden = false;
+
       this._renderScheduled = false;
       this._onClick = this._onClick.bind(this);
       this._onSubmit = this._onSubmit.bind(this);
@@ -84,12 +97,45 @@
     // ── HA-set properties ──────────────────────────────────────────
     set hass(value) {
       const isFirstHass = !this._hass;
+      const prevSig = this._stateSignature();
       this._hass = value;
       if (isFirstHass) {
         this._fetchSchedules();
         this._fetchConfig();
+        this._scheduleRender();
+        return;
       }
-      this._scheduleRender();
+      // Only re-render if something we display actually changed. Avoids
+      // re-rendering 39KB of HTML on every unrelated HA state change.
+      if (this._stateSignature() !== prevSig) {
+        this._scheduleRender();
+      }
+    }
+
+    /** A compact signature of just the entities the UI cares about,
+     * so we can short-circuit re-renders on unrelated hass updates. */
+    _stateSignature() {
+      if (!this._hass?.states) return "";
+      const zones = (this._panel?.config?.zones) || [];
+      const parts = [];
+      for (const z of zones) {
+        const s = this._hass.states[z];
+        parts.push(s ? `${z}=${s.state}` : `${z}=_`);
+      }
+      // Also include sun + a few common Tempest sensors
+      for (const eid of ["sun.sun"]) {
+        const s = this._hass.states[eid];
+        if (s) parts.push(`${eid}=${s.state}`);
+      }
+      // Weather-relevant sensors (auto-detected) — include them so the
+      // banner refreshes when the data changes, but not for every other
+      // sensor in HA.
+      for (const eid of Object.keys(this._hass.states)) {
+        if (/^sensor\.(tempest|weatherflow)_/.test(eid)) {
+          parts.push(`${eid}=${this._hass.states[eid].state}`);
+        }
+      }
+      return parts.join("|");
     }
     get hass() {
       return this._hass;
@@ -154,6 +200,9 @@
             node.dataset.scheduleId,
             node.dataset.enabled === "true"
           );
+        if (action === "hide-zone") return this._toggleZoneHidden(node.dataset.entityId);
+        if (action === "show-zone") return this._toggleZoneHidden(node.dataset.entityId);
+        if (action === "show-hidden") return this._toggleShowHidden();
       }
     }
 
@@ -212,19 +261,33 @@
     _scheduleRender() {
       if (this._renderScheduled) return;
       this._renderScheduled = true;
-      queueMicrotask(() => {
+      // requestAnimationFrame batches at 60fps which is plenty responsive
+      // and prevents the microtask queue from drowning under rapid hass
+      // updates. User-triggered renders bypass via _renderNow().
+      requestAnimationFrame(() => {
         this._renderScheduled = false;
-        try {
-          this._render();
-        } catch (err) {
-          console.error("[complete-irrigation] render failed:", err);
-          this.shadowRoot.innerHTML =
-            '<div style="padding:24px;color:#db4437;font-family:sans-serif;">' +
-            "<h3>Irrigation panel error</h3>" +
-            "<p>The panel failed to render. Check browser console for details.</p>" +
-            "</div>";
-        }
+        this._safeRender();
       });
+    }
+
+    _renderNow() {
+      // Synchronous render for user actions (navigation, modal toggles)
+      // so the UI feels instantaneous instead of waiting on the next frame.
+      this._renderScheduled = false;
+      this._safeRender();
+    }
+
+    _safeRender() {
+      try {
+        this._render();
+      } catch (err) {
+        console.error("[complete-irrigation] render failed:", err);
+        this.shadowRoot.innerHTML =
+          '<div style="padding:24px;color:#db4437;font-family:sans-serif;">' +
+          "<h3>Irrigation panel error</h3>" +
+          "<p>The panel failed to render. Check browser console for details.</p>" +
+          "</div>";
+      }
     }
 
     _toggleSidebar() {
@@ -232,29 +295,28 @@
       try {
         localStorage.setItem(SIDEBAR_STORAGE_KEY, String(this._collapsed));
       } catch (_) {}
-      this._scheduleRender();
+      this._renderNow();
     }
 
     _navigateTo(sectionId) {
       this._currentSection = sectionId;
       if (sectionId === "schedules" && !this._schedulesLoaded) this._fetchSchedules();
-      this._scheduleRender();
+      this._renderNow();
     }
 
     _openRunModal(entityId, zoneName) {
       this._runModalOpen = true;
       this._runModalEntityId = entityId;
       this._runModalZoneName = zoneName || entityId;
-      this._scheduleRender();
+      this._renderNow();
     }
 
     _openNewSchedule() {
       this._scheduleEditor = emptyEditor();
-      // Default to the first configured zone if any
       const zones = (this._panel?.config?.zones) || [];
       if (zones.length) this._scheduleEditor.zone_entity_id = zones[0];
       this._scheduleModalOpen = true;
-      this._scheduleRender();
+      this._renderNow();
     }
 
     _openEditSchedule(scheduleId) {
@@ -270,13 +332,60 @@
         enabled: found.enabled,
       };
       this._scheduleModalOpen = true;
-      this._scheduleRender();
+      this._renderNow();
     }
 
     _closeAllModals() {
       this._runModalOpen = false;
       this._scheduleModalOpen = false;
-      this._scheduleRender();
+      this._renderNow();
+    }
+
+    _toggleZoneHidden(entityId) {
+      if (this._hiddenZones.has(entityId)) {
+        this._hiddenZones.delete(entityId);
+      } else {
+        this._hiddenZones.add(entityId);
+      }
+      try {
+        localStorage.setItem(
+          HIDDEN_ZONES_STORAGE_KEY,
+          JSON.stringify([...this._hiddenZones])
+        );
+      } catch (_) {}
+      this._renderNow();
+    }
+
+    _toggleShowHidden() {
+      this._showHidden = !this._showHidden;
+      this._renderNow();
+    }
+
+    _startLocalCountdown(entityId, minutes) {
+      this._localRuns[entityId] = Date.now() + minutes * 60 * 1000;
+      if (!this._countdownTimer) {
+        this._countdownTimer = setInterval(() => {
+          const now = Date.now();
+          for (const eid of Object.keys(this._localRuns)) {
+            if (this._localRuns[eid] <= now) delete this._localRuns[eid];
+          }
+          if (Object.keys(this._localRuns).length === 0 && this._countdownTimer) {
+            clearInterval(this._countdownTimer);
+            this._countdownTimer = null;
+          }
+          this._renderNow();
+        }, 1000);
+      }
+      this._renderNow();
+    }
+
+    _stopLocalCountdown(entityId) {
+      delete this._localRuns[entityId];
+      if (Object.keys(this._localRuns).length === 0 && this._countdownTimer) {
+        clearInterval(this._countdownTimer);
+        this._countdownTimer = null;
+      }
+      this._renderNow();
     }
 
     // ── HA calls ───────────────────────────────────────────────────
@@ -314,6 +423,7 @@
           entity_id: entityId,
           minutes,
         });
+        this._startLocalCountdown(entityId, minutes);
       } catch (err) {
         alert("Failed to start zone: " + (err?.message || err));
       }
@@ -325,6 +435,7 @@
         await this._hass.callService("complete_irrigation", "stop_zone", {
           entity_id: entityId,
         });
+        this._stopLocalCountdown(entityId);
       } catch (err) {
         alert("Failed to stop zone: " + (err?.message || err));
       }
@@ -502,16 +613,35 @@
     }
 
     _renderToday() {
-      const zones = this._zones();
+      const allZones = this._zones();
+      const hiddenZones = allZones.filter((z) => this._hiddenZones.has(z.entityId));
+      const visibleZones = allZones.filter((z) => !this._hiddenZones.has(z.entityId));
+      const zonesToShow = this._showHidden ? allZones : visibleZones;
+
+      let hiddenToggle = "";
+      if (hiddenZones.length > 0) {
+        hiddenToggle = `<button class="btn-link" data-action="show-hidden">${
+          this._showHidden
+            ? `Hide hidden zones (${hiddenZones.length})`
+            : `Show hidden zones (${hiddenZones.length})`
+        }</button>`;
+      }
+
       return (
         `<header class="page-header"><h2>Today</h2>` +
-        `<span class="version-pill">v1.2.0</span></header>` +
+        `<span class="version-pill">v1.3.0</span></header>` +
         this._renderRainLockoutBanner() +
         this._renderWeatherBanner() +
-        `<section><h3 class="section-title">Zones (${zones.length})</h3>` +
-        (zones.length === 0
+        `<section>` +
+        `<div class="section-title-row">` +
+        `<h3 class="section-title">Zones (${visibleZones.length}${
+          hiddenZones.length ? ` + ${hiddenZones.length} hidden` : ""
+        })</h3>` +
+        hiddenToggle +
+        `</div>` +
+        (zonesToShow.length === 0
           ? this._renderEmpty()
-          : `<div class="zone-grid">${zones
+          : `<div class="zone-grid">${zonesToShow
               .map((z) => this._renderZoneTile(z))
               .join("")}</div>`) +
         `</section>`
@@ -548,69 +678,144 @@
     }
 
     _renderWeatherBanner() {
-      // Build a banner of whatever weather data the user has configured
-      // + sun.sun (always available).
-      const tempState = this._readSensor(this._config?.temperature_sensor);
-      const rainState = this._readSensor(this._config?.rain_sensor);
-      const sunState = this._readSensor("sun.sun");
-
-      // If nothing is configured yet, show a friendly hint card
-      if (!tempState && !rainState && !sunState) {
-        return (
-          `<div class="weather-banner weather-banner-empty">` +
-          `<span style="font-size:20px">🌤️</span>` +
-          `<div style="flex:1">` +
-          `<div style="font-weight:600;font-size:13px">No weather entities bound yet</div>` +
-          `<div style="font-size:12px;color:var(--secondary-text-color)">` +
-          `Call <code>complete_irrigation.set_weather_config</code> with your Tempest rain + temperature sensors to populate this banner.` +
-          `</div></div></div>`
-        );
-      }
-
+      // Auto-detected sensors plus anything explicitly bound via service.
+      const detected = this._autoDetectWeatherSensors();
       const cells = [];
 
+      const sunState = this._readSensor("sun.sun");
+
+      // Temperature (explicit > auto)
+      const tempState =
+        this._readSensor(this._config?.temperature_sensor) || detected.temperature;
       if (tempState) {
-        const unit = tempState.attributes?.unit_of_measurement || "°F";
-        cells.push(
-          this._weatherCell("🌡️", "Temperature", `${tempState.state}${unit}`)
-        );
+        const unit = tempState.attributes?.unit_of_measurement || "°";
+        cells.push(this._weatherCell("🌡️", "Temp", `${tempState.state}${unit}`));
       }
+
+      // Feels like
+      if (detected.feels_like) {
+        const unit = detected.feels_like.attributes?.unit_of_measurement || "°";
+        cells.push(this._weatherCell("🤚", "Feels like", `${detected.feels_like.state}${unit}`));
+      }
+
+      // Humidity
+      if (detected.humidity) {
+        cells.push(this._weatherCell("💧", "Humidity", `${detected.humidity.state}%`));
+      }
+
+      // Dew point
+      if (detected.dew_point) {
+        const unit = detected.dew_point.attributes?.unit_of_measurement || "°";
+        cells.push(this._weatherCell("🌫️", "Dew pt", `${detected.dew_point.state}${unit}`));
+      }
+
+      // Rain today (explicit > auto)
+      const rainState = this._readSensor(this._config?.rain_sensor) || detected.rain;
       if (rainState) {
         const unit = rainState.attributes?.unit_of_measurement || "in";
-        cells.push(
-          this._weatherCell("☔", "Rain today", `${rainState.state} ${unit}`)
-        );
+        cells.push(this._weatherCell("☔", "Rain today", `${rainState.state} ${unit}`));
       }
+
+      // Wind
+      if (detected.wind_speed) {
+        const unit = detected.wind_speed.attributes?.unit_of_measurement || "mph";
+        let val = `${detected.wind_speed.state} ${unit}`;
+        if (detected.wind_gust) {
+          val += ` (gust ${detected.wind_gust.state})`;
+        }
+        cells.push(this._weatherCell("💨", "Wind", val));
+      }
+
+      // UV
+      if (detected.uv) {
+        cells.push(this._weatherCell("🔆", "UV index", detected.uv.state));
+      }
+
+      // Solar
+      if (detected.solar) {
+        const unit = detected.solar.attributes?.unit_of_measurement || "W/m²";
+        cells.push(this._weatherCell("☀️", "Solar", `${detected.solar.state} ${unit}`));
+      }
+
+      // Pressure
+      if (detected.pressure) {
+        const unit = detected.pressure.attributes?.unit_of_measurement || "";
+        cells.push(this._weatherCell("📊", "Pressure", `${detected.pressure.state} ${unit}`));
+      }
+
+      // Sunrise/sunset
       if (sunState) {
-        const next = sunState.attributes?.next_setting || sunState.attributes?.next_rising;
-        const label = sunState.state === "above_horizon" ? "Sunset" : "Sunrise";
-        if (next) {
-          const dt = new Date(next);
-          const timeStr = dt.toLocaleTimeString(undefined, {
-            hour: "numeric",
-            minute: "2-digit",
-          });
-          cells.push(this._weatherCell(sunState.state === "above_horizon" ? "🌅" : "🌄", label, timeStr));
+        const setNext = sunState.attributes?.next_setting;
+        const riseNext = sunState.attributes?.next_rising;
+        if (riseNext) {
+          const dt = new Date(riseNext);
+          cells.push(this._weatherCell("🌄", "Sunrise",
+            dt.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })));
+        }
+        if (setNext) {
+          const dt = new Date(setNext);
+          cells.push(this._weatherCell("🌅", "Sunset",
+            dt.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })));
         }
       }
+
       // Hot weather threshold if configured
       const hotThreshold = this._config?.hot_threshold_f;
       const boostPct = this._config?.boost_percent;
       if (hotThreshold && boostPct) {
-        cells.push(
-          this._weatherCell(
-            "🔥",
-            `Hot boost`,
-            `>${hotThreshold}°F = +${boostPct}%`
-          )
+        cells.push(this._weatherCell("🔥", "Hot boost",
+          `>${hotThreshold}°F = +${boostPct}%`));
+      }
+
+      // Empty-state hint if literally nothing was found
+      if (cells.length === 0) {
+        return (
+          `<div class="weather-banner weather-banner-empty">` +
+          `<span style="font-size:20px">🌤️</span>` +
+          `<div style="flex:1">` +
+          `<div style="font-weight:600;font-size:13px">No weather data found yet</div>` +
+          `<div style="font-size:12px;color:var(--secondary-text-color)">` +
+          `Install the WeatherFlow Tempest integration (or any weather entity) ` +
+          `and the banner will auto-populate. Or call ` +
+          `<code>complete_irrigation.set_weather_config</code> to bind specific sensors.` +
+          `</div></div></div>`
         );
       }
 
-      return (
-        `<div class="weather-banner">` +
-        cells.join("") +
-        `</div>`
-      );
+      return `<div class="weather-banner">${cells.join("")}</div>`;
+    }
+
+    _autoDetectWeatherSensors() {
+      const found = {};
+      if (!this._hass?.states) return found;
+
+      // Pattern keys to match in entity_ids (any case)
+      const patterns = {
+        temperature: [/^sensor\..*tempest.*temperature$/i, /^sensor\..*weatherflow.*temperature$/i, /^sensor\.outdoor_?temperature$/i, /^sensor\.outside_?temperature$/i],
+        feels_like: [/^sensor\..*tempest.*feels_like$/i, /^sensor\..*weatherflow.*feels_like$/i, /^sensor\..*feels_like$/i],
+        humidity: [/^sensor\..*tempest.*humidity$/i, /^sensor\..*weatherflow.*humidity$/i, /^sensor\.outdoor_?humidity$/i],
+        dew_point: [/^sensor\..*tempest.*dew_?point$/i, /^sensor\..*dew_?point$/i],
+        rain: [/^sensor\..*tempest.*rain_today$/i, /^sensor\..*precipitation_today$/i, /^sensor\..*rain_today$/i],
+        wind_speed: [/^sensor\..*tempest.*wind_avg$/i, /^sensor\..*tempest.*wind_speed$/i, /^sensor\..*wind_speed$/i],
+        wind_gust: [/^sensor\..*tempest.*wind_gust$/i, /^sensor\..*wind_gust$/i],
+        uv: [/^sensor\..*tempest.*uv$/i, /^sensor\..*tempest.*uv_index$/i, /^sensor\..*uv_?index$/i],
+        solar: [/^sensor\..*tempest.*solar_radiation$/i, /^sensor\..*solar_radiation$/i],
+        pressure: [/^sensor\..*tempest.*pressure$/i, /^sensor\.barometric_?pressure$/i],
+      };
+
+      const ids = Object.keys(this._hass.states);
+      for (const [key, regexList] of Object.entries(patterns)) {
+        for (const eid of ids) {
+          if (regexList.some((r) => r.test(eid))) {
+            const state = this._hass.states[eid];
+            if (state && state.state !== "unknown" && state.state !== "unavailable") {
+              found[key] = state;
+              break;
+            }
+          }
+        }
+      }
+      return found;
     }
 
     _weatherCell(icon, label, value) {
@@ -629,25 +834,46 @@
     }
 
     _renderZoneTile(zone) {
-      const statusClass = !zone.available ? "unavailable" : zone.on ? "running" : "idle";
-      const statusLabel = !zone.available
-        ? "Unavailable"
-        : zone.on
-        ? "Running"
-        : "Idle";
+      const isHidden = this._hiddenZones.has(zone.entityId);
+      const countdown = this._localRuns[zone.entityId];
+      const remainingMs = countdown ? Math.max(0, countdown - Date.now()) : 0;
+      const isCountingDown = remainingMs > 0 && zone.on;
+
+      let statusClass, statusLabel;
+      if (!zone.available) {
+        statusClass = "unavailable";
+        statusLabel = "Unavailable";
+      } else if (zone.on) {
+        statusClass = "running";
+        statusLabel = isCountingDown
+          ? `Running — ${_formatRemaining(remainingMs)} left`
+          : "Running";
+      } else {
+        statusClass = "idle";
+        statusLabel = "Idle";
+      }
+
       const action = zone.on
         ? `<button class="btn btn-stop" data-action="stop" data-entity-id="${escapeAttr(
             zone.entityId
-          )}">⏹ Stop</button>`
+          )}">⏹ Stop${isCountingDown ? " (" + _formatRemaining(remainingMs) + ")" : ""}</button>`
         : `<button class="btn btn-run" data-action="run-now" data-entity-id="${escapeAttr(
             zone.entityId
           )}" data-zone-name="${escapeAttr(zone.name)}"${
             zone.available ? "" : " disabled"
           }>▶ Run Now</button>`;
+
+      const hideAction = isHidden
+        ? `<button class="btn-icon" data-action="show-zone" data-entity-id="${escapeAttr(zone.entityId)}" title="Show this zone">👁️</button>`
+        : `<button class="btn-icon" data-action="hide-zone" data-entity-id="${escapeAttr(zone.entityId)}" title="Hide this zone">🚫</button>`;
+
       return (
-        `<article class="zone-tile">` +
-        `<header><span class="status-dot ${statusClass}"></span>` +
-        `<h4>${escapeHtml(zone.name)}</h4></header>` +
+        `<article class="zone-tile${isHidden ? " zone-hidden" : ""}">` +
+        `<header>` +
+        `<span class="status-dot ${statusClass}"></span>` +
+        `<h4>${escapeHtml(zone.name)}</h4>` +
+        hideAction +
+        `</header>` +
         `<div class="entity-id">${escapeHtml(zone.entityId)}</div>` +
         `<div class="status-text">${statusLabel}</div>` +
         `<div class="zone-actions">${action}</div>` +
@@ -858,10 +1084,26 @@
         `.weather-cell-value{font-size:15px;font-weight:600;color:var(--primary-text-color,#212121);margin-top:2px}` +
         // Rain lockout banner
         `.rain-lockout-banner{background:#ffa726;color:#1c1c1c;padding:12px 16px;border-radius:12px;margin-bottom:16px;display:flex;align-items:center;gap:12px}` +
+        // Section title row + zone hide
+        `.section-title-row{display:flex;align-items:center;justify-content:space-between;margin:16px 0 8px}` +
+        `.section-title-row .section-title{margin:0}` +
+        `.btn-link{background:none;border:none;color:var(--primary-color,#03a9f4);cursor:pointer;font-size:12px;text-decoration:underline;font-family:inherit;padding:0}` +
+        `.btn-icon{background:transparent;border:none;cursor:pointer;font-size:14px;padding:4px 6px;border-radius:4px;opacity:0.5;transition:opacity 0.15s}` +
+        `.btn-icon:hover{opacity:1;background:var(--primary-background-color,#f0f0f0)}` +
+        `.zone-tile.zone-hidden{opacity:0.55;border-style:dashed}` +
+        `.zone-tile header{justify-content:space-between}` +
+        `.zone-tile header h4{flex:1}` +
         // Mobile
         `@media (max-width:700px){.sidebar:not(.collapsed){position:fixed;z-index:10;height:100%}.sidebar.collapsed{width:56px}.root{grid-template-columns:56px 1fr}.schedule-row{flex-direction:column;align-items:stretch}}`
       );
     }
+  }
+
+  function _formatRemaining(ms) {
+    const total = Math.max(0, Math.round(ms / 1000));
+    const m = Math.floor(total / 60);
+    const s = total % 60;
+    return `${m}:${String(s).padStart(2, "0")}`;
   }
 
   function escapeHtml(s) {
@@ -876,5 +1118,5 @@
   }
 
   customElements.define(ELEMENT_NAME, CompleteIrrigationPanel);
-  console.info("[complete-irrigation] panel registered, version v1.2.0");
+  console.info("[complete-irrigation] panel registered, version v1.3.0");
 })();
