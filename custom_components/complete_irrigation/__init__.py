@@ -4,9 +4,11 @@ Entry point. Real coordinator, services, and entity platforms are added
 in later vertical-slice issues (see docs/ISSUES.md). This loader sets up
 the config entry and registers the custom sidebar panel.
 """
+
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -24,8 +26,38 @@ PANEL_URL_PATH = "complete-irrigation"
 PANEL_STATIC_URL = "/complete_irrigation_panel"
 PANEL_JS_FILENAME = "complete-irrigation-panel.js"
 
+# Key in `hass.data[DOMAIN]` reserved for our process-wide shared state.
+# Config entry IDs use UUIDs, so there's no risk of collision with this.
+_SHARED_KEY = "__shared__"
 
-async def async_setup_entry(hass: "HomeAssistant", entry: "ConfigEntry") -> bool:
+
+@dataclass
+class _SharedState:
+    """Process-wide state for this integration.
+
+    Separate from per-config-entry data so we can clearly distinguish
+    "things to clean up when ALL entries are gone" from "things to clean
+    up when THIS entry is gone".
+    """
+
+    panel_registered: bool = False
+    static_path_registered: bool = False
+
+
+def _shared(hass: HomeAssistant) -> _SharedState:
+    """Get or create the shared state for this integration domain."""
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    if _SHARED_KEY not in domain_data:
+        domain_data[_SHARED_KEY] = _SharedState()
+    return domain_data[_SHARED_KEY]
+
+
+def _entry_count(hass: HomeAssistant) -> int:
+    """Return the number of live config entries for this domain."""
+    return sum(1 for k in hass.data.get(DOMAIN, {}) if k != _SHARED_KEY)
+
+
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Complete Irrigation from a config entry."""
     # Deferred imports — only loaded when HA actually calls us, so the
     # package stays importable in test environments without HA installed.
@@ -33,15 +65,17 @@ async def async_setup_entry(hass: "HomeAssistant", entry: "ConfigEntry") -> bool
     from homeassistant.components.http import StaticPathConfig
 
     _LOGGER.info("Setting up Complete Irrigation entry %s", entry.entry_id)
-    hass.data.setdefault(DOMAIN, {})
+
+    shared = _shared(hass)
     hass.data[DOMAIN][entry.entry_id] = {
         "zones": entry.data.get("zones", []),
         "controller_domain": entry.data.get("controller_domain"),
     }
 
-    # Register the static path serving the panel JS (idempotent across
-    # multiple config entries since we use the same path).
-    if not hass.data[DOMAIN].get("_static_path_registered"):
+    # Static path serving the panel JS — idempotent across multiple
+    # config entries (HA doesn't expose an unregister API, so we
+    # register at most once per HA session).
+    if not shared.static_path_registered:
         frontend_dir = Path(__file__).parent / "frontend"
         await hass.http.async_register_static_paths(
             [
@@ -52,10 +86,10 @@ async def async_setup_entry(hass: "HomeAssistant", entry: "ConfigEntry") -> bool
                 )
             ]
         )
-        hass.data[DOMAIN]["_static_path_registered"] = True
+        shared.static_path_registered = True
 
-    # Register the sidebar panel.
-    if not hass.data[DOMAIN].get("_panel_registered"):
+    # Sidebar panel — also idempotent.
+    if not shared.panel_registered:
         async_register_built_in_panel(
             hass,
             component_name="custom",
@@ -65,11 +99,8 @@ async def async_setup_entry(hass: "HomeAssistant", entry: "ConfigEntry") -> bool
             config={
                 "_panel_custom": {
                     "name": "complete-irrigation-panel",
-                    # Run our panel in an isolated iframe so any JS error
-                    # in our code is physically prevented from affecting
-                    # HA's main frontend (icons, devices page, etc.).
-                    # Trade-off: ~200ms slower initial load. Worth it
-                    # while the integration is in early development.
+                    # iframe sandbox protects HA's main frontend from
+                    # any JS error in our panel code. See ADR/v0.2.0.
                     "embed_iframe": True,
                     "trust_external": False,
                     "js_url": f"{PANEL_STATIC_URL}/{PANEL_JS_FILENAME}",
@@ -79,7 +110,7 @@ async def async_setup_entry(hass: "HomeAssistant", entry: "ConfigEntry") -> bool
             },
             require_admin=False,
         )
-        hass.data[DOMAIN]["_panel_registered"] = True
+        shared.panel_registered = True
 
     if PLATFORMS:
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -87,8 +118,8 @@ async def async_setup_entry(hass: "HomeAssistant", entry: "ConfigEntry") -> bool
     return True
 
 
-async def async_unload_entry(hass: "HomeAssistant", entry: "ConfigEntry") -> bool:
-    """Unload a config entry."""
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Unload a config entry, cleaning up shared resources if it's the last one."""
     from homeassistant.components.frontend import async_remove_panel
 
     if PLATFORMS:
@@ -96,15 +127,15 @@ async def async_unload_entry(hass: "HomeAssistant", entry: "ConfigEntry") -> boo
         if not unload_ok:
             return False
 
-    # Remove the panel and clean up — but only when this is the last
-    # config entry of ours being unloaded.
-    domain_data = hass.data.get(DOMAIN, {})
-    domain_data.pop(entry.entry_id, None)
-    other_entries = [k for k in domain_data.keys() if not k.startswith("_")]
-    if not other_entries:
-        if domain_data.get("_panel_registered"):
+    hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
+
+    # When the last config entry of ours unloads, also tear down the
+    # shared panel registration. (Static paths can't be unregistered in
+    # HA's API — they live until HA restart.)
+    if _entry_count(hass) == 0:
+        shared = _shared(hass)
+        if shared.panel_registered:
             async_remove_panel(hass, PANEL_URL_PATH)
-            domain_data["_panel_registered"] = False
-        # Static path is kept registered — HA tears it down on shutdown.
+            shared.panel_registered = False
 
     return True
