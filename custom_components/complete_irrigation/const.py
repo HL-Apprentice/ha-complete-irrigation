@@ -86,6 +86,7 @@ DEFAULT_SMALL_SHIFT_TOLERANCE_MIN = 15
 DEFAULT_CASCADE_CAP_HOURS = 2
 DEFAULT_CASCADE_DEFER_LIMIT = 3
 DEFAULT_MANUAL_RUN_MINUTES = 10
+MAX_MANUAL_RUN_MINUTES = 60  # safety cap on manual runs
 
 # Hot weather adjustment defaults (in user's unit; converted internally).
 DEFAULT_HOT_WEATHER_F = 100
