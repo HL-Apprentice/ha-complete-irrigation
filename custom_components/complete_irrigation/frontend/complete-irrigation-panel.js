@@ -70,6 +70,10 @@
       this._schedules = [];
       this._schedulesLoaded = false;
 
+      // Weather + config cached from WS API
+      this._config = {};
+      this._configLoaded = false;
+
       this._renderScheduled = false;
       this._onClick = this._onClick.bind(this);
       this._onSubmit = this._onSubmit.bind(this);
@@ -81,7 +85,10 @@
     set hass(value) {
       const isFirstHass = !this._hass;
       this._hass = value;
-      if (isFirstHass) this._fetchSchedules();
+      if (isFirstHass) {
+        this._fetchSchedules();
+        this._fetchConfig();
+      }
       this._scheduleRender();
     }
     get hass() {
@@ -117,10 +124,19 @@
         if (!node || node === this.shadowRoot || node === this) break;
         if (!(node instanceof HTMLElement)) continue;
 
+        // Class-based actions
         if (node.classList.contains("collapse-btn")) return this._toggleSidebar();
         if (node.classList.contains("modal-cancel")) return this._closeAllModals();
         if (node.classList.contains("modal-backdrop")) return this._closeAllModals();
 
+        // Sidebar navigation (data-section) — checked BEFORE data-action so
+        // a button without data-action but with data-section still navigates.
+        if (node.dataset.section) {
+          e.stopPropagation();
+          return this._navigateTo(node.dataset.section);
+        }
+
+        // Action buttons (data-action)
         const action = node.dataset.action;
         if (!action) continue;
         e.stopPropagation();
@@ -138,7 +154,6 @@
             node.dataset.scheduleId,
             node.dataset.enabled === "true"
           );
-        if (node.dataset.section) return this._navigateTo(node.dataset.section);
       }
     }
 
@@ -276,6 +291,19 @@
         this._scheduleRender();
       } catch (err) {
         console.error("[complete-irrigation] list_schedules failed:", err);
+      }
+    }
+
+    async _fetchConfig() {
+      if (!this._hass || !this._hass.callWS) return;
+      try {
+        this._config = await this._hass.callWS({
+          type: "complete_irrigation/get_config",
+        }) || {};
+        this._configLoaded = true;
+        this._scheduleRender();
+      } catch (err) {
+        console.error("[complete-irrigation] get_config failed:", err);
       }
     }
 
@@ -477,7 +505,9 @@
       const zones = this._zones();
       return (
         `<header class="page-header"><h2>Today</h2>` +
-        `<span class="version-pill">v1.1.0</span></header>` +
+        `<span class="version-pill">v1.2.0</span></header>` +
+        this._renderRainLockoutBanner() +
+        this._renderWeatherBanner() +
         `<section><h3 class="section-title">Zones (${zones.length})</h3>` +
         (zones.length === 0
           ? this._renderEmpty()
@@ -485,6 +515,112 @@
               .map((z) => this._renderZoneTile(z))
               .join("")}</div>`) +
         `</section>`
+      );
+    }
+
+    _renderRainLockoutBanner() {
+      const until = this._config?.lockout_until;
+      if (!until) return "";
+      const dt = new Date(until);
+      if (isNaN(dt.getTime())) return "";
+      if (dt < new Date()) return "";  // lockout already expired
+      const timeStr = dt.toLocaleString(undefined, {
+        weekday: "short",
+        hour: "numeric",
+        minute: "2-digit",
+      });
+      return (
+        `<div class="rain-lockout-banner">` +
+        `<span style="font-size:18px">🌧️</span>` +
+        `<div style="flex:1">` +
+        `<div style="font-weight:600">Rain lockout active</div>` +
+        `<div style="font-size:12px;opacity:0.85">All watering paused until ${escapeHtml(timeStr)}</div>` +
+        `</div>` +
+        `</div>`
+      );
+    }
+
+    _readSensor(entity_id) {
+      if (!entity_id) return null;
+      const state = this._hass?.states?.[entity_id];
+      if (!state || state.state === "unknown" || state.state === "unavailable") return null;
+      return state;
+    }
+
+    _renderWeatherBanner() {
+      // Build a banner of whatever weather data the user has configured
+      // + sun.sun (always available).
+      const tempState = this._readSensor(this._config?.temperature_sensor);
+      const rainState = this._readSensor(this._config?.rain_sensor);
+      const sunState = this._readSensor("sun.sun");
+
+      // If nothing is configured yet, show a friendly hint card
+      if (!tempState && !rainState && !sunState) {
+        return (
+          `<div class="weather-banner weather-banner-empty">` +
+          `<span style="font-size:20px">🌤️</span>` +
+          `<div style="flex:1">` +
+          `<div style="font-weight:600;font-size:13px">No weather entities bound yet</div>` +
+          `<div style="font-size:12px;color:var(--secondary-text-color)">` +
+          `Call <code>complete_irrigation.set_weather_config</code> with your Tempest rain + temperature sensors to populate this banner.` +
+          `</div></div></div>`
+        );
+      }
+
+      const cells = [];
+
+      if (tempState) {
+        const unit = tempState.attributes?.unit_of_measurement || "°F";
+        cells.push(
+          this._weatherCell("🌡️", "Temperature", `${tempState.state}${unit}`)
+        );
+      }
+      if (rainState) {
+        const unit = rainState.attributes?.unit_of_measurement || "in";
+        cells.push(
+          this._weatherCell("☔", "Rain today", `${rainState.state} ${unit}`)
+        );
+      }
+      if (sunState) {
+        const next = sunState.attributes?.next_setting || sunState.attributes?.next_rising;
+        const label = sunState.state === "above_horizon" ? "Sunset" : "Sunrise";
+        if (next) {
+          const dt = new Date(next);
+          const timeStr = dt.toLocaleTimeString(undefined, {
+            hour: "numeric",
+            minute: "2-digit",
+          });
+          cells.push(this._weatherCell(sunState.state === "above_horizon" ? "🌅" : "🌄", label, timeStr));
+        }
+      }
+      // Hot weather threshold if configured
+      const hotThreshold = this._config?.hot_threshold_f;
+      const boostPct = this._config?.boost_percent;
+      if (hotThreshold && boostPct) {
+        cells.push(
+          this._weatherCell(
+            "🔥",
+            `Hot boost`,
+            `>${hotThreshold}°F = +${boostPct}%`
+          )
+        );
+      }
+
+      return (
+        `<div class="weather-banner">` +
+        cells.join("") +
+        `</div>`
+      );
+    }
+
+    _weatherCell(icon, label, value) {
+      return (
+        `<div class="weather-cell">` +
+        `<span class="weather-cell-icon">${icon}</span>` +
+        `<div class="weather-cell-body">` +
+        `<div class="weather-cell-label">${escapeHtml(label)}</div>` +
+        `<div class="weather-cell-value">${escapeHtml(value)}</div>` +
+        `</div></div>`
       );
     }
 
@@ -711,6 +847,17 @@
         `.enabled-check{display:inline-flex;align-items:center;gap:6px;margin-top:14px;color:var(--primary-text-color,#212121);font-size:13px}` +
         `.help-tip{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;background:var(--primary-background-color,#f0f0f0);color:var(--secondary-text-color,#727272);font-size:11px;margin-left:4px;cursor:help;vertical-align:middle}` +
         `.help-tip:hover{background:var(--primary-color,#03a9f4);color:#fff}` +
+        // Weather banner
+        `.weather-banner{background:var(--card-background-color,#fff);border:1px solid var(--divider-color,rgba(0,0,0,0.12));border-radius:12px;padding:16px;margin-bottom:16px;display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px}` +
+        `.weather-banner-empty{display:flex;align-items:flex-start;gap:12px;grid-template-columns:none}` +
+        `.weather-banner-empty code{background:var(--primary-background-color,#f0f0f0);padding:2px 6px;border-radius:4px;font-size:11px}` +
+        `.weather-cell{display:flex;align-items:center;gap:10px}` +
+        `.weather-cell-icon{font-size:22px;flex-shrink:0}` +
+        `.weather-cell-body{min-width:0}` +
+        `.weather-cell-label{font-size:11px;color:var(--secondary-text-color,#727272);text-transform:uppercase;letter-spacing:0.05em}` +
+        `.weather-cell-value{font-size:15px;font-weight:600;color:var(--primary-text-color,#212121);margin-top:2px}` +
+        // Rain lockout banner
+        `.rain-lockout-banner{background:#ffa726;color:#1c1c1c;padding:12px 16px;border-radius:12px;margin-bottom:16px;display:flex;align-items:center;gap:12px}` +
         // Mobile
         `@media (max-width:700px){.sidebar:not(.collapsed){position:fixed;z-index:10;height:100%}.sidebar.collapsed{width:56px}.root{grid-template-columns:56px 1fr}.schedule-row{flex-direction:column;align-items:stretch}}`
       );
@@ -729,5 +876,5 @@
   }
 
   customElements.define(ELEMENT_NAME, CompleteIrrigationPanel);
-  console.info("[complete-irrigation] panel registered, version v1.1.0");
+  console.info("[complete-irrigation] panel registered, version v1.2.0");
 })();
