@@ -16,6 +16,25 @@ input_boolean:
   test_garden:
     name: Test Garden
 
+# Template weather entity so the irrigation panel's "Condition" cell
+# has something to display during smoke testing.
+template:
+  - weather:
+      - name: "Test Weather"
+        condition_template: "partlycloudy"
+        temperature_template: "72"
+        temperature_unit: "°F"
+        humidity_template: "55"
+
+# A simple moisture sensor for testing the Sensors tab.
+sensor:
+  - platform: template
+    sensors:
+      test_lawn_moisture:
+        friendly_name: "Test Lawn Moisture"
+        value_template: "27"
+        unit_of_measurement: "%"
+
 switch:
   - platform: template
     switches:
