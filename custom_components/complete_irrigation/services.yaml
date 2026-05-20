@@ -160,3 +160,116 @@ set_schedule_enabled:
       required: true
       selector:
         boolean:
+
+set_weather_config:
+  name: Set weather config
+  description: >
+    Configure rain lockout + hot weather boost. All fields optional —
+    only the ones you pass are updated.
+  fields:
+    rain_sensor:
+      name: Rain sensor
+      description: Sensor reporting rainfall in inches (e.g., Tempest rain_today).
+      required: false
+      selector:
+        entity:
+          domain: sensor
+    temperature_sensor:
+      name: Temperature sensor
+      description: Sensor reporting current outdoor temperature in °F (for hot weather boost).
+      required: false
+      selector:
+        entity:
+          domain: sensor
+    hot_threshold_f:
+      name: Hot weather threshold (°F)
+      description: Boost runtime when temperature meets or exceeds this value.
+      required: false
+      default: 100
+      selector:
+        number:
+          min: 50
+          max: 130
+          step: 1
+          mode: box
+    boost_percent:
+      name: Hot weather boost (%)
+      description: Increase runtime by this percent on hot days.
+      required: false
+      default: 25
+      selector:
+        number:
+          min: 0
+          max: 100
+          step: 1
+          mode: box
+
+set_zone_moisture:
+  name: Set zone moisture config
+  description: >
+    Bind moisture sensor(s) to a zone with min / target / max thresholds
+    and a combine mode. Required for sensor-driven runtime adjustment.
+  fields:
+    zone_entity_id:
+      name: Zone switch
+      required: true
+      selector:
+        entity:
+          domain: switch
+    moisture_entities:
+      name: Moisture sensors
+      description: One or more moisture % sensors for this zone.
+      required: true
+      selector:
+        object:
+    combine_mode:
+      name: Combine mode (multiple sensors)
+      description: How to combine multiple sensor readings.
+      required: false
+      default: average
+      selector:
+        select:
+          options: ["average", "lowest", "highest", "primary"]
+    min_pct:
+      name: Minimum moisture (%)
+      description: Below this — urgent boost. Default 21% (lawn).
+      required: false
+      default: 21
+      selector:
+        number:
+          min: 0
+          max: 100
+          step: 1
+          mode: box
+    target_pct:
+      name: Target moisture (%)
+      description: Default 31% (lawn).
+      required: false
+      default: 31
+      selector:
+        number:
+          min: 0
+          max: 100
+          step: 1
+          mode: box
+    max_pct:
+      name: Maximum moisture (%)
+      description: Above this — skip the run (saturated). Default 40% (lawn).
+      required: false
+      default: 40
+      selector:
+        number:
+          min: 0
+          max: 100
+          step: 1
+          mode: box
+    category:
+      name: Plant category
+      description: "Optional label for grouping (lawn, vegetable_garden, bushes, citrus, trees, custom)."
+      required: false
+      selector:
+        text:
+
+clear_rain_lockout:
+  name: Clear rain lockout
+  description: Manually end the current rain lockout (schedules resume immediately).
