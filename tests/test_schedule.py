@@ -102,7 +102,10 @@ def test_schedule_to_dict_has_expected_shape():
         "duration_minutes": 15,
         "weekdays": [0, 1, 2, 3, 4],
         "enabled": True,
-        "end_date": None,  # unbounded schedule
+        "end_date": None,
+        "mode": "weekdays",
+        "interval_days": None,
+        "interval_anchor": None,
     }
 
 
@@ -131,6 +134,92 @@ def test_schedule_from_dict_handles_missing_enabled_as_true():
     d.pop("enabled")
     s = Schedule.from_dict(d)
     assert s.enabled is True
+
+
+# ── interval mode (v1.4) ─────────────────────────────────────────
+
+
+def test_schedule_interval_mode_constructs():
+    from datetime import date
+
+    s = Schedule(
+        id="tree1",
+        name="Tree deep watering",
+        zone_entity_id="switch.trees",
+        start_time=time(2, 0),
+        duration_minutes=300,
+        weekdays=(),  # not used in interval mode
+        mode="interval",
+        interval_days=5,
+        interval_anchor=date(2026, 5, 20),
+    )
+    assert s.mode == "interval"
+    assert s.interval_days == 5
+
+
+def test_schedule_interval_mode_requires_interval_days():
+    from datetime import date
+
+    with pytest.raises(ValueError, match="interval_days"):
+        Schedule(
+            id="s1",
+            name="Trees",
+            zone_entity_id="switch.trees",
+            start_time=time(2, 0),
+            duration_minutes=300,
+            weekdays=(),
+            mode="interval",
+            interval_anchor=date(2026, 5, 20),
+        )
+
+
+def test_schedule_interval_mode_requires_anchor():
+    with pytest.raises(ValueError, match="interval_anchor"):
+        Schedule(
+            id="s1",
+            name="Trees",
+            zone_entity_id="switch.trees",
+            start_time=time(2, 0),
+            duration_minutes=300,
+            weekdays=(),
+            mode="interval",
+            interval_days=5,
+        )
+
+
+def test_schedule_interval_mode_roundtrip():
+    from datetime import date
+
+    original = Schedule(
+        id="tree1",
+        name="Tree deep watering",
+        zone_entity_id="switch.trees",
+        start_time=time(2, 0),
+        duration_minutes=300,
+        weekdays=(),
+        mode="interval",
+        interval_days=5,
+        interval_anchor=date(2026, 5, 20),
+    )
+    rebuilt = Schedule.from_dict(original.to_dict())
+    assert rebuilt == original
+
+
+def test_schedule_pre_v14_dict_without_mode_defaults_to_weekdays():
+    """Backward compat: a schedule stored before v1.4 has no `mode` key."""
+    old_dict = {
+        "id": "old1",
+        "name": "Old schedule",
+        "zone_entity_id": "switch.lawn",
+        "start_time": "06:00",
+        "duration_minutes": 15,
+        "weekdays": [0, 2, 4],
+        "enabled": True,
+        # NOTE: no mode, no interval_*
+    }
+    s = Schedule.from_dict(old_dict)
+    assert s.mode == "weekdays"
+    assert s.weekdays == (0, 2, 4)
 
 
 # ════════════════════════════════════════════════════════════════════

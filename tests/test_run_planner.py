@@ -227,3 +227,74 @@ def test_due_runs_empty_when_nothing_in_window():
 
 def test_due_runs_empty_input_returns_empty():
     assert due_runs_since([], MONDAY_6AM, MONDAY_6AM + timedelta(minutes=1)) == []
+
+
+# ════════════════════════════════════════════════════════════════════
+# Interval-mode schedules (v1.4)
+# ════════════════════════════════════════════════════════════════════
+
+
+def _interval_sched(**kw):
+    from datetime import date
+
+    defaults = {
+        "id": "tree",
+        "name": "Tree deep watering",
+        "zone_entity_id": "switch.trees",
+        "start_time": time(2, 0),
+        "duration_minutes": 300,
+        "weekdays": (),
+        "mode": "interval",
+        "interval_days": 5,
+        "interval_anchor": date(2026, 5, 18),  # Monday
+    }
+    defaults.update(kw)
+    return Schedule(**defaults)
+
+
+def test_interval_runs_every_n_days_from_anchor():
+    """Anchor = Mon May 18, every 5 days → fires May 18, May 23, May 28."""
+    runs = next_runs(
+        [_interval_sched()],
+        from_dt=MONDAY_MIDNIGHT,
+        until_dt=MONDAY_MIDNIGHT + timedelta(days=14),
+    )
+    starts = [(r.start_at.month, r.start_at.day, r.start_at.hour) for r in runs]
+    assert starts == [(5, 18, 2), (5, 23, 2), (5, 28, 2)]
+
+
+def test_interval_skips_past_dates_before_window():
+    """Anchor in the past — only future runs in window appear."""
+    from datetime import date
+
+    runs = next_runs(
+        [_interval_sched(interval_anchor=date(2026, 5, 1), interval_days=3)],
+        from_dt=MONDAY_MIDNIGHT,  # 2026-05-18
+        until_dt=MONDAY_MIDNIGHT + timedelta(days=10),
+    )
+    # May 1 + N*3 in window [May 18, May 28): May 19 (1+6*3), May 22, May 25
+    starts = [(r.start_at.month, r.start_at.day) for r in runs]
+    assert (5, 19) in starts
+    assert (5, 22) in starts
+    assert (5, 25) in starts
+
+
+def test_interval_respects_end_date():
+    from datetime import date
+
+    runs = next_runs(
+        [_interval_sched(end_date=date(2026, 5, 22))],
+        from_dt=MONDAY_MIDNIGHT,
+        until_dt=MONDAY_MIDNIGHT + timedelta(days=14),
+    )
+    starts = [(r.start_at.month, r.start_at.day) for r in runs]
+    assert starts == [(5, 18)]  # Next firing (5, 23) is past end_date
+
+
+def test_interval_skipped_when_disabled():
+    runs = next_runs(
+        [_interval_sched(enabled=False)],
+        from_dt=MONDAY_MIDNIGHT,
+        until_dt=MONDAY_MIDNIGHT + timedelta(days=14),
+    )
+    assert runs == []

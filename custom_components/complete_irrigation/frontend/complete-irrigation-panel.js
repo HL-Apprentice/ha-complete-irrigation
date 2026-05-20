@@ -20,7 +20,7 @@
   const ELEMENT_NAME = "complete-irrigation-panel";
   const DEFAULT_MANUAL_MINUTES = 10;
   const MAX_MANUAL_MINUTES = 60;
-  const MAX_SCHEDULE_MINUTES = 240;
+  const MAX_SCHEDULE_MINUTES = 480; // 8 hours
 
   if (customElements.get(ELEMENT_NAME)) return;
 
@@ -36,6 +36,17 @@
 
   const WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
+  function _todayIso() {
+    const d = new Date();
+    return (
+      d.getFullYear() +
+      "-" +
+      String(d.getMonth() + 1).padStart(2, "0") +
+      "-" +
+      String(d.getDate()).padStart(2, "0")
+    );
+  }
+
   function emptyEditor() {
     return {
       id: null, // null = creating new
@@ -45,6 +56,9 @@
       duration_minutes: 15,
       weekdays: [0, 1, 2, 3, 4],
       enabled: true,
+      mode: "weekdays",
+      interval_days: 5,
+      interval_anchor: _todayIso(),
     };
   }
 
@@ -238,6 +252,12 @@
         this._scheduleEditor.weekdays = Array.from(set).sort((a, b) => a - b);
       } else if (t.name === "enabled") {
         this._scheduleEditor.enabled = t.checked;
+      } else if (t.name === "mode") {
+        // Mode toggle flips which fields show — re-render the modal.
+        this._scheduleEditor.mode = t.value;
+        this._renderNow();
+      } else if (t.name === "duration_h" || t.name === "duration_m") {
+        this._syncDurationFromForm();
       } else if (t.name in this._scheduleEditor) {
         this._scheduleEditor[t.name] = t.value;
       }
@@ -247,15 +267,28 @@
       // Keep schedule editor state in sync as user types (so re-renders
       // triggered by other changes don't blow away unsaved edits).
       const t = e.target;
+      if (!t || !t.name) return;
+      if (t.name === "duration_h" || t.name === "duration_m") {
+        this._syncDurationFromForm();
+        return;
+      }
       if (
-        t &&
-        t.name &&
         t.name !== "weekday" &&
         t.name !== "enabled" &&
+        t.name !== "mode" &&
         t.name in this._scheduleEditor
       ) {
         this._scheduleEditor[t.name] = t.value;
       }
+    }
+
+    _syncDurationFromForm() {
+      // duration_minutes (canonical) = h*60 + m, read from both inputs.
+      const form = this.shadowRoot?.querySelector(".schedule-form");
+      if (!form) return;
+      const h = parseInt(form.querySelector('[name="duration_h"]')?.value, 10) || 0;
+      const m = parseInt(form.querySelector('[name="duration_m"]')?.value, 10) || 0;
+      this._scheduleEditor.duration_minutes = h * 60 + m;
     }
 
     _scheduleRender() {
@@ -328,8 +361,11 @@
         zone_entity_id: found.zone_entity_id,
         start_time: found.start_time,
         duration_minutes: found.duration_minutes,
-        weekdays: [...found.weekdays],
+        weekdays: [...(found.weekdays || [])],
         enabled: found.enabled,
+        mode: found.mode || "weekdays",
+        interval_days: found.interval_days || 5,
+        interval_anchor: found.interval_anchor || _todayIso(),
       };
       this._scheduleModalOpen = true;
       this._renderNow();
@@ -469,34 +505,51 @@
     }
 
     async _saveSchedule() {
+      // Make sure duration_minutes reflects the latest h/m inputs (covers
+      // the case where save was clicked before any input event fired).
+      this._syncDurationFromForm();
       const e = this._scheduleEditor;
       const minutes = parseInt(e.duration_minutes, 10);
+      const mode = e.mode === "interval" ? "interval" : "weekdays";
       if (!e.name || !e.name.trim()) return alert("Schedule name is required.");
       if (!e.zone_entity_id) return alert("Pick a zone.");
-      if (!minutes || minutes < 1 || minutes > MAX_SCHEDULE_MINUTES)
-        return alert(`Duration must be 1–${MAX_SCHEDULE_MINUTES} min.`);
-      if (!e.weekdays.length) return alert("Pick at least one weekday.");
+      if (!minutes || minutes < 1 || minutes > MAX_SCHEDULE_MINUTES) {
+        const maxH = Math.floor(MAX_SCHEDULE_MINUTES / 60);
+        return alert(`Duration must be at least 1 minute and no more than ${maxH} hours.`);
+      }
+      if (mode === "weekdays" && !e.weekdays.length)
+        return alert("Pick at least one weekday.");
+      if (mode === "interval") {
+        const days = parseInt(e.interval_days, 10);
+        if (!days || days < 1 || days > 365)
+          return alert("Interval must be 1–365 days.");
+        if (!e.interval_anchor) return alert("Pick a first-run date.");
+      }
+
+      const payload = {
+        name: e.name.trim(),
+        zone_entity_id: e.zone_entity_id,
+        start_time: e.start_time,
+        duration_minutes: minutes,
+        enabled: e.enabled,
+        mode,
+      };
+      if (mode === "weekdays") {
+        payload.weekdays = e.weekdays;
+      } else {
+        payload.weekdays = [];
+        payload.interval_days = parseInt(e.interval_days, 10);
+        payload.interval_anchor = e.interval_anchor;
+      }
 
       try {
         if (e.id) {
           await this._hass.callService("complete_irrigation", "update_schedule", {
             schedule_id: e.id,
-            name: e.name.trim(),
-            zone_entity_id: e.zone_entity_id,
-            start_time: e.start_time,
-            duration_minutes: minutes,
-            weekdays: e.weekdays,
-            enabled: e.enabled,
+            ...payload,
           });
         } else {
-          await this._hass.callService("complete_irrigation", "add_schedule", {
-            name: e.name.trim(),
-            zone_entity_id: e.zone_entity_id,
-            start_time: e.start_time,
-            duration_minutes: minutes,
-            weekdays: e.weekdays,
-            enabled: e.enabled,
-          });
+          await this._hass.callService("complete_irrigation", "add_schedule", payload);
         }
         this._closeAllModals();
         await this._fetchSchedules();
@@ -656,7 +709,7 @@
 
       return (
         `<header class="page-header"><h2>Today</h2>` +
-        `<span class="version-pill">v1.3.0</span></header>` +
+        `<span class="version-pill">v1.4.0</span></header>` +
         this._renderRainLockoutBanner() +
         this._renderWeatherBanner() +
         `<section>` +
@@ -997,6 +1050,31 @@
       const tip = (text) =>
         `<span class="help-tip" title="${escapeAttr(text)}" aria-label="${escapeAttr(text)}">ⓘ</span>`;
 
+      // Split total duration_minutes for the two-field display.
+      const totalMin = parseInt(e.duration_minutes, 10) || 0;
+      const durH = Math.floor(totalMin / 60);
+      const durM = totalMin % 60;
+
+      const mode = e.mode === "interval" ? "interval" : "weekdays";
+      const modeFields =
+        mode === "interval"
+          ? `<div class="row-2">` +
+            `<div>` +
+            `<label>Every (days) ${tip("Fires every N days from the first-run date. E.g. 5 = every 5 days.")}</label>` +
+            `<input name="interval_days" type="number" min="1" max="365" step="1" value="${
+              e.interval_days || 5
+            }" required />` +
+            `</div>` +
+            `<div>` +
+            `<label>First run date ${tip("The date of the first run. Subsequent runs step by the interval.")}</label>` +
+            `<input name="interval_anchor" type="date" value="${escapeAttr(
+              e.interval_anchor || _todayIso()
+            )}" required />` +
+            `</div>` +
+            `</div>`
+          : `<label>Weekdays ${tip("Pick the days this schedule fires. Defaults to Mon-Fri.")}</label>` +
+            `<div class="weekday-group">${weekdayChecks}</div>`;
+
       return (
         `<div class="modal-backdrop"></div>` +
         `<div class="modal modal-wide" role="dialog" aria-modal="true">` +
@@ -1016,12 +1094,25 @@
         )}" required />` +
         `</div>` +
         `<div>` +
-        `<label>Duration (min) ${tip("How long to run, 1-" + MAX_SCHEDULE_MINUTES + " min. Moisture sensors can adjust this up or down at runtime.")}</label>` +
-        `<input name="duration_minutes" type="number" min="1" max="${MAX_SCHEDULE_MINUTES}" step="1" value="${e.duration_minutes}" required />` +
+        `<label>Duration ${tip("How long to run, up to 8 hours. Moisture sensors can adjust this up or down at runtime.")}</label>` +
+        `<div class="duration-row">` +
+        `<input name="duration_h" type="number" min="0" max="8" step="1" value="${durH}" aria-label="Hours" />` +
+        `<span class="duration-unit">h</span>` +
+        `<input name="duration_m" type="number" min="0" max="59" step="1" value="${durM}" aria-label="Minutes" />` +
+        `<span class="duration-unit">m</span>` +
         `</div>` +
         `</div>` +
-        `<label>Weekdays ${tip("Pick the days this schedule fires. Defaults to Mon-Fri.")}</label>` +
-        `<div class="weekday-group">${weekdayChecks}</div>` +
+        `</div>` +
+        `<label>Recurrence ${tip("Weekdays = fires on the days you pick. Interval = fires every N days (good for deep watering trees).")}</label>` +
+        `<div class="mode-group">` +
+        `<label class="mode-radio"><input type="radio" name="mode" value="weekdays"${
+          mode === "weekdays" ? " checked" : ""
+        } /> Weekdays</label>` +
+        `<label class="mode-radio"><input type="radio" name="mode" value="interval"${
+          mode === "interval" ? " checked" : ""
+        } /> Every N days</label>` +
+        `</div>` +
+        modeFields +
         `<label class="enabled-check"><input type="checkbox" name="enabled"${
           e.enabled ? " checked" : ""
         } />Enabled ${tip("Toggle off to keep the schedule but stop it from firing. Useful while traveling.")}</label>` +
@@ -1100,10 +1191,21 @@
         `.modal-wide{min-width:420px;max-width:480px}` +
         `.modal h3{margin:0 0 16px;font-size:16px}` +
         `.modal label{display:block;font-size:12px;color:var(--secondary-text-color,#727272);margin:10px 0 4px}` +
-        `.modal input[type=number],.modal input[type=text],.modal input[type=time],.modal select{width:100%;padding:8px 10px;border:1px solid var(--divider-color,rgba(0,0,0,0.18));border-radius:6px;font-size:14px;background:var(--primary-background-color,#fff);color:inherit;font-family:inherit}` +
+        `.modal input[type=number],.modal input[type=text],.modal input[type=time],.modal input[type=date],.modal select{width:100%;min-width:0;padding:8px 10px;border:1px solid var(--divider-color,rgba(0,0,0,0.18));border-radius:6px;font-size:14px;background:var(--primary-background-color,#fff);color:inherit;font-family:inherit;box-sizing:border-box}` +
         `.modal .hint{margin:6px 0 16px;font-size:11px;color:var(--secondary-text-color,#727272)}` +
         `.modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:18px}` +
+        // Two-column row: min-width:0 on each cell lets <input type=time/date> shrink
+        // so the right cell doesn't overflow into the left.
         `.row-2{display:grid;grid-template-columns:1fr 1fr;gap:10px}` +
+        `.row-2 > *{min-width:0}` +
+        // Duration row (hours + minutes side by side inside one cell)
+        `.duration-row{display:flex;align-items:center;gap:6px}` +
+        `.duration-row input{flex:1;min-width:0;text-align:center}` +
+        `.duration-unit{font-size:12px;color:var(--secondary-text-color,#727272)}` +
+        // Mode toggle (weekdays / interval radios)
+        `.mode-group{display:flex;gap:8px;margin-bottom:4px}` +
+        `.mode-radio{display:inline-flex;align-items:center;gap:6px;padding:8px 12px;border:1px solid var(--divider-color,rgba(0,0,0,0.18));border-radius:6px;cursor:pointer;font-size:13px;color:var(--primary-text-color,#212121);margin:0;flex:1}` +
+        `.mode-radio input{margin:0}` +
         `.weekday-group{display:flex;flex-wrap:wrap;gap:6px}` +
         `.weekday-check{display:inline-flex;align-items:center;gap:4px;padding:6px 10px;border:1px solid var(--divider-color,rgba(0,0,0,0.18));border-radius:6px;cursor:pointer;font-size:12px;color:var(--primary-text-color,#212121);margin:0}` +
         `.weekday-check input{margin-right:4px}` +
@@ -1164,5 +1266,5 @@
   }
 
   customElements.define(ELEMENT_NAME, CompleteIrrigationPanel);
-  console.info("[complete-irrigation] panel registered, version v1.3.2");
+  console.info("[complete-irrigation] panel registered, version v1.4.0");
 })();

@@ -55,9 +55,21 @@ def _runs_for_schedule(
 ) -> Iterable[PlannedRun]:
     """All firings of one Schedule in the window.
 
-    Preserves `from_dt`'s tzinfo so naive ↔ aware comparisons don't blow up.
-    HA passes tz-aware datetimes; tests use naive.
+    Branches on `sched.mode`:
+      • "weekdays" — fires on listed weekdays every week
+      • "interval" — fires every `interval_days` days from `interval_anchor`
+
+    Preserves `from_dt`'s tzinfo so aware/naive comparisons don't blow up.
     """
+    from .schedule import MODE_INTERVAL
+
+    if sched.mode == MODE_INTERVAL:
+        yield from _runs_for_interval(sched, from_dt, until_dt)
+    else:
+        yield from _runs_for_weekdays(sched, from_dt, until_dt)
+
+
+def _runs_for_weekdays(sched, from_dt, until_dt):
     tz = from_dt.tzinfo
     weekday_set = set(sched.weekdays)
     current = from_dt.date()
@@ -77,6 +89,38 @@ def _runs_for_schedule(
                     schedule_name=sched.name,
                 )
         current += timedelta(days=1)
+
+
+def _runs_for_interval(sched, from_dt, until_dt):
+    """Generate dates every `interval_days` days starting at `interval_anchor`.
+    Skip past dates before the window, stop at end_date / window end."""
+    tz = from_dt.tzinfo
+    step = sched.interval_days
+    anchor = sched.interval_anchor
+
+    # Advance the anchor to the first date >= from_dt.date()
+    current = anchor
+    if current < from_dt.date():
+        # Number of steps to skip to reach the window
+        delta_days = (from_dt.date() - anchor).days
+        skip_steps = (delta_days + step - 1) // step  # ceil-divide
+        current = anchor + timedelta(days=skip_steps * step)
+
+    end = until_dt.date()
+    if sched.end_date is not None and sched.end_date < end:
+        end = sched.end_date
+
+    while current <= end:
+        run_at = datetime.combine(current, sched.start_time, tzinfo=tz)
+        if from_dt <= run_at < until_dt:
+            yield PlannedRun(
+                zone_entity_id=sched.zone_entity_id,
+                start_at=run_at,
+                duration_minutes=sched.duration_minutes,
+                schedule_id=sched.id,
+                schedule_name=sched.name,
+            )
+        current += timedelta(days=step)
 
 
 def due_runs_since(

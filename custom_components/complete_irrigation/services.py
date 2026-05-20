@@ -51,7 +51,7 @@ SERVICE_SET_NOTIFICATION_CONFIG = "set_notification_config"
 SERVICE_TEST_NOTIFICATION = "test_notification"
 SERVICE_START_ESTABLISHMENT = "start_establishment"
 
-MAX_SCHEDULE_DURATION_MIN = 240  # 4 hours — safety cap for scheduled runs
+MAX_SCHEDULE_DURATION_MIN = 480  # 8 hours — safety cap for scheduled runs
 
 # Voluptuous schema for validation at the HA boundary.
 _RUN_ZONE_SCHEMA = vol.Schema(
@@ -84,8 +84,16 @@ _ADD_SCHEDULE_SCHEMA = vol.Schema(
         vol.Required("duration_minutes"): vol.All(
             vol.Coerce(int), vol.Range(min=1, max=MAX_SCHEDULE_DURATION_MIN)
         ),
-        vol.Required("weekdays"): _WEEKDAYS_SCHEMA,
+        # weekdays is required only when mode=weekdays. Schema accepts
+        # either; mode-specific validation happens at the Schedule() ctor.
+        vol.Optional("weekdays", default=[]): vol.All(
+            cv.ensure_list,
+            [vol.All(vol.Coerce(int), vol.Range(min=0, max=6))],
+        ),
         vol.Optional("enabled", default=True): cv.boolean,
+        vol.Optional("mode", default="weekdays"): vol.In(("weekdays", "interval")),
+        vol.Optional("interval_days"): vol.All(vol.Coerce(int), vol.Range(min=1, max=365)),
+        vol.Optional("interval_anchor"): cv.date,
     }
 )
 
@@ -100,6 +108,9 @@ _UPDATE_SCHEDULE_SCHEMA = vol.Schema(
         ),
         vol.Optional("weekdays"): _WEEKDAYS_SCHEMA,
         vol.Optional("enabled"): cv.boolean,
+        vol.Optional("mode"): vol.In(("weekdays", "interval")),
+        vol.Optional("interval_days"): vol.All(vol.Coerce(int), vol.Range(min=1, max=365)),
+        vol.Optional("interval_anchor"): cv.date,
     }
 )
 
@@ -329,12 +340,15 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             zone_entity_id=data["zone_entity_id"],
             start_time=data["start_time"],
             duration_minutes=data["duration_minutes"],
-            weekdays=tuple(sorted(data["weekdays"])),
+            weekdays=tuple(sorted(data.get("weekdays") or ())),
             enabled=data["enabled"],
+            mode=data["mode"],
+            interval_days=data.get("interval_days"),
+            interval_anchor=data.get("interval_anchor"),
         )
         coord.schedule_store.add(schedule)
         await coord.async_save()
-        _LOGGER.info("Added schedule %s (%s)", schedule.id, schedule.name)
+        _LOGGER.info("Added schedule %s (%s) mode=%s", schedule.id, schedule.name, schedule.mode)
 
     async def handle_update_schedule(call: ServiceCall) -> None:
         data = _UPDATE_SCHEDULE_SCHEMA(dict(call.data))
@@ -354,6 +368,10 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             duration_minutes=data.get("duration_minutes", existing.duration_minutes),
             weekdays=(tuple(sorted(data["weekdays"])) if "weekdays" in data else existing.weekdays),
             enabled=data.get("enabled", existing.enabled),
+            mode=data.get("mode", existing.mode),
+            interval_days=data.get("interval_days", existing.interval_days),
+            interval_anchor=data.get("interval_anchor", existing.interval_anchor),
+            end_date=existing.end_date,
         )
         coord.schedule_store.upsert(merged)
         await coord.async_save()
@@ -384,6 +402,10 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             duration_minutes=existing.duration_minutes,
             weekdays=existing.weekdays,
             enabled=data["enabled"],
+            end_date=existing.end_date,
+            mode=existing.mode,
+            interval_days=existing.interval_days,
+            interval_anchor=existing.interval_anchor,
         )
         coord.schedule_store.upsert(new)
         await coord.async_save()

@@ -69,20 +69,20 @@ add_schedule:
         time:
     duration_minutes:
       name: Duration (minutes)
-      description: How long the run lasts. Hard cap 240 min (4 hours).
+      description: How long the run lasts. Hard cap 480 min (8 hours).
       required: true
       example: 15
       selector:
         number:
           min: 1
-          max: 240
+          max: 480
           step: 1
           mode: box
           unit_of_measurement: min
     weekdays:
-      name: Weekdays
-      description: Days of the week to run (0=Mon..6=Sun, ISO).
-      required: true
+      name: Weekdays (weekdays mode only)
+      description: "Days of the week to run (0=Mon..6=Sun, ISO). Required when mode is 'weekdays'."
+      required: false
       example: "[0, 1, 2, 3, 4]"
       selector:
         object:
@@ -93,6 +93,31 @@ add_schedule:
       default: true
       selector:
         boolean:
+    mode:
+      name: Recurrence mode
+      description: "weekdays = fires on listed days each week; interval = fires every N days from a start date."
+      required: false
+      default: weekdays
+      selector:
+        select:
+          options: ["weekdays", "interval"]
+    interval_days:
+      name: Interval (days)
+      description: "For interval mode: fire every N days. e.g. 5 = every 5 days."
+      required: false
+      example: 5
+      selector:
+        number:
+          min: 1
+          max: 365
+          step: 1
+          mode: box
+    interval_anchor:
+      name: First run date
+      description: "For interval mode: the date of the first run. Subsequent runs step by interval_days."
+      required: false
+      selector:
+        date:
 
 update_schedule:
   name: Update schedule
@@ -122,7 +147,7 @@ update_schedule:
       selector:
         number:
           min: 1
-          max: 240
+          max: 480
           step: 1
           mode: box
           unit_of_measurement: min
@@ -134,6 +159,23 @@ update_schedule:
       required: false
       selector:
         boolean:
+    mode:
+      required: false
+      selector:
+        select:
+          options: ["weekdays", "interval"]
+    interval_days:
+      required: false
+      selector:
+        number:
+          min: 1
+          max: 365
+          step: 1
+          mode: box
+    interval_anchor:
+      required: false
+      selector:
+        date:
 
 delete_schedule:
   name: Delete schedule
