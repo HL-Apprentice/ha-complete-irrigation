@@ -11,6 +11,7 @@ import pytest
 
 from custom_components.complete_irrigation.helpers import (
     detect_irrigation_integrations,
+    select_zone_candidates,
 )
 from custom_components.complete_irrigation.const import KNOWN_IRRIGATION_DOMAINS
 
@@ -108,3 +109,106 @@ def test_returns_tuples_of_domain_and_display_name():
     assert isinstance(domain, str)
     assert isinstance(display, str)
     assert display != domain  # display is human-friendly, not the technical id
+
+
+# ════════════════════════════════════════════════════════════════════
+# select_zone_candidates
+# ════════════════════════════════════════════════════════════════════
+
+
+def _entity(entity_id, domain="switch", config_entry_domain=None,
+            name=None, original_name=None, disabled=False, **extra):
+    """Build a small EntityDescriptor for tests."""
+    return {
+        "entity_id": entity_id,
+        "domain": domain,
+        "config_entry_domain": config_entry_domain,
+        "name": name,
+        "original_name": original_name,
+        "disabled": disabled,
+        **extra,
+    }
+
+
+def test_zone_candidates_only_returns_switches():
+    """Non-switch entities (sensors, binary_sensors, etc.) are skipped."""
+    entities = [
+        _entity("switch.front_lawn", config_entry_domain="rachio", name="Front Lawn"),
+        _entity("sensor.front_lawn_battery", domain="sensor", config_entry_domain="rachio", name="Battery"),
+        _entity("binary_sensor.rachio_online", domain="binary_sensor", config_entry_domain="rachio"),
+    ]
+    result = select_zone_candidates(entities, controller_domain="rachio")
+    assert [e["entity_id"] for e in result] == ["switch.front_lawn"]
+
+
+def test_zone_candidates_filters_by_controller_domain_when_specified():
+    """When auto-import mode, only switches from the chosen integration come back."""
+    entities = [
+        _entity("switch.front_lawn", config_entry_domain="rachio", name="Front Lawn"),
+        _entity("switch.back_lawn", config_entry_domain="rachio", name="Back Lawn"),
+        _entity("switch.garage_door", config_entry_domain="myq", name="Garage Door"),
+        _entity("switch.living_lamp", config_entry_domain="tplink", name="Living Lamp"),
+    ]
+    result = select_zone_candidates(entities, controller_domain="rachio")
+    domains = {e["entity_id"] for e in result}
+    assert domains == {"switch.front_lawn", "switch.back_lawn"}
+
+
+def test_zone_candidates_manual_mode_returns_all_switches():
+    """When user picks 'manual', all switches are candidates regardless of source."""
+    entities = [
+        _entity("switch.front_lawn", config_entry_domain="rachio", name="Front Lawn"),
+        _entity("switch.garage_pump", config_entry_domain="tasmota", name="Garage Pump"),
+        _entity("sensor.foo", domain="sensor"),
+    ]
+    result = select_zone_candidates(entities, controller_domain=None)
+    assert {e["entity_id"] for e in result} == {"switch.front_lawn", "switch.garage_pump"}
+
+
+def test_zone_candidates_excludes_disabled_entities():
+    """Disabled entities never appear in the picker."""
+    entities = [
+        _entity("switch.front_lawn", config_entry_domain="rachio", name="Front Lawn"),
+        _entity("switch.unused_zone", config_entry_domain="rachio", name="Unused", disabled=True),
+    ]
+    result = select_zone_candidates(entities, controller_domain="rachio")
+    assert [e["entity_id"] for e in result] == ["switch.front_lawn"]
+
+
+def test_zone_candidates_excludes_master_valve_and_schedule_switches():
+    """Heuristic: switch names with 'master' or 'schedule' aren't real zones."""
+    entities = [
+        _entity("switch.front_lawn", config_entry_domain="rachio", name="Front Lawn"),
+        _entity("switch.master_valve", config_entry_domain="rachio", name="Master valve"),
+        _entity("switch.morning_schedule", config_entry_domain="rachio_local", name="Morning Schedule"),
+        _entity("switch.rachio_standby", config_entry_domain="rachio", name="Standby"),
+    ]
+    result = select_zone_candidates(entities, controller_domain=None)
+    assert [e["entity_id"] for e in result] == ["switch.front_lawn"]
+
+
+def test_zone_candidates_sorted_alphabetically_by_display_name():
+    """The picker list should appear sorted so users can find zones easily."""
+    entities = [
+        _entity("switch.zone_3", config_entry_domain="rachio", name="Side Yard"),
+        _entity("switch.zone_1", config_entry_domain="rachio", name="Back Lawn"),
+        _entity("switch.zone_2", config_entry_domain="rachio", name="Front Lawn"),
+    ]
+    result = select_zone_candidates(entities, controller_domain="rachio")
+    names = [e["name"] for e in result]
+    assert names == ["Back Lawn", "Front Lawn", "Side Yard"]
+
+
+def test_zone_candidates_uses_entity_id_when_no_friendly_name():
+    """Sorting falls back to entity_id if no name is set."""
+    entities = [
+        _entity("switch.zzz", config_entry_domain="rachio"),
+        _entity("switch.aaa", config_entry_domain="rachio"),
+    ]
+    result = select_zone_candidates(entities, controller_domain="rachio")
+    assert [e["entity_id"] for e in result] == ["switch.aaa", "switch.zzz"]
+
+
+def test_zone_candidates_empty_input_returns_empty():
+    assert select_zone_candidates([], controller_domain="rachio") == []
+    assert select_zone_candidates([], controller_domain=None) == []
