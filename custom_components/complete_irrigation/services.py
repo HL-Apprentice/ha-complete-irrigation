@@ -47,6 +47,8 @@ SERVICE_SET_SCHEDULE_ENABLED = "set_schedule_enabled"
 SERVICE_SET_WEATHER_CONFIG = "set_weather_config"
 SERVICE_SET_ZONE_MOISTURE = "set_zone_moisture"
 SERVICE_CLEAR_RAIN_LOCKOUT = "clear_rain_lockout"
+SERVICE_SET_NOTIFICATION_CONFIG = "set_notification_config"
+SERVICE_TEST_NOTIFICATION = "test_notification"
 
 MAX_SCHEDULE_DURATION_MIN = 240  # 4 hours — safety cap for scheduled runs
 
@@ -135,6 +137,17 @@ _SET_ZONE_MOISTURE_SCHEMA = vol.Schema(
 )
 
 _CLEAR_RAIN_LOCKOUT_SCHEMA = vol.Schema({})
+
+_SET_NOTIFICATION_CONFIG_SCHEMA = vol.Schema(
+    {
+        vol.Optional("notify_target"): cv.string,
+        vol.Optional("quiet_hours_start"): cv.string,
+        vol.Optional("quiet_hours_end"): cv.string,
+        vol.Optional("enabled"): cv.boolean,
+    }
+)
+
+_TEST_NOTIFICATION_SCHEMA = vol.Schema({vol.Optional("message", default="Test"): cv.string})
 
 
 def _find_coordinator(hass: HomeAssistant):
@@ -438,6 +451,43 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         schema=_CLEAR_RAIN_LOCKOUT_SCHEMA,
     )
 
+    async def handle_set_notification_config(call: ServiceCall) -> None:
+        data = _SET_NOTIFICATION_CONFIG_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None or coord.notifier is None:
+            return
+        coord.notifier.update_config(**data)
+        coord.config.setdefault("notifications", {}).update(data)
+        await coord.async_save_config()
+        _LOGGER.info("Notification config updated: %s", data)
+
+    async def handle_test_notification(call: ServiceCall) -> None:
+        data = _TEST_NOTIFICATION_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None or coord.notifier is None:
+            return
+        from .notifications import CATEGORY_CRITICAL
+
+        await coord.notifier.notify(
+            data["message"],
+            title="Test notification",
+            category=CATEGORY_CRITICAL,
+            event_type="test",
+        )
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_SET_NOTIFICATION_CONFIG,
+        handle_set_notification_config,
+        schema=_SET_NOTIFICATION_CONFIG_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_TEST_NOTIFICATION,
+        handle_test_notification,
+        schema=_TEST_NOTIFICATION_SCHEMA,
+    )
+
 
 def _async_unregister_services(hass: HomeAssistant) -> None:
     """Tear down services. Called when the last config entry unloads."""
@@ -451,6 +501,8 @@ def _async_unregister_services(hass: HomeAssistant) -> None:
         SERVICE_SET_WEATHER_CONFIG,
         SERVICE_SET_ZONE_MOISTURE,
         SERVICE_CLEAR_RAIN_LOCKOUT,
+        SERVICE_SET_NOTIFICATION_CONFIG,
+        SERVICE_TEST_NOTIFICATION,
     ):
         if hass.services.has_service(DOMAIN, svc):
             hass.services.async_remove(DOMAIN, svc)

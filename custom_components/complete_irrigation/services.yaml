@@ -273,3 +273,45 @@ set_zone_moisture:
 clear_rain_lockout:
   name: Clear rain lockout
   description: Manually end the current rain lockout (schedules resume immediately).
+
+set_notification_config:
+  name: Set notification config
+  description: Configure where to push notifications + quiet hours window.
+  fields:
+    notify_target:
+      name: Notify target service
+      description: "Format: notify.<service> (e.g., notify.mobile_app_pete_iphone)."
+      required: false
+      selector:
+        text:
+    quiet_hours_start:
+      name: Quiet hours start
+      description: "Format HH:MM (24h). Default 22:00."
+      required: false
+      example: "22:00"
+      selector:
+        text:
+    quiet_hours_end:
+      name: Quiet hours end
+      description: "Format HH:MM (24h). Default 07:00."
+      required: false
+      example: "07:00"
+      selector:
+        text:
+    enabled:
+      name: Notifications enabled
+      description: Master on/off for push notifications.
+      required: false
+      selector:
+        boolean:
+
+test_notification:
+  name: Test notification
+  description: Push a test notification to confirm your routing works.
+  fields:
+    message:
+      name: Message
+      required: false
+      default: "Test"
+      selector:
+        text:

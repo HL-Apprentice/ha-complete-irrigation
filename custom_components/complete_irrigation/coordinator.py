@@ -21,6 +21,10 @@ from typing import TYPE_CHECKING, Any
 from .conflict_resolver import POLICY_DEFER_NEW, resolve_conflicts
 from .const import DOMAIN
 from .moisture_gate import COMBINE_AVERAGE, combine_moisture, evaluate_moisture
+from .notifications import (
+    CATEGORY_IMPORTANT,
+    NotificationDispatcher,
+)
 from .run_planner import due_runs_since, next_runs
 from .schedule import ScheduleStore
 from .weather_gate import evaluate_hot_weather, evaluate_rain_lockout
@@ -87,6 +91,10 @@ class ScheduleCoordinator:
         # Lockout state
         self.lockout_until: datetime | None = None
         self._lockout_listeners: list[Callable[[], None]] = []
+        # Notification dispatcher (initialized in async_setup)
+        self.notifier: NotificationDispatcher | None = None
+        self._cancel_summary = None
+        self._cancel_weekly = None
 
     @property
     def schedule_store(self) -> ScheduleStore:
@@ -114,16 +122,37 @@ class ScheduleCoordinator:
         return dt_util.now() < self.lockout_until
 
     async def async_setup(self) -> None:
-        from homeassistant.helpers.event import async_track_time_interval
+        from homeassistant.helpers.event import (
+            async_track_time_change,
+            async_track_time_interval,
+        )
         from homeassistant.util import dt as dt_util
 
         self._store = await _async_load_schedules(self._hass, self._entry_id)
         self._config = await _async_load_config(self._hass, self._entry_id)
         self._config.setdefault("zones", {})
+
+        # Notifications
+        self.notifier = NotificationDispatcher(self._hass)
+        notif_cfg = self._config.get("notifications", {})
+        self.notifier.update_config(**notif_cfg)
+
         self._last_tick = dt_util.now()
         self._cancel_tick = async_track_time_interval(
             self._hass, self._tick, timedelta(seconds=TICK_SECONDS)
         )
+
+        # Morning summary — fires daily at the end of quiet hours.
+        eh, em = self.notifier.quiet_hours_end.split(":")
+        self._cancel_summary = async_track_time_change(
+            self._hass, self._fire_morning_summary, hour=int(eh), minute=int(em), second=0
+        )
+
+        # Weekly verification reminder — Sunday 08:00 default
+        self._cancel_weekly = async_track_time_change(
+            self._hass, self._fire_weekly_reminder, hour=8, minute=0, second=0
+        )
+
         _LOGGER.info(
             "Schedule coordinator started for entry %s — %d schedule(s) loaded",
             self._entry_id,
@@ -131,10 +160,37 @@ class ScheduleCoordinator:
         )
 
     def async_unload(self) -> None:
-        if self._cancel_tick:
-            self._cancel_tick()
-            self._cancel_tick = None
+        for cancel_attr in ("_cancel_tick", "_cancel_summary", "_cancel_weekly"):
+            cancel = getattr(self, cancel_attr, None)
+            if cancel:
+                cancel()
+                setattr(self, cancel_attr, None)
         _LOGGER.info("Schedule coordinator stopped for entry %s", self._entry_id)
+
+    async def _fire_morning_summary(self, now=None) -> None:
+        if self.notifier:
+            await self.notifier.flush_morning_summary()
+
+    async def _fire_weekly_reminder(self, now=None) -> None:
+        from homeassistant.util import dt as dt_util
+
+        n = now or dt_util.now()
+        if n.weekday() != 6:  # Sunday only
+            return
+        if not self.notifier:
+            return
+        zone_count = len(self._config.get("zones", {}))
+        sched_count = len(self._store.all())
+        msg = (
+            f"Weekly check: {sched_count} schedule(s) across {zone_count} configured "
+            f"zone(s). Confirm everything looks right in the Irrigation panel."
+        )
+        await self.notifier.notify(
+            msg,
+            title="Weekly irrigation check",
+            category=CATEGORY_IMPORTANT,
+            event_type="weekly_reminder",
+        )
 
     async def async_save(self) -> None:
         await _async_save_schedules(self._hass, self._entry_id, self._store)
@@ -289,6 +345,7 @@ class ScheduleCoordinator:
         new_until = now + timedelta(hours=hours)
         # Only extend lockout, never shorten it within the same rain event.
         if self.lockout_until is None or new_until > self.lockout_until:
+            became_active = self.lockout_until is None
             self.lockout_until = new_until
             _LOGGER.info(
                 "Rain lockout active — %sin rain triggered %dh lockout (until %s)",
@@ -297,6 +354,14 @@ class ScheduleCoordinator:
                 new_until.isoformat(),
             )
             self._notify_lockout_change()
+            if became_active and self.notifier:
+                await self.notifier.notify(
+                    f"Rain detected ({rainfall_in:.2f} in) — all watering paused for {hours}h",
+                    title="Rain lockout active",
+                    category=CATEGORY_IMPORTANT,
+                    event_type="rain_lockout_started",
+                    extra={"until": new_until.isoformat(), "hours": hours},
+                )
 
     # ── Weather helpers ───────────────────────────────────────────
 
