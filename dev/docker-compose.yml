@@ -1,0 +1,15 @@
+services:
+  homeassistant:
+    image: ghcr.io/home-assistant/home-assistant:stable
+    container_name: ha-complete-irrigation-test
+    restart: unless-stopped
+    ports:
+      - "8123:8123"
+    volumes:
+      # Disposable HA config for local testing.
+      - ./ha-config:/config
+      # Mount our integration directly so changes to the source tree
+      # are reflected after an HA restart (no copy step needed).
+      - ../custom_components/complete_irrigation:/config/custom_components/complete_irrigation:ro
+    environment:
+      - TZ=America/New_York

@@ -38,3 +38,7 @@ htmlcov/
 # Frontend build artifacts
 frontend/dist/
 node_modules/
+
+# Local dev HA instance runtime — everything except configuration.yaml
+dev/ha-config/*
+!dev/ha-config/configuration.yaml
