@@ -7,10 +7,11 @@ caller supplies `from_dt` and `until_dt`.
 
 from __future__ import annotations
 
-from datetime import datetime, time, timedelta
+from datetime import datetime, time, timedelta, timezone
 
 from custom_components.complete_irrigation.run_planner import (
     PlannedRun,
+    due_runs_since,
     next_runs,
 )
 from custom_components.complete_irrigation.schedule import Schedule
@@ -172,3 +173,57 @@ def test_negative_window_returns_empty():
         until_dt=MONDAY_6AM,
     )
     assert runs == []
+
+
+# ── tzinfo preservation (HA passes aware datetimes) ───────────────
+
+
+def test_aware_datetimes_preserved_in_planned_runs():
+    """When the caller passes tz-aware datetimes, generated PlannedRun
+    start_at values must also be aware in the same tz — otherwise
+    HA's comparisons throw 'naive vs aware' errors."""
+    aware_start = MONDAY_MIDNIGHT.replace(tzinfo=timezone.utc)  # noqa: UP017
+    aware_end = aware_start + timedelta(days=2)
+    runs = next_runs([_sched()], from_dt=aware_start, until_dt=aware_end)
+    assert len(runs) == 2
+    for r in runs:
+        assert r.start_at.tzinfo is not None
+
+
+# ════════════════════════════════════════════════════════════════════
+# due_runs_since — coordinator's per-tick filter
+# ════════════════════════════════════════════════════════════════════
+
+
+def _planned(start_at: datetime, sid: str = "x") -> PlannedRun:
+    return PlannedRun(
+        zone_entity_id="switch.x",
+        start_at=start_at,
+        duration_minutes=10,
+        schedule_id=sid,
+        schedule_name="X",
+    )
+
+
+def test_due_runs_includes_runs_in_half_open_interval():
+    """(last_tick, now] — exclusive of last_tick, inclusive of now."""
+    last = MONDAY_6AM
+    now = MONDAY_6AM + timedelta(seconds=60)
+    runs = [
+        _planned(MONDAY_6AM, "at_last"),  # exactly at last → excluded
+        _planned(MONDAY_6AM + timedelta(seconds=30), "between"),  # included
+        _planned(now, "at_now"),  # included
+        _planned(now + timedelta(seconds=1), "after"),  # excluded
+    ]
+    due = due_runs_since(runs, last, now)
+    assert [r.schedule_id for r in due] == ["between", "at_now"]
+
+
+def test_due_runs_empty_when_nothing_in_window():
+    runs = [_planned(MONDAY_6AM + timedelta(hours=2))]
+    due = due_runs_since(runs, MONDAY_6AM, MONDAY_6AM + timedelta(minutes=1))
+    assert due == []
+
+
+def test_due_runs_empty_input_returns_empty():
+    assert due_runs_since([], MONDAY_6AM, MONDAY_6AM + timedelta(minutes=1)) == []

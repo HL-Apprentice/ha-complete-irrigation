@@ -53,14 +53,19 @@ def _runs_for_schedule(
     from_dt: datetime,
     until_dt: datetime,
 ) -> Iterable[PlannedRun]:
-    """All firings of one Schedule in the window."""
+    """All firings of one Schedule in the window.
+
+    Preserves `from_dt`'s tzinfo so naive ↔ aware comparisons don't blow up.
+    HA passes tz-aware datetimes; tests use naive.
+    """
+    tz = from_dt.tzinfo
     weekday_set = set(sched.weekdays)
     current = from_dt.date()
     end = until_dt.date()
 
     while current <= end:
         if current.weekday() in weekday_set:
-            run_at = datetime.combine(current, sched.start_time)
+            run_at = datetime.combine(current, sched.start_time, tzinfo=tz)
             if from_dt <= run_at < until_dt:
                 yield PlannedRun(
                     zone_entity_id=sched.zone_entity_id,
@@ -70,3 +75,16 @@ def _runs_for_schedule(
                     schedule_name=sched.name,
                 )
         current += timedelta(days=1)
+
+
+def due_runs_since(
+    runs: Iterable[PlannedRun],
+    last_tick: datetime,
+    now: datetime,
+) -> list[PlannedRun]:
+    """Runs whose start_at falls in (last_tick, now].
+
+    Used by the coordinator each tick to find what to fire. The
+    half-open interval prevents double-firing across consecutive ticks.
+    """
+    return [r for r in runs if last_tick < r.start_at <= now]
