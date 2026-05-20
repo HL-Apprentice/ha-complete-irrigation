@@ -44,6 +44,9 @@ SERVICE_ADD_SCHEDULE = "add_schedule"
 SERVICE_UPDATE_SCHEDULE = "update_schedule"
 SERVICE_DELETE_SCHEDULE = "delete_schedule"
 SERVICE_SET_SCHEDULE_ENABLED = "set_schedule_enabled"
+SERVICE_SET_WEATHER_CONFIG = "set_weather_config"
+SERVICE_SET_ZONE_MOISTURE = "set_zone_moisture"
+SERVICE_CLEAR_RAIN_LOCKOUT = "clear_rain_lockout"
 
 MAX_SCHEDULE_DURATION_MIN = 240  # 4 hours — safety cap for scheduled runs
 
@@ -105,6 +108,33 @@ _SET_SCHEDULE_ENABLED_SCHEMA = vol.Schema(
         vol.Required("enabled"): cv.boolean,
     }
 )
+
+_SET_WEATHER_CONFIG_SCHEMA = vol.Schema(
+    {
+        vol.Optional("rain_sensor"): cv.entity_id,
+        vol.Optional("temperature_sensor"): cv.entity_id,
+        vol.Optional("hot_threshold_f"): vol.All(vol.Coerce(float), vol.Range(min=50, max=130)),
+        vol.Optional("boost_percent"): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
+    }
+)
+
+_SET_ZONE_MOISTURE_SCHEMA = vol.Schema(
+    {
+        vol.Required("zone_entity_id"): cv.entity_id,
+        vol.Required("moisture_entities"): vol.All(cv.ensure_list, [cv.entity_id]),
+        vol.Optional("combine_mode", default="average"): vol.In(
+            ["average", "lowest", "highest", "primary"]
+        ),
+        vol.Optional("min_pct", default=21): vol.All(vol.Coerce(float), vol.Range(min=0, max=100)),
+        vol.Optional("target_pct", default=31): vol.All(
+            vol.Coerce(float), vol.Range(min=0, max=100)
+        ),
+        vol.Optional("max_pct", default=40): vol.All(vol.Coerce(float), vol.Range(min=0, max=100)),
+        vol.Optional("category"): cv.string,
+    }
+)
+
+_CLEAR_RAIN_LOCKOUT_SCHEMA = vol.Schema({})
 
 
 def _find_coordinator(hass: HomeAssistant):
@@ -357,6 +387,57 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         schema=_SET_SCHEDULE_ENABLED_SCHEMA,
     )
 
+    # ── Weather + per-zone moisture configuration ──────────────────
+
+    async def handle_set_weather_config(call: ServiceCall) -> None:
+        data = _SET_WEATHER_CONFIG_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None:
+            return
+        for key in ("rain_sensor", "temperature_sensor", "hot_threshold_f", "boost_percent"):
+            if key in data:
+                coord.config[key] = data[key]
+        await coord.async_save_config()
+        _LOGGER.info("Weather config updated: %s", data)
+
+    async def handle_set_zone_moisture(call: ServiceCall) -> None:
+        data = _SET_ZONE_MOISTURE_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None:
+            return
+        zone_id = data.pop("zone_entity_id")
+        coord.config.setdefault("zones", {})[zone_id] = {
+            k: v for k, v in data.items() if v is not None
+        }
+        await coord.async_save_config()
+        _LOGGER.info("Zone moisture config updated for %s: %s", zone_id, data)
+
+    async def handle_clear_rain_lockout(call: ServiceCall) -> None:
+        coord = _find_coordinator(hass)
+        if coord is None:
+            return
+        coord.clear_lockout()
+        _LOGGER.info("Rain lockout cleared by service call")
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_SET_WEATHER_CONFIG,
+        handle_set_weather_config,
+        schema=_SET_WEATHER_CONFIG_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_SET_ZONE_MOISTURE,
+        handle_set_zone_moisture,
+        schema=_SET_ZONE_MOISTURE_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_CLEAR_RAIN_LOCKOUT,
+        handle_clear_rain_lockout,
+        schema=_CLEAR_RAIN_LOCKOUT_SCHEMA,
+    )
+
 
 def _async_unregister_services(hass: HomeAssistant) -> None:
     """Tear down services. Called when the last config entry unloads."""
@@ -367,6 +448,9 @@ def _async_unregister_services(hass: HomeAssistant) -> None:
         SERVICE_UPDATE_SCHEDULE,
         SERVICE_DELETE_SCHEDULE,
         SERVICE_SET_SCHEDULE_ENABLED,
+        SERVICE_SET_WEATHER_CONFIG,
+        SERVICE_SET_ZONE_MOISTURE,
+        SERVICE_CLEAR_RAIN_LOCKOUT,
     ):
         if hass.services.has_service(DOMAIN, svc):
             hass.services.async_remove(DOMAIN, svc)

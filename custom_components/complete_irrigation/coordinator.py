@@ -1,42 +1,41 @@
 """Schedule coordinator — loads persisted schedules + fires due runs on a tick.
 
-Each config entry gets its own `ScheduleCoordinator`. On setup:
-  1. Load the ScheduleStore from HA's storage helper
-  2. Subscribe to a 60-second tick
-  3. On each tick: compute runs in (last_tick, now] using the pure-logic
-     `due_runs_since`, fire each one via the existing `run_zone` service
-
-On unload: cancel the tick subscription.
-
-After any service-driven schedule change (add / update / delete / enable),
-the service handler calls `coordinator.async_save()` to persist.
+Per-entry orchestrator. Each tick:
+  1. Compute planned runs (next_runs)
+  2. Resolve conflicts (resolve_conflicts, default policy = DEFER_NEW)
+  3. Check rain lockout (skip all if active)
+  4. For each due run:
+       a. Read per-zone moisture sensors (if configured) → MoistureGate
+       b. Read forecast → hot-weather boost multiplier
+       c. Fire via complete_irrigation.run_zone with adjusted duration,
+          or skip with logged reason
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
-from typing import TYPE_CHECKING
+from collections.abc import Callable
+from datetime import datetime, timedelta
+from typing import TYPE_CHECKING, Any
 
 from .conflict_resolver import POLICY_DEFER_NEW, resolve_conflicts
 from .const import DOMAIN
+from .moisture_gate import COMBINE_AVERAGE, combine_moisture, evaluate_moisture
 from .run_planner import due_runs_since, next_runs
 from .schedule import ScheduleStore
+from .weather_gate import evaluate_hot_weather, evaluate_rain_lockout
 
 if TYPE_CHECKING:
-    from datetime import datetime
-
     from homeassistant.core import HomeAssistant
 
 _LOGGER = logging.getLogger(__name__)
 
-# Bump if the schedule storage shape ever changes incompatibly.
 STORAGE_VERSION = 1
 TICK_SECONDS = 60
 
 
-def _storage_key(entry_id: str) -> str:
-    return f"{DOMAIN}.schedules.{entry_id}"
+def _storage_key(entry_id: str, suffix: str = "schedules") -> str:
+    return f"{DOMAIN}.{suffix}.{entry_id}"
 
 
 async def _async_load_schedules(hass: HomeAssistant, entry_id: str) -> ScheduleStore:
@@ -56,6 +55,22 @@ async def _async_save_schedules(hass: HomeAssistant, entry_id: str, store: Sched
     await helper.async_save({"schedules": store.to_serializable()})
 
 
+async def _async_load_config(hass: HomeAssistant, entry_id: str) -> dict[str, Any]:
+    """Load coordinator config (weather + zone moisture)."""
+    from homeassistant.helpers.storage import Store
+
+    helper = Store(hass, STORAGE_VERSION, _storage_key(entry_id, "config"))
+    data = await helper.async_load()
+    return data or {}
+
+
+async def _async_save_config(hass: HomeAssistant, entry_id: str, config: dict[str, Any]) -> None:
+    from homeassistant.helpers.storage import Store
+
+    helper = Store(hass, STORAGE_VERSION, _storage_key(entry_id, "config"))
+    await helper.async_save(config)
+
+
 class ScheduleCoordinator:
     """Per-entry orchestrator for persisted schedules + per-tick firing."""
 
@@ -65,17 +80,46 @@ class ScheduleCoordinator:
         self._store: ScheduleStore = ScheduleStore()
         self._last_tick: datetime | None = None
         self._cancel_tick = None
+        # Weather + zone config: {rain_sensor, weather_entity, hot_threshold_f,
+        #   boost_percent, zones: {zone_id: {moisture_entities: [...],
+        #                                    combine_mode, min, target, max, category}}}
+        self._config: dict[str, Any] = {"zones": {}}
+        # Lockout state
+        self.lockout_until: datetime | None = None
+        self._lockout_listeners: list[Callable[[], None]] = []
 
     @property
     def schedule_store(self) -> ScheduleStore:
         return self._store
 
+    @property
+    def config(self) -> dict[str, Any]:
+        return self._config
+
+    def register_lockout_listener(self, callback: Callable[[], None]) -> None:
+        self._lockout_listeners.append(callback)
+
+    def _notify_lockout_change(self) -> None:
+        for cb in self._lockout_listeners:
+            try:
+                cb()
+            except Exception:
+                _LOGGER.exception("Lockout listener errored")
+
+    def is_locked_out_now(self) -> bool:
+        if self.lockout_until is None:
+            return False
+        from homeassistant.util import dt as dt_util
+
+        return dt_util.now() < self.lockout_until
+
     async def async_setup(self) -> None:
-        """Load persisted schedules and start the tick loop."""
         from homeassistant.helpers.event import async_track_time_interval
         from homeassistant.util import dt as dt_util
 
         self._store = await _async_load_schedules(self._hass, self._entry_id)
+        self._config = await _async_load_config(self._hass, self._entry_id)
+        self._config.setdefault("zones", {})
         self._last_tick = dt_util.now()
         self._cancel_tick = async_track_time_interval(
             self._hass, self._tick, timedelta(seconds=TICK_SECONDS)
@@ -87,27 +131,41 @@ class ScheduleCoordinator:
         )
 
     def async_unload(self) -> None:
-        """Stop the tick loop. Called when the config entry unloads."""
         if self._cancel_tick:
             self._cancel_tick()
             self._cancel_tick = None
         _LOGGER.info("Schedule coordinator stopped for entry %s", self._entry_id)
 
     async def async_save(self) -> None:
-        """Persist the current schedule store to HA storage."""
         await _async_save_schedules(self._hass, self._entry_id, self._store)
 
+    async def async_save_config(self) -> None:
+        await _async_save_config(self._hass, self._entry_id, self._config)
+
+    def clear_lockout(self) -> None:
+        if self.lockout_until is not None:
+            self.lockout_until = None
+            self._notify_lockout_change()
+
+    # ── Tick logic ─────────────────────────────────────────────────
+
     async def _tick(self, now: datetime) -> None:
-        """One pass: find runs due since last_tick, fire each one."""
         if self._last_tick is None:
             self._last_tick = now
             return
 
+        # Evaluate rain lockout on every tick.
+        await self._evaluate_lockout(now)
+
         last = self._last_tick
         self._last_tick = now
 
-        # Pull a wider window so the conflict resolver sees neighboring
-        # runs (its shifts can spill outside a narrow window).
+        # If currently locked out, no scheduled runs fire (we still
+        # advance last_tick so we don't backfire a flood when lockout
+        # expires).
+        if self.is_locked_out_now():
+            return
+
         upcoming = next_runs(
             self._store.enabled_schedules(),
             from_dt=last - timedelta(hours=2),
@@ -125,22 +183,131 @@ class ScheduleCoordinator:
                     run.reason,
                 )
                 continue
-            _LOGGER.info(
-                "Firing scheduled run: %s for %d min (schedule %s, reason=%s)",
-                run.zone_entity_id,
-                run.duration_minutes,
-                run.schedule_name,
-                run.reason,
-            )
-            try:
-                await self._hass.services.async_call(
-                    DOMAIN,
-                    "run_zone",
-                    {
-                        "entity_id": run.zone_entity_id,
-                        "minutes": run.duration_minutes,
-                    },
-                    blocking=False,
+            await self._fire_run(run)
+
+    async def _fire_run(self, run) -> None:
+        """Evaluate moisture + hot-weather modifiers for `run`, then fire it."""
+        zone_id = run.zone_entity_id
+        zone_cfg = self._config["zones"].get(zone_id, {})
+        adjusted_minutes = run.duration_minutes
+        skip_reasons: list[str] = []
+        boost_reasons: list[str] = []
+
+        # ── Moisture (if sensor configured for this zone) ──
+        moisture_entities = zone_cfg.get("moisture_entities") or []
+        if moisture_entities:
+            readings: list[float] = []
+            for ent in moisture_entities:
+                state = self._hass.states.get(ent)
+                if state is None or state.state in ("unknown", "unavailable"):
+                    continue
+                try:
+                    readings.append(float(state.state))
+                except (TypeError, ValueError):
+                    continue
+            combine_mode = zone_cfg.get("combine_mode", COMBINE_AVERAGE)
+            current = combine_moisture(readings, combine_mode)
+            if current is not None:
+                decision = evaluate_moisture(
+                    current=current,
+                    min_pct=float(zone_cfg.get("min_pct", 21)),
+                    target=float(zone_cfg.get("target_pct", 31)),
+                    max_pct=float(zone_cfg.get("max_pct", 40)),
+                    base_minutes=adjusted_minutes,
                 )
-            except Exception:
-                _LOGGER.exception("Failed to fire scheduled run for %s", run.zone_entity_id)
+                _LOGGER.info("Moisture decision for %s: %s", zone_id, decision.reason)
+                if decision.skip:
+                    skip_reasons.append(decision.reason)
+                else:
+                    adjusted_minutes = decision.runtime_minutes
+
+        # ── Hot weather boost (single, integration-wide for now) ──
+        if not skip_reasons:
+            forecast_high = self._read_forecast_high()
+            threshold = self._config.get("hot_threshold_f")
+            boost_pct = self._config.get("boost_percent", 0)
+            if forecast_high is not None and threshold is not None:
+                hw = evaluate_hot_weather(
+                    daily_high_f=forecast_high,
+                    threshold_f=float(threshold),
+                    boost_percent=int(boost_pct),
+                )
+                if hw.boost:
+                    adjusted_minutes = max(1, round(adjusted_minutes * hw.multiplier))
+                    boost_reasons.append(
+                        f"hot-weather boost (high {forecast_high}F >= {threshold}F)"
+                        f" x{hw.multiplier:.2f}"
+                    )
+
+        if skip_reasons:
+            _LOGGER.info(
+                "Skipped scheduled run for %s: %s",
+                zone_id,
+                "; ".join(skip_reasons),
+            )
+            return
+
+        for r in boost_reasons:
+            _LOGGER.info("Adjusted run for %s: %s", zone_id, r)
+
+        _LOGGER.info(
+            "Firing run: %s for %d min (schedule %s)",
+            zone_id,
+            adjusted_minutes,
+            run.schedule_name,
+        )
+        try:
+            await self._hass.services.async_call(
+                DOMAIN,
+                "run_zone",
+                {"entity_id": zone_id, "minutes": adjusted_minutes},
+                blocking=False,
+            )
+        except Exception:
+            _LOGGER.exception("Failed to fire scheduled run for %s", zone_id)
+
+    # ── Rain lockout ──────────────────────────────────────────────
+
+    async def _evaluate_lockout(self, now: datetime) -> None:
+        """Read rain sensor; activate / extend lockout if rain seen."""
+        rain_entity = self._config.get("rain_sensor")
+        if not rain_entity:
+            return
+
+        state = self._hass.states.get(rain_entity)
+        if state is None:
+            return
+        try:
+            rainfall_in = float(state.state)
+        except (TypeError, ValueError):
+            return
+
+        hours = evaluate_rain_lockout(rainfall_in)
+        if hours is None:
+            return
+
+        new_until = now + timedelta(hours=hours)
+        # Only extend lockout, never shorten it within the same rain event.
+        if self.lockout_until is None or new_until > self.lockout_until:
+            self.lockout_until = new_until
+            _LOGGER.info(
+                "Rain lockout active — %sin rain triggered %dh lockout (until %s)",
+                rainfall_in,
+                hours,
+                new_until.isoformat(),
+            )
+            self._notify_lockout_change()
+
+    # ── Weather helpers ───────────────────────────────────────────
+
+    def _read_forecast_high(self) -> float | None:
+        ent = self._config.get("temperature_sensor")
+        if not ent:
+            return None
+        state = self._hass.states.get(ent)
+        if state is None or state.state in ("unknown", "unavailable"):
+            return None
+        try:
+            return float(state.state)
+        except (TypeError, ValueError):
+            return None

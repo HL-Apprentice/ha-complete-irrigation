@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[str] = ["calendar"]
+PLATFORMS: list[str] = ["calendar", "binary_sensor"]
 
 PANEL_URL_PATH = "complete-irrigation"
 PANEL_STATIC_URL = "/complete_irrigation_panel"
