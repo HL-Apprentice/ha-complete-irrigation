@@ -170,6 +170,45 @@ class ScheduleCoordinator:
     async def _fire_morning_summary(self, now=None) -> None:
         if self.notifier:
             await self.notifier.flush_morning_summary()
+        # Daily low-moisture summary — disabled in notifications config?
+        notif_cfg = self._config.get("notifications", {})
+        if notif_cfg.get("low_moisture_alerts", True):
+            await self._fire_low_moisture_summary()
+
+    async def _fire_low_moisture_summary(self) -> None:
+        """Walk zones; notify if any bound moisture sensor is below min%."""
+        if not self.notifier:
+            return
+        zones = self._config.get("zones", {})
+        offenders: list[str] = []
+        for zone_id, zone_cfg in zones.items():
+            sensors = zone_cfg.get("moisture_entities") or []
+            min_pct = zone_cfg.get("min_pct")
+            if not sensors or min_pct is None:
+                continue
+            for eid in sensors:
+                state = self._hass.states.get(eid)
+                if state is None:
+                    continue
+                if state.state in ("unknown", "unavailable"):
+                    continue
+                try:
+                    val = float(state.state)
+                except (TypeError, ValueError):
+                    continue
+                if val < float(min_pct):
+                    friendly = state.attributes.get("friendly_name") or eid
+                    offenders.append(f"• {zone_id}: {friendly} = {val:.1f}% (min {min_pct}%)")
+                    break  # one alert per zone is enough
+        if not offenders:
+            return
+        msg = "Moisture below minimum:\n" + "\n".join(offenders)
+        await self.notifier.notify(
+            msg,
+            title="Low moisture — zones need attention",
+            category=CATEGORY_IMPORTANT,
+            event_type="low_moisture_summary",
+        )
 
     async def _fire_weekly_reminder(self, now=None) -> None:
         from homeassistant.util import dt as dt_util

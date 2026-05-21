@@ -26,13 +26,21 @@ template:
         temperature_unit: "°F"
         humidity_template: "55"
 
-# A simple moisture sensor for testing the Sensors tab.
+# Simple template sensors for exercising the Sensors + Zones tabs.
 sensor:
   - platform: template
     sensors:
       test_lawn_moisture:
         friendly_name: "Test Lawn Moisture"
         value_template: "27"
+        unit_of_measurement: "%"
+      test_lawn_temperature:
+        friendly_name: "Test Lawn Temperature"
+        value_template: "74"
+        unit_of_measurement: "°F"
+      test_lawn_humidity:
+        friendly_name: "Test Lawn Humidity"
+        value_template: "52"
         unit_of_measurement: "%"
 
 switch:

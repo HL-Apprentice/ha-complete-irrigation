@@ -125,7 +125,10 @@ _SET_SCHEDULE_ENABLED_SCHEMA = vol.Schema(
 
 _SET_WEATHER_CONFIG_SCHEMA = vol.Schema(
     {
+        # Either singular (legacy) or plural list of rain sensors; the
+        # first plural entry is treated as primary for lockout logic.
         vol.Optional("rain_sensor"): cv.entity_id,
+        vol.Optional("rain_sensors"): vol.All(cv.ensure_list, [cv.entity_id]),
         vol.Optional("temperature_sensor"): cv.entity_id,
         vol.Optional("hot_threshold_f"): vol.All(vol.Coerce(float), vol.Range(min=50, max=130)),
         vol.Optional("boost_percent"): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
@@ -144,6 +147,10 @@ _SET_ZONE_MOISTURE_SCHEMA = vol.Schema(
             vol.Coerce(float), vol.Range(min=0, max=100)
         ),
         vol.Optional("max_pct", default=40): vol.All(vol.Coerce(float), vol.Range(min=0, max=100)),
+        # Aux climate sensors for the zone — display-only on the Zones
+        # tab. Both are averaged when multiple sensors are bound.
+        vol.Optional("temperature_entities"): vol.All(cv.ensure_list, [cv.entity_id]),
+        vol.Optional("humidity_entities"): vol.All(cv.ensure_list, [cv.entity_id]),
         vol.Optional("category"): cv.string,
     }
 )
@@ -156,6 +163,9 @@ _SET_NOTIFICATION_CONFIG_SCHEMA = vol.Schema(
         vol.Optional("quiet_hours_start"): cv.string,
         vol.Optional("quiet_hours_end"): cv.string,
         vol.Optional("enabled"): cv.boolean,
+        # Daily summary fires at quiet-hours-end if any zone is below its
+        # configured min%. Defaults to true so it just works after setup.
+        vol.Optional("low_moisture_alerts"): cv.boolean,
     }
 )
 
@@ -444,9 +454,21 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         coord = _find_coordinator(hass)
         if coord is None:
             return
-        for key in ("rain_sensor", "temperature_sensor", "hot_threshold_f", "boost_percent"):
+        for key in (
+            "rain_sensor",
+            "rain_sensors",
+            "temperature_sensor",
+            "hot_threshold_f",
+            "boost_percent",
+        ):
             if key in data:
                 coord.config[key] = data[key]
+        # If the user sets a non-empty rain_sensors list, mirror the first
+        # one into rain_sensor so the existing lockout logic keeps working
+        # without a coordinator change.
+        rs_list = data.get("rain_sensors")
+        if rs_list:
+            coord.config["rain_sensor"] = rs_list[0]
         await coord.async_save_config()
         _LOGGER.info("Weather config updated: %s", data)
 
