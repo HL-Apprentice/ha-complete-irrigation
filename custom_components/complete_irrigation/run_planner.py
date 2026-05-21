@@ -69,6 +69,30 @@ def _runs_for_schedule(
         yield from _runs_for_weekdays(sched, from_dt, until_dt)
 
 
+def _expand_steps(sched: Schedule, base_start: datetime) -> Iterable[PlannedRun]:
+    """For a single firing at `base_start`, emit one PlannedRun per zone-step.
+
+    Single-zone schedules (the common case) emit exactly one PlannedRun.
+    Multi-zone schedules emit one per step, each starting after the
+    previous one's duration + DEFAULT_ZONE_BUFFER_SECONDS (valve buffer).
+    """
+    from .schedule import DEFAULT_ZONE_BUFFER_SECONDS
+
+    cursor = base_start
+    for step in sched.all_steps():
+        yield PlannedRun(
+            zone_entity_id=step.zone_entity_id,
+            start_at=cursor,
+            duration_minutes=step.duration_minutes,
+            schedule_id=sched.id,
+            schedule_name=sched.name,
+        )
+        cursor = cursor + timedelta(
+            minutes=step.duration_minutes,
+            seconds=DEFAULT_ZONE_BUFFER_SECONDS,
+        )
+
+
 def _runs_for_weekdays(sched, from_dt, until_dt):
     tz = from_dt.tzinfo
     weekday_set = set(sched.weekdays)
@@ -79,15 +103,13 @@ def _runs_for_weekdays(sched, from_dt, until_dt):
 
     while current <= end:
         if current.weekday() in weekday_set:
-            run_at = datetime.combine(current, sched.start_time, tzinfo=tz)
-            if from_dt <= run_at < until_dt:
-                yield PlannedRun(
-                    zone_entity_id=sched.zone_entity_id,
-                    start_at=run_at,
-                    duration_minutes=sched.duration_minutes,
-                    schedule_id=sched.id,
-                    schedule_name=sched.name,
-                )
+            base_start = datetime.combine(current, sched.start_time, tzinfo=tz)
+            for run in _expand_steps(sched, base_start):
+                # Window check on each step individually so a multi-zone
+                # firing that begins inside the window but spills past
+                # until_dt still includes its early steps.
+                if from_dt <= run.start_at < until_dt:
+                    yield run
         current += timedelta(days=1)
 
 
@@ -111,15 +133,10 @@ def _runs_for_interval(sched, from_dt, until_dt):
         end = sched.end_date
 
     while current <= end:
-        run_at = datetime.combine(current, sched.start_time, tzinfo=tz)
-        if from_dt <= run_at < until_dt:
-            yield PlannedRun(
-                zone_entity_id=sched.zone_entity_id,
-                start_at=run_at,
-                duration_minutes=sched.duration_minutes,
-                schedule_id=sched.id,
-                schedule_name=sched.name,
-            )
+        base_start = datetime.combine(current, sched.start_time, tzinfo=tz)
+        for run in _expand_steps(sched, base_start):
+            if from_dt <= run.start_at < until_dt:
+                yield run
         current += timedelta(days=step)
 
 

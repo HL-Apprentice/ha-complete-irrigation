@@ -118,6 +118,19 @@ add_schedule:
       required: false
       selector:
         date:
+    zone_steps:
+      name: Additional zones (multi-zone mode)
+      description: >
+        Optional list of {zone_entity_id, duration_minutes} dicts. If
+        provided, the schedule fires zones in order, back-to-back at
+        run time (each waits for the previous to finish + 30s valve
+        buffer). The first entry must match `zone_entity_id` +
+        `duration_minutes`. Per-zone moisture gating still applies, so
+        any sensor-saturated zone in the sequence is skipped.
+      required: false
+      example: "[{zone_entity_id: switch.front_lawn, duration_minutes: 15}, {zone_entity_id: switch.back_lawn, duration_minutes: 10}]"
+      selector:
+        object:
 
 update_schedule:
   name: Update schedule
@@ -176,6 +189,10 @@ update_schedule:
       required: false
       selector:
         date:
+    zone_steps:
+      required: false
+      selector:
+        object:
 
 delete_schedule:
   name: Delete schedule

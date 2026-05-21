@@ -31,7 +31,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import DEFAULT_MANUAL_RUN_MINUTES, DOMAIN, MAX_MANUAL_RUN_MINUTES
 from .manual_run import ManualRun, validate_run_duration
-from .schedule import Schedule
+from .schedule import Schedule, ZoneStep
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant, ServiceCall
@@ -76,6 +76,15 @@ _WEEKDAYS_SCHEMA = vol.All(
     vol.Length(min=1),
 )
 
+_ZONE_STEP_SCHEMA = vol.Schema(
+    {
+        vol.Required("zone_entity_id"): cv.entity_id,
+        vol.Required("duration_minutes"): vol.All(
+            vol.Coerce(int), vol.Range(min=1, max=MAX_SCHEDULE_DURATION_MIN)
+        ),
+    }
+)
+
 _ADD_SCHEDULE_SCHEMA = vol.Schema(
     {
         vol.Required("name"): vol.All(cv.string, vol.Length(min=1, max=80)),
@@ -94,6 +103,12 @@ _ADD_SCHEDULE_SCHEMA = vol.Schema(
         vol.Optional("mode", default="weekdays"): vol.In(("weekdays", "interval")),
         vol.Optional("interval_days"): vol.All(vol.Coerce(int), vol.Range(min=1, max=365)),
         vol.Optional("interval_anchor"): cv.date,
+        # Multi-zone: optional list of {zone_entity_id, duration_minutes}.
+        # First step must equal zone_entity_id + duration_minutes.
+        vol.Optional("zone_steps", default=[]): vol.All(
+            cv.ensure_list,
+            [_ZONE_STEP_SCHEMA],
+        ),
     }
 )
 
@@ -111,6 +126,7 @@ _UPDATE_SCHEDULE_SCHEMA = vol.Schema(
         vol.Optional("mode"): vol.In(("weekdays", "interval")),
         vol.Optional("interval_days"): vol.All(vol.Coerce(int), vol.Range(min=1, max=365)),
         vol.Optional("interval_anchor"): cv.date,
+        vol.Optional("zone_steps"): vol.All(cv.ensure_list, [_ZONE_STEP_SCHEMA]),
     }
 )
 
@@ -350,6 +366,14 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         if coord is None:
             _LOGGER.warning("add_schedule called but no coordinator available")
             return
+        steps_raw = data.get("zone_steps") or []
+        zone_steps = tuple(
+            ZoneStep(
+                zone_entity_id=s["zone_entity_id"],
+                duration_minutes=int(s["duration_minutes"]),
+            )
+            for s in steps_raw
+        )
         schedule = Schedule(
             id=uuid.uuid4().hex[:12],
             name=data["name"],
@@ -361,6 +385,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             mode=data["mode"],
             interval_days=data.get("interval_days"),
             interval_anchor=data.get("interval_anchor"),
+            zone_steps=zone_steps,
         )
         coord.schedule_store.add(schedule)
         await coord.async_save()
@@ -376,6 +401,16 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             _LOGGER.warning("update_schedule: no such schedule %s", data["schedule_id"])
             return
         # Build a new Schedule with overrides applied (frozen dataclass).
+        if "zone_steps" in data:
+            new_steps = tuple(
+                ZoneStep(
+                    zone_entity_id=s["zone_entity_id"],
+                    duration_minutes=int(s["duration_minutes"]),
+                )
+                for s in (data["zone_steps"] or [])
+            )
+        else:
+            new_steps = existing.zone_steps
         merged = Schedule(
             id=existing.id,
             name=data.get("name", existing.name),
@@ -388,6 +423,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             interval_days=data.get("interval_days", existing.interval_days),
             interval_anchor=data.get("interval_anchor", existing.interval_anchor),
             end_date=existing.end_date,
+            zone_steps=new_steps,
         )
         coord.schedule_store.upsert(merged)
         await coord.async_save()
@@ -422,6 +458,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             mode=existing.mode,
             interval_days=existing.interval_days,
             interval_anchor=existing.interval_anchor,
+            zone_steps=existing.zone_steps,
         )
         coord.schedule_store.upsert(new)
         await coord.async_save()

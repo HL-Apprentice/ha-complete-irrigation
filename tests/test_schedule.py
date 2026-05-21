@@ -106,6 +106,7 @@ def test_schedule_to_dict_has_expected_shape():
         "mode": "weekdays",
         "interval_days": None,
         "interval_anchor": None,
+        "zone_steps": [],
     }
 
 
@@ -335,3 +336,104 @@ def test_store_from_serializable_reconstructs_store():
 def test_store_from_serializable_with_empty_list_returns_empty_store():
     store = ScheduleStore.from_serializable([])
     assert store.all() == []
+
+
+# ════════════════════════════════════════════════════════════════════
+# Multi-zone schedules (v1.8) — ZoneStep + Schedule.zone_steps
+# ════════════════════════════════════════════════════════════════════
+
+
+def test_zone_step_constructs_and_rejects_invalid():
+    from custom_components.complete_irrigation.schedule import ZoneStep
+
+    s = ZoneStep(zone_entity_id="switch.a", duration_minutes=10)
+    assert s.zone_entity_id == "switch.a"
+    assert s.duration_minutes == 10
+
+    with pytest.raises(ValueError, match="zone_entity_id"):
+        ZoneStep(zone_entity_id="", duration_minutes=10)
+    with pytest.raises(ValueError, match="duration_minutes"):
+        ZoneStep(zone_entity_id="switch.a", duration_minutes=0)
+
+
+def test_zone_step_roundtrip():
+    from custom_components.complete_irrigation.schedule import ZoneStep
+
+    s = ZoneStep(zone_entity_id="switch.a", duration_minutes=12)
+    assert ZoneStep.from_dict(s.to_dict()) == s
+
+
+def test_schedule_default_has_empty_zone_steps():
+    s = _good_schedule()
+    assert s.zone_steps == ()
+
+
+def test_schedule_all_steps_falls_back_to_single_step():
+    """A schedule with no zone_steps should expose a single derived
+    step from the top-level zone_entity_id + duration_minutes."""
+    s = _good_schedule()
+    steps = s.all_steps()
+    assert len(steps) == 1
+    assert steps[0].zone_entity_id == "switch.front_lawn"
+    assert steps[0].duration_minutes == 15
+
+
+def test_schedule_with_zone_steps_returns_them_verbatim():
+    from custom_components.complete_irrigation.schedule import ZoneStep
+
+    steps = (
+        ZoneStep("switch.front_lawn", 15),
+        ZoneStep("switch.back_lawn", 10),
+        ZoneStep("switch.garden", 8),
+    )
+    s = _good_schedule(zone_steps=steps)
+    assert s.all_steps() == steps
+    # Top-level still mirrors first step
+    assert s.zone_entity_id == "switch.front_lawn"
+    assert s.duration_minutes == 15
+
+
+def test_schedule_zone_steps_must_match_top_level_first():
+    from custom_components.complete_irrigation.schedule import ZoneStep
+
+    # First step's zone must match top-level
+    with pytest.raises(ValueError, match="zone_entity_id"):
+        _good_schedule(
+            zone_steps=(ZoneStep("switch.different", 15),),
+        )
+    # First step's duration must match top-level
+    with pytest.raises(ValueError, match="duration_minutes"):
+        _good_schedule(
+            zone_steps=(ZoneStep("switch.front_lawn", 99),),
+        )
+
+
+def test_schedule_multi_zone_roundtrip():
+    from custom_components.complete_irrigation.schedule import ZoneStep
+
+    original = _good_schedule(
+        zone_steps=(
+            ZoneStep("switch.front_lawn", 15),
+            ZoneStep("switch.back_lawn", 10),
+        )
+    )
+    rebuilt = Schedule.from_dict(original.to_dict())
+    assert rebuilt == original
+    assert len(rebuilt.zone_steps) == 2
+
+
+def test_schedule_pre_v18_dict_without_zone_steps_works():
+    """Existing schedules saved before v1.8 have no zone_steps key."""
+    old_dict = {
+        "id": "old1",
+        "name": "Pre-v1.8 schedule",
+        "zone_entity_id": "switch.lawn",
+        "start_time": "06:00",
+        "duration_minutes": 15,
+        "weekdays": [0, 2, 4],
+        "enabled": True,
+        "mode": "weekdays",
+    }
+    s = Schedule.from_dict(old_dict)
+    assert s.zone_steps == ()
+    assert s.all_steps()[0].zone_entity_id == "switch.lawn"

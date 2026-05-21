@@ -18,7 +18,21 @@
   const SIDEBAR_STORAGE_KEY = "complete_irrigation_sidebar_collapsed";
   const HIDDEN_ZONES_STORAGE_KEY = "complete_irrigation_hidden_zones";
   const THEME_STORAGE_KEY = "complete_irrigation_theme"; // "light" | "dark" | "auto"
+  const HA_THEME_STORAGE_KEY = "complete_irrigation_ha_theme"; // "" or installed-theme-name
   const BANNER_LAYOUT_STORAGE_KEY = "complete_irrigation_banner_layout";
+  const MANUAL_DEFAULT_STORAGE_KEY = "complete_irrigation_manual_default_min";
+
+  // Plant-category info — mirrors PLANT_CATEGORIES in const.py. Lets the
+  // Sensor modal show a small contextual hint under the category select
+  // (PRD #25 — explanatory text for each category).
+  const CATEGORY_INFO = {
+    lawn: "Lawn: typical optimal soil moisture 21-40% at 3-4\" depth. Defaults: min 21 / target 31 / max 40.",
+    bushes: "Bushes: optimal 21-60% at 3-4\" depth. Defaults: min 21 / target 41 / max 60.",
+    vegetable_garden: "Vegetable garden: optimal 41-80% at 3-4\" depth. Defaults: min 41 / target 61 / max 80.",
+    citrus: "Citrus: optimal 21-40% at 3-4\" depth. Defaults: min 21 / target 31 / max 40.",
+    trees: "Trees: deep watering. Lower min%, occasional deep cycles work better than frequent shallow ones.",
+    custom: "Custom: pick your own min/target/max thresholds based on your soil + plant type.",
+  };
   const ELEMENT_NAME = "complete-irrigation-panel";
   const DEFAULT_MANUAL_MINUTES = 10;
   const MAX_MANUAL_MINUTES = 60;
@@ -82,6 +96,11 @@
       mode: "weekdays",
       interval_days: 5,
       interval_anchor: _todayIso(),
+      // Multi-zone: additional zones after the primary. Each is
+      // {zone_entity_id, duration_minutes}. Empty = single-zone schedule.
+      // The primary (top-level zone_entity_id + duration_minutes) is
+      // always step 0; this array is steps 1..N.
+      extra_steps: [],
     };
   }
 
@@ -93,10 +112,13 @@
       this._panel = null;
       this._collapsed = false;
       this._theme = "auto"; // "light" | "dark" | "auto"
+      this._haTheme = ""; // "" = use built-in light/dark; else HA installed theme name
+      this._haThemes = {}; // populated from frontend/get_themes WS call
       this._bannerLayout = null; // {visible: {key: bool}, order: [key, ...]}
       try {
         this._collapsed = localStorage.getItem(SIDEBAR_STORAGE_KEY) === "true";
         this._theme = localStorage.getItem(THEME_STORAGE_KEY) || "auto";
+        this._haTheme = localStorage.getItem(HA_THEME_STORAGE_KEY) || "";
         const layout = localStorage.getItem(BANNER_LAYOUT_STORAGE_KEY);
         if (layout) this._bannerLayout = JSON.parse(layout);
       } catch (_) {}
@@ -164,6 +186,7 @@
         this._fetchSchedules();
         this._fetchConfig();
         this._fetchActiveRuns();
+        this._fetchHaThemes();
         this._scheduleRender();
         return;
       }
@@ -279,6 +302,25 @@
         if (action === "copy-ical") return this._copyICalUrl();
         if (action === "open-establishment")
           return this._openEstablishmentModal(node.dataset.entityId, node.dataset.zoneName);
+        if (action === "add-extra-step") {
+          // Append a default step (use the primary zone, 10 min).
+          const e = this._scheduleEditor;
+          const defaultZone =
+            e.zone_entity_id || (this._panel?.config?.zones || [])[0] || "";
+          e.extra_steps = [
+            ...(e.extra_steps || []),
+            { zone_entity_id: defaultZone, duration_minutes: 10 },
+          ];
+          return this._renderNow();
+        }
+        if (action === "remove-extra-step") {
+          const e = this._scheduleEditor;
+          const idx = parseInt(node.dataset.stepIdx, 10);
+          if (!Number.isNaN(idx)) {
+            e.extra_steps = (e.extra_steps || []).filter((_, i) => i !== idx);
+            return this._renderNow();
+          }
+        }
       }
     }
 
@@ -308,6 +350,16 @@
       if (e.target?.dataset?.form === "conflict-policy") {
         e.preventDefault();
         this._saveConflictPolicy(e.target);
+        return;
+      }
+      if (e.target?.dataset?.form === "ha-theme") {
+        e.preventDefault();
+        this._saveHaTheme(e.target);
+        return;
+      }
+      if (e.target?.dataset?.form === "manual-default") {
+        e.preventDefault();
+        this._saveManualDefault(e.target);
         return;
       }
       if (e.target?.classList.contains("schedule-form")) {
@@ -367,6 +419,15 @@
           t.name === "max_pct"
         ) {
           this._sensorEditor[t.name] = t.value;
+          // Live-update the category info hint without a full re-render
+          // (so the user's cursor stays put in the other fields).
+          if (t.name === "category") {
+            const hint = this.shadowRoot?.querySelector("[data-category-info]");
+            if (hint) {
+              const txt = CATEGORY_INFO[t.value] || "Pick a category for a typical moisture range.";
+              hint.textContent = txt;
+            }
+          }
           return;
         }
       }
@@ -384,6 +445,12 @@
         this._renderNow();
       } else if (t.name === "duration_h" || t.name === "duration_m") {
         this._syncDurationFromForm();
+      } else if (
+        t.name === "extra_zone" ||
+        t.name === "extra_dur_h" ||
+        t.name === "extra_dur_m"
+      ) {
+        this._syncExtraStepFromForm(parseInt(t.dataset.stepIdx, 10));
       } else if (t.name in this._scheduleEditor) {
         this._scheduleEditor[t.name] = t.value;
       }
@@ -396,6 +463,14 @@
       if (!t || !t.name) return;
       if (t.name === "duration_h" || t.name === "duration_m") {
         this._syncDurationFromForm();
+        return;
+      }
+      if (
+        t.name === "extra_zone" ||
+        t.name === "extra_dur_h" ||
+        t.name === "extra_dur_m"
+      ) {
+        this._syncExtraStepFromForm(parseInt(t.dataset.stepIdx, 10));
         return;
       }
       if (
@@ -415,6 +490,29 @@
       const h = parseInt(form.querySelector('[name="duration_h"]')?.value, 10) || 0;
       const m = parseInt(form.querySelector('[name="duration_m"]')?.value, 10) || 0;
       this._scheduleEditor.duration_minutes = h * 60 + m;
+    }
+
+    _syncExtraStepFromForm(idx) {
+      // Read the row's zone select + h/m inputs and write them into
+      // _scheduleEditor.extra_steps[idx]. No re-render on input changes
+      // so the user's cursor and focus stay put.
+      if (!Number.isFinite(idx) || idx < 0) return;
+      const form = this.shadowRoot?.querySelector(".schedule-form");
+      if (!form) return;
+      const row = form.querySelector(`.extra-step-row[data-step-idx="${idx}"]`);
+      if (!row) return;
+      const zoneSel = row.querySelector('select[name="extra_zone"]');
+      const hIn = row.querySelector('input[name="extra_dur_h"]');
+      const mIn = row.querySelector('input[name="extra_dur_m"]');
+      const h = parseInt(hIn?.value, 10) || 0;
+      const m = parseInt(mIn?.value, 10) || 0;
+      const steps = this._scheduleEditor.extra_steps || [];
+      if (!steps[idx]) return;
+      steps[idx] = {
+        zone_entity_id: zoneSel?.value || steps[idx].zone_entity_id,
+        duration_minutes: h * 60 + m,
+      };
+      this._scheduleEditor.extra_steps = steps;
     }
 
     _scheduleRender() {
@@ -487,6 +585,9 @@
     _openEditSchedule(scheduleId) {
       const found = this._schedules.find((s) => s.id === scheduleId);
       if (!found) return;
+      // zone_steps[0] mirrors top-level; we only edit steps 1..N
+      const allSteps = Array.isArray(found.zone_steps) ? found.zone_steps : [];
+      const extra = allSteps.length > 1 ? allSteps.slice(1) : [];
       this._scheduleEditor = {
         id: found.id,
         name: found.name,
@@ -498,6 +599,10 @@
         mode: found.mode || "weekdays",
         interval_days: found.interval_days || 5,
         interval_anchor: found.interval_anchor || _todayIso(),
+        extra_steps: extra.map((s) => ({
+          zone_entity_id: s.zone_entity_id,
+          duration_minutes: s.duration_minutes,
+        })),
       };
       this._scheduleModalOpen = true;
       this._renderNow();
@@ -621,6 +726,58 @@
       }
     }
 
+    async _fetchHaThemes() {
+      // Pull the list of HA-installed themes so the Settings tab can
+      // offer them as a picker. Response shape:
+      //   { themes: { "Mushroom": {primary-color: "...", ...}, ... },
+      //     default_theme: "...", ... }
+      if (!this._hass?.callWS) return;
+      try {
+        const resp = await this._hass.callWS({ type: "frontend/get_themes" });
+        this._haThemes = (resp && resp.themes) || {};
+        this._scheduleRender();
+      } catch (err) {
+        console.warn("[complete-irrigation] frontend/get_themes failed:", err?.message || err);
+      }
+    }
+
+    _renderHaThemeStyle() {
+      // If the user picked an HA theme, inject a <style> block whose
+      // :host rule overrides our --ci-* variables (and the underlying
+      // HA vars they fall back to) with the theme's values.
+      const name = this._haTheme;
+      if (!name || !this._haThemes || !this._haThemes[name]) return "";
+      const theme = this._haThemes[name];
+      // HA theme variables are stored with hyphenated keys like
+      // "primary-color" → CSS variable --primary-color. Apply each on
+      // :host. Our --ci-* vars resolve via these, so the panel auto-themes.
+      const lines = [];
+      for (const [k, v] of Object.entries(theme)) {
+        if (typeof v !== "string") continue;
+        lines.push(`--${k}: ${v};`);
+      }
+      // Also remap to --ci-* directly for safety when the theme doesn't
+      // define every fallback var we use.
+      const map = {
+        "primary-background-color": ["--ci-bg", "--ci-input-bg"],
+        "card-background-color": ["--ci-card"],
+        "primary-text-color": ["--ci-text"],
+        "secondary-text-color": ["--ci-text-2"],
+        "divider-color": ["--ci-border"],
+        "primary-color": ["--ci-accent"],
+        "secondary-background-color": ["--ci-hover"],
+      };
+      for (const [haKey, ciKeys] of Object.entries(map)) {
+        if (typeof theme[haKey] === "string") {
+          for (const ciKey of ciKeys) {
+            lines.push(`${ciKey}: ${theme[haKey]};`);
+          }
+        }
+      }
+      if (lines.length === 0) return "";
+      return `<style>:host{${lines.join("")}}</style>`;
+    }
+
     async _fetchActiveRuns() {
       // Hydrate _localRuns from the server-side ManualRunTracker so a
       // page reload mid-run, or a run started outside this panel (via
@@ -648,7 +805,7 @@
         }
         this._scheduleRender();
       } catch (err) {
-        // Pre-v1.7.0 backends don't have this command — no-op, fall
+        // Pre-v1.8.0 backends don't have this command — no-op, fall
         // back to the local-only countdown behavior.
         console.warn("[complete-irrigation] get_active_runs not available:", err);
       }
@@ -715,6 +872,24 @@
         payload.weekdays = [];
         payload.interval_days = parseInt(e.interval_days, 10);
         payload.interval_anchor = e.interval_anchor;
+      }
+
+      // Multi-zone: always send zone_steps (full list including primary).
+      // When extra_steps is empty we explicitly send [] to clear any
+      // previously-stored extras on an edit.
+      const extras = (e.extra_steps || [])
+        .map((s) => ({
+          zone_entity_id: s.zone_entity_id,
+          duration_minutes: parseInt(s.duration_minutes, 10) || 0,
+        }))
+        .filter((s) => s.zone_entity_id && s.duration_minutes > 0);
+      if (extras.length > 0) {
+        payload.zone_steps = [
+          { zone_entity_id: e.zone_entity_id, duration_minutes: minutes },
+          ...extras,
+        ];
+      } else {
+        payload.zone_steps = [];
       }
 
       try {
@@ -829,6 +1004,7 @@
 
       this.shadowRoot.innerHTML =
         `<style>${this._styles()}</style>` +
+        this._renderHaThemeStyle() +
         `<div class="root">` +
         `<aside class="${sidebarClass}">` +
         `<div class="sidebar-header">` +
@@ -895,7 +1071,7 @@
 
       return (
         `<header class="page-header"><h2>Notifications</h2>` +
-        `<span class="version-pill">v1.7.0</span></header>` +
+        `<span class="version-pill">v1.8.0</span></header>` +
         `<form class="weather-form" data-form="notifications">` +
         `<label class="enabled-check"><input type="checkbox" name="enabled"${
           enabled ? " checked" : ""
@@ -981,10 +1157,27 @@
 
       return (
         `<header class="page-header"><h2>Settings</h2>` +
-        `<span class="version-pill">v1.7.0</span></header>` +
+        `<span class="version-pill">v1.8.0</span></header>` +
         `<section class="settings-card">` +
-        `<h3 class="section-title">Theme</h3>` +
-        `<p class="section-hint">Current: <strong>${escapeHtml(themeLabel)}</strong>. Use the ☀️/🌙 button on the Today screen to cycle: Light → Dark → Auto.</p>` +
+        `<h3 class="section-title">Theme ${tip("Cycle Light/Dark/Auto with the ☀️/🌙 button on Today, or pick one of your HA-installed themes below.")}</h3>` +
+        `<p class="section-hint">Light/Dark/Auto: <strong>${escapeHtml(themeLabel)}</strong>.</p>` +
+        `<form class="weather-form" data-form="ha-theme" style="background:transparent;border:none;padding:0;max-width:none">` +
+        `<label>HA theme override</label>` +
+        `<select name="ha_theme">` +
+        `<option value=""${this._haTheme ? "" : " selected"}>— None (use Light/Dark above) —</option>` +
+        Object.keys(this._haThemes || {})
+          .sort()
+          .map(
+            (n) =>
+              `<option value="${escapeAttr(n)}"${
+                n === this._haTheme ? " selected" : ""
+              }>${escapeHtml(n)}</option>`
+          )
+          .join("") +
+        `</select>` +
+        `<p class="section-hint" style="margin-top:6px">Picks from themes installed in your HA (Settings → Themes). Applies to this panel; HA's main UI is unaffected.</p>` +
+        `<div class="modal-actions"><button type="submit" class="btn btn-primary">Apply theme</button></div>` +
+        `</form>` +
         `</section>` +
         `<section class="settings-card">` +
         `<h3 class="section-title">Schedule conflicts ${tip("When two schedules' run windows overlap, this picks how the coordinator resolves them. Applies to all schedules.")}</h3>` +
@@ -999,6 +1192,14 @@
         `</form>` +
         `</section>` +
         `<section class="settings-card">` +
+        `<h3 class="section-title">Manual run default ${tip("How many minutes the Run Now popup prefills with. You can always override per-run.")}</h3>` +
+        `<form class="weather-form" data-form="manual-default" style="background:transparent;border:none;padding:0;max-width:none">` +
+        `<label>Default duration (minutes)</label>` +
+        `<input name="manual_default" type="number" min="1" max="${MAX_MANUAL_MINUTES}" step="1" value="${this._userManualDefault()}" />` +
+        `<div class="modal-actions"><button type="submit" class="btn btn-primary">Save default</button></div>` +
+        `</form>` +
+        `</section>` +
+        `<section class="settings-card">` +
         `<h3 class="section-title">Calendar feed</h3>` +
         `<p class="section-hint">Subscribe from your phone's calendar app to see the next 30 days of planned runs.</p>` +
         `<div class="copy-row"><code>${escapeHtml(icalUrl)}</code><button class="btn btn-small" data-action="copy-ical">Copy</button></div>` +
@@ -1006,7 +1207,7 @@
         `<section class="settings-card">` +
         `<h3 class="section-title">About</h3>` +
         `<table class="settings-table">` +
-        `<tr><td>Version</td><td><strong>v1.7.0</strong></td></tr>` +
+        `<tr><td>Version</td><td><strong>v1.8.0</strong></td></tr>` +
         `<tr><td>Repository</td><td><a href="${repoUrl}" target="_blank">${escapeHtml(repoUrl)}</a></td></tr>` +
         `<tr><td>Zones configured</td><td>${(this._panel?.config?.zones || []).length}</td></tr>` +
         `<tr><td>Schedules</td><td>${(this._schedules || []).length}</td></tr>` +
@@ -1028,6 +1229,34 @@
       } catch (err) {
         alert("Failed to save policy: " + (err?.message || err));
       }
+    }
+
+    _saveHaTheme(form) {
+      const name = form.querySelector('select[name="ha_theme"]')?.value || "";
+      this._haTheme = name;
+      try {
+        localStorage.setItem(HA_THEME_STORAGE_KEY, name);
+      } catch (_) {}
+      this._renderNow();
+    }
+
+    _userManualDefault() {
+      try {
+        const v = parseInt(localStorage.getItem(MANUAL_DEFAULT_STORAGE_KEY), 10);
+        if (Number.isFinite(v) && v >= 1 && v <= MAX_MANUAL_MINUTES) return v;
+      } catch (_) {}
+      return DEFAULT_MANUAL_MINUTES;
+    }
+
+    _saveManualDefault(form) {
+      const v = parseInt(form.querySelector('input[name="manual_default"]')?.value, 10);
+      if (!Number.isFinite(v) || v < 1 || v > MAX_MANUAL_MINUTES) {
+        return alert(`Manual run default must be 1-${MAX_MANUAL_MINUTES} min.`);
+      }
+      try {
+        localStorage.setItem(MANUAL_DEFAULT_STORAGE_KEY, String(v));
+      } catch (_) {}
+      alert(`Manual run default saved: ${v} minutes.`);
     }
 
     async _copyICalUrl() {
@@ -1063,7 +1292,7 @@
       return (
         `<header class="page-header"><h2>Today</h2>` +
         `<div class="page-header-right">${themeBtn}` +
-        `<span class="version-pill">v1.7.0</span></div></header>` +
+        `<span class="version-pill">v1.8.0</span></div></header>` +
         this._renderRainLockoutBanner() +
         this._renderWeatherBanner() +
         `<section>` +
@@ -1151,6 +1380,43 @@
       }
       if (detected.humidity) {
         out.humidity = { icon: "💧", label: "Humidity", value: `${detected.humidity.state}%` };
+      }
+      // Heat index (NWS Rothfusz). Only meaningful at T ≥ 80°F + RH ≥ 40%.
+      // Uses Fahrenheit because that's the dominant unit in the US/irrigation
+      // context and what the rest of the integration assumes.
+      const tempF = (() => {
+        const t = tempState;
+        if (!t) return weatherEntity?.attributes?.temperature ?? null;
+        const unit = t.attributes?.unit_of_measurement || "";
+        const raw = parseFloat(t.state);
+        if (Number.isNaN(raw)) return null;
+        if (unit === "°C" || unit === "C") return raw * 9 / 5 + 32;
+        return raw;
+      })();
+      const humPct = detected.humidity ? parseFloat(detected.humidity.state) : NaN;
+      if (
+        Number.isFinite(tempF) &&
+        Number.isFinite(humPct) &&
+        tempF >= 80 &&
+        humPct >= 40
+      ) {
+        const T = tempF;
+        const R = humPct;
+        const hi =
+          -42.379 +
+          2.04901523 * T +
+          10.14333127 * R -
+          0.22475541 * T * R -
+          0.00683783 * T * T -
+          0.05481717 * R * R +
+          0.00122874 * T * T * R +
+          0.00085282 * T * R * R -
+          0.00000199 * T * T * R * R;
+        out.heat_index = {
+          icon: "🥵",
+          label: "Feels (heat idx)",
+          value: `${hi.toFixed(0)}°F`,
+        };
       }
       if (detected.dew_point) {
         const unit = detected.dew_point.attributes?.unit_of_measurement || "°";
@@ -1535,14 +1801,14 @@
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Zones</h2>` +
-          `<span class="version-pill">v1.7.0</span></header>` +
+          `<span class="version-pill">v1.8.0</span></header>` +
           `<div class="empty"><p>No zones configured. Add them via Settings → Devices &amp; Services.</p></div>`
         );
       }
       const rows = zones.map((z) => this._renderZoneRow(z)).join("");
       return (
         `<header class="page-header"><h2>Zones</h2>` +
-        `<span class="version-pill">v1.7.0</span></header>` +
+        `<span class="version-pill">v1.8.0</span></header>` +
         `<p class="section-hint">Hidden zones still run on schedule — they're just hidden from the Today view.</p>` +
         `<div class="zones-list">${rows}</div>`
       );
@@ -1712,7 +1978,7 @@
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Sensors</h2>` +
-          `<span class="version-pill">v1.7.0</span></header>` +
+          `<span class="version-pill">v1.8.0</span></header>` +
           `<div class="empty"><p>No zones configured.</p></div>`
         );
       }
@@ -1721,7 +1987,7 @@
         .join("");
       return (
         `<header class="page-header"><h2>Sensors</h2>` +
-        `<span class="version-pill">v1.7.0</span></header>` +
+        `<span class="version-pill">v1.8.0</span></header>` +
         `<p class="section-hint">Bind soil-moisture sensors to a zone so runtimes auto-adjust based on actual moisture. You can attach one sensor or several (combined as average, lowest, highest, or just the primary).</p>` +
         `<div class="sensor-zone-list">${cards}</div>`
       );
@@ -1905,7 +2171,7 @@
         `<div><label>Target % ${tip("Aim for this moisture.")}</label><input name="target_pct" type="number" min="0" max="100" step="1" value="${e.target_pct}" /></div>` +
         `<div><label>Max % ${tip("Above this — skip the run.")}</label><input name="max_pct" type="number" min="0" max="100" step="1" value="${e.max_pct}" /></div>` +
         `</div>` +
-        `<label>Plant category ${tip("Optional label for grouping (lawn, vegetable_garden, bushes, citrus, trees, custom).")}</label>` +
+        `<label>Plant category ${tip("Pick a category to see typical moisture ranges. The min/target/max above stay independent — you can change them after picking.")}</label>` +
         `<select name="category">` +
         `<option value=""${e.category ? "" : " selected"}>—</option>` +
         ["lawn", "vegetable_garden", "bushes", "citrus", "trees", "custom"]
@@ -1915,6 +2181,9 @@
           )
           .join("") +
         `</select>` +
+        `<p class="section-hint" data-category-info>${
+          e.category && CATEGORY_INFO[e.category] ? escapeHtml(CATEGORY_INFO[e.category]) : "Pick a category for a typical moisture range."
+        }</p>` +
         // Climate sensors (optional, display-only on Zones tab)
         `<h3 class="section-title">Climate sensors (optional, display-only)</h3>` +
         `<label>Temperature sensors ${tip("One or more temperature sensors near this zone. Multiple sensors are averaged.")}</label>` +
@@ -2127,7 +2396,7 @@
 
       return (
         `<header class="page-header"><h2>Weather</h2>` +
-        `<span class="version-pill">v1.7.0</span></header>` +
+        `<span class="version-pill">v1.8.0</span></header>` +
         lockoutHtml +
         forecastHtml +
         `<form class="weather-form" data-form="weather">` +
@@ -2245,7 +2514,14 @@
         s.mode === "interval"
           ? `every ${s.interval_days || "?"} day${s.interval_days === 1 ? "" : "s"}`
           : (s.weekdays || []).map((d) => WEEKDAY_LABELS[d] || "?").join(" ") || "—";
-      const zoneName = this._zoneName(s.zone_entity_id);
+      // Multi-zone: show "Front Lawn + 2 more" if extra steps exist
+      const extraCount =
+        Array.isArray(s.zone_steps) && s.zone_steps.length > 1
+          ? s.zone_steps.length - 1
+          : 0;
+      const zoneName =
+        this._zoneName(s.zone_entity_id) +
+        (extraCount > 0 ? ` + ${extraCount} more` : "");
       // Format duration as "Xh YYm" if >60 min, else "Xm"
       const dur = s.duration_minutes;
       const durLabel =
@@ -2279,14 +2555,17 @@
     }
 
     _renderRunModal() {
+      // User-customizable default (Settings → Manual run default), falling
+      // back to the built-in DEFAULT_MANUAL_MINUTES.
+      const userDefault = this._userManualDefault();
       return (
         `<div class="modal-backdrop"></div>` +
         `<div class="modal" role="dialog" aria-modal="true">` +
         `<form class="modal-form run-form">` +
         `<h3>Run ${escapeHtml(this._runModalZoneName)}</h3>` +
         `<label for="minutes-input">Duration (minutes)</label>` +
-        `<input id="minutes-input" name="minutes" type="number" min="1" max="${MAX_MANUAL_MINUTES}" step="1" value="${DEFAULT_MANUAL_MINUTES}" autofocus />` +
-        `<p class="hint">Default 10 min. Maximum ${MAX_MANUAL_MINUTES} min.</p>` +
+        `<input id="minutes-input" name="minutes" type="number" min="1" max="${MAX_MANUAL_MINUTES}" step="1" value="${userDefault}" autofocus />` +
+        `<p class="hint">Default ${userDefault} min. Maximum ${MAX_MANUAL_MINUTES} min. Change the default in Settings.</p>` +
         `<div class="modal-actions">` +
         `<button type="button" class="btn btn-secondary modal-cancel">Cancel</button>` +
         `<button type="submit" class="btn btn-primary">Run</button>` +
@@ -2380,6 +2659,14 @@
         } /> Every N days</label>` +
         `</div>` +
         modeFields +
+        // Multi-zone: additional zones to run back-to-back after the primary.
+        `<label>Additional zones (run in order) ${tip("Optional — add more zones to run after the primary one above. They fire back-to-back at run time, each waiting for the previous to finish + 30s valve buffer. Per-zone moisture saturation still skips individual zones.")}</label>` +
+        `<div class="extra-steps">` +
+        (e.extra_steps || [])
+          .map((step, i) => this._renderExtraStepRow(step, i, zoneOpts))
+          .join("") +
+        `<button type="button" class="btn btn-small" data-action="add-extra-step">+ Add another zone</button>` +
+        `</div>` +
         `<label class="enabled-check"><input type="checkbox" name="enabled"${
           e.enabled ? " checked" : ""
         } />Enabled ${tip("Toggle off to keep the schedule but stop it from firing. Useful while traveling.")}</label>` +
@@ -2390,6 +2677,30 @@
         }</button>` +
         `</div>` +
         `</form>` +
+        `</div>`
+      );
+    }
+
+    _renderExtraStepRow(step, idx, zoneOpts) {
+      // One row per extra step: zone picker + duration h/m + remove button.
+      const totalMin = parseInt(step.duration_minutes, 10) || 0;
+      const h = Math.floor(totalMin / 60);
+      const m = totalMin % 60;
+      // Re-render zone options with this step's selected value
+      const opts = zoneOpts.replace(/ selected/g, "").replace(
+        new RegExp(`value="${step.zone_entity_id.replace(/[.\\^$*+?()|[\]{}]/g, "\\$&")}"`),
+        `value="${step.zone_entity_id}" selected`
+      );
+      return (
+        `<div class="extra-step-row" data-step-idx="${idx}">` +
+        `<select name="extra_zone" data-step-idx="${idx}" required>${opts || '<option value="">No zones</option>'}</select>` +
+        `<div class="extra-step-dur">` +
+        `<input name="extra_dur_h" data-step-idx="${idx}" type="number" min="0" max="8" step="1" value="${h}" aria-label="Hours" />` +
+        `<span class="duration-unit">h</span>` +
+        `<input name="extra_dur_m" data-step-idx="${idx}" type="number" min="0" max="59" step="1" value="${m}" aria-label="Minutes" />` +
+        `<span class="duration-unit">m</span>` +
+        `</div>` +
+        `<button type="button" class="btn-icon" data-action="remove-extra-step" data-step-idx="${idx}" title="Remove">✕</button>` +
         `</div>`
       );
     }
@@ -2510,6 +2821,12 @@
         `.mode-group{display:flex;gap:8px;margin-bottom:4px}` +
         `.mode-radio{display:inline-flex;align-items:center;gap:6px;padding:8px 12px;border:1px solid var(--ci-border);border-radius:6px;cursor:pointer;font-size:13px;color:var(--ci-text);margin:0;flex:1}` +
         `.mode-radio input{margin:0}` +
+        // Multi-zone extra-step rows
+        `.extra-steps{display:flex;flex-direction:column;gap:6px;margin-bottom:8px}` +
+        `.extra-step-row{display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center;padding:6px;border:1px solid var(--ci-border);border-radius:6px;background:var(--ci-hover)}` +
+        `.extra-step-row > select{min-width:0}` +
+        `.extra-step-dur{display:flex;align-items:center;gap:4px}` +
+        `.extra-step-dur input{width:54px;text-align:center}` +
         `.weekday-group{display:flex;flex-wrap:wrap;gap:6px}` +
         `.weekday-check{display:inline-flex;align-items:center;gap:4px;padding:6px 10px;border:1px solid var(--ci-border);border-radius:6px;cursor:pointer;font-size:12px;color:var(--ci-text);margin:0}` +
         `.weekday-check input{margin-right:4px}` +
@@ -2669,5 +2986,5 @@
   }
 
   customElements.define(ELEMENT_NAME, CompleteIrrigationPanel);
-  console.info("[complete-irrigation] panel registered, version v1.7.0");
+  console.info("[complete-irrigation] panel registered, version v1.8.0");
 })();

@@ -298,3 +298,102 @@ def test_interval_skipped_when_disabled():
         until_dt=MONDAY_MIDNIGHT + timedelta(days=14),
     )
     assert runs == []
+
+
+# ════════════════════════════════════════════════════════════════════
+# Multi-zone schedules (v1.8) — expanded into back-to-back PlannedRuns
+# ════════════════════════════════════════════════════════════════════
+
+
+def test_multi_zone_schedule_expands_to_one_run_per_step():
+    """A 3-step schedule should yield 3 PlannedRuns per firing day."""
+    from custom_components.complete_irrigation.schedule import ZoneStep
+
+    sched = _sched(
+        weekdays=(0,),  # Monday only
+        zone_steps=(
+            ZoneStep("switch.front_lawn", 15),
+            ZoneStep("switch.back_lawn", 10),
+            ZoneStep("switch.garden", 5),
+        ),
+    )
+    runs = next_runs([sched], from_dt=MONDAY_MIDNIGHT, until_dt=MONDAY_MIDNIGHT + timedelta(days=2))
+    # One Monday firing x 3 steps = 3 PlannedRuns
+    assert len(runs) == 3
+    assert runs[0].zone_entity_id == "switch.front_lawn"
+    assert runs[1].zone_entity_id == "switch.back_lawn"
+    assert runs[2].zone_entity_id == "switch.garden"
+
+
+def test_multi_zone_steps_run_back_to_back_with_30s_buffer():
+    """Step N+1 starts at step N's end + 30 seconds (default buffer)."""
+    from custom_components.complete_irrigation.schedule import ZoneStep
+
+    sched = _sched(
+        weekdays=(0,),
+        zone_steps=(
+            ZoneStep("switch.front_lawn", 15),
+            ZoneStep("switch.back_lawn", 10),
+        ),
+    )
+    runs = next_runs([sched], from_dt=MONDAY_MIDNIGHT, until_dt=MONDAY_MIDNIGHT + timedelta(days=1))
+    assert len(runs) == 2
+    # Step 0: starts at 06:00, runs 15 min → ends 06:15
+    assert runs[0].start_at == MONDAY_6AM
+    # Step 1: starts at 06:15 + 30s
+    expected = MONDAY_6AM + timedelta(minutes=15, seconds=30)
+    assert runs[1].start_at == expected
+
+
+def test_multi_zone_each_step_carries_own_duration():
+    """Each PlannedRun should reflect its own step's duration, not the schedule's top-level."""
+    from custom_components.complete_irrigation.schedule import ZoneStep
+
+    sched = _sched(
+        duration_minutes=15,
+        weekdays=(0,),
+        zone_steps=(
+            ZoneStep("switch.front_lawn", 15),
+            ZoneStep("switch.back_lawn", 8),
+            ZoneStep("switch.garden", 22),
+        ),
+    )
+    runs = next_runs([sched], from_dt=MONDAY_MIDNIGHT, until_dt=MONDAY_MIDNIGHT + timedelta(days=1))
+    assert [r.duration_minutes for r in runs] == [15, 8, 22]
+
+
+def test_single_zone_schedule_still_yields_one_run():
+    """Backward compat: zone_steps empty → exactly one PlannedRun per firing."""
+    runs = next_runs(
+        [_sched(weekdays=(0,))],
+        from_dt=MONDAY_MIDNIGHT,
+        until_dt=MONDAY_MIDNIGHT + timedelta(days=1),
+    )
+    assert len(runs) == 1
+    assert runs[0].zone_entity_id == "switch.front_lawn"
+
+
+def test_multi_zone_with_interval_mode_works():
+    """Interval-mode schedules also expand step-by-step."""
+    from datetime import date
+
+    from custom_components.complete_irrigation.schedule import ZoneStep
+
+    sched = Schedule(
+        id="multi",
+        name="Multi Zone Interval",
+        zone_entity_id="switch.front_lawn",
+        start_time=time(6, 0),
+        duration_minutes=10,
+        weekdays=(),
+        mode="interval",
+        interval_days=2,
+        interval_anchor=date(2026, 5, 18),
+        zone_steps=(
+            ZoneStep("switch.front_lawn", 10),
+            ZoneStep("switch.back_lawn", 5),
+        ),
+    )
+    runs = next_runs([sched], from_dt=MONDAY_MIDNIGHT, until_dt=MONDAY_MIDNIGHT + timedelta(days=4))
+    # 2 firings (day 0 and day 2) x 2 steps = 4 runs
+    assert len(runs) == 4
