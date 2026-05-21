@@ -210,12 +210,19 @@ set_weather_config:
     only the ones you pass are updated.
   fields:
     rain_sensor:
-      name: Rain sensor
-      description: Sensor reporting rainfall in inches (e.g., Tempest rain_today).
+      name: Rain sensor (legacy)
+      description: Single rainfall sensor (in inches). Prefer `rain_sensors` for multi-sensor setups.
       required: false
       selector:
         entity:
           domain: sensor
+    rain_sensors:
+      name: Rain sensors
+      description: One or more rainfall sensors (accumulation today/yesterday, duration, intensity, etc.). The first one is used for lockout; all show on the Today banner.
+      required: false
+      example: "['sensor.gilbert_rain_accumulation_today', 'sensor.gilbert_rain_intensity']"
+      selector:
+        object:
     temperature_sensor:
       name: Temperature sensor
       description: Sensor reporting current outdoor temperature in °F (for hot weather boost).
@@ -311,6 +318,20 @@ set_zone_moisture:
       required: false
       selector:
         text:
+    temperature_entities:
+      name: Temperature sensors (optional)
+      description: One or more temperature sensors for this zone (display-only; averaged when multiple).
+      required: false
+      example: "['sensor.front_yard_temperature']"
+      selector:
+        object:
+    humidity_entities:
+      name: Humidity sensors (optional)
+      description: One or more humidity sensors for this zone (display-only; averaged when multiple).
+      required: false
+      example: "['sensor.front_yard_humidity']"
+      selector:
+        object:
 
 clear_rain_lockout:
   name: Clear rain lockout
@@ -344,6 +365,13 @@ set_notification_config:
       name: Notifications enabled
       description: Master on/off for push notifications.
       required: false
+      selector:
+        boolean:
+    low_moisture_alerts:
+      name: Daily low-moisture summary
+      description: Once a day at quiet-hours-end, send a summary if any zone has a moisture sensor below its configured min%.
+      required: false
+      default: true
       selector:
         boolean:
 

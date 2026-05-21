@@ -17,6 +17,8 @@
 
   const SIDEBAR_STORAGE_KEY = "complete_irrigation_sidebar_collapsed";
   const HIDDEN_ZONES_STORAGE_KEY = "complete_irrigation_hidden_zones";
+  const THEME_STORAGE_KEY = "complete_irrigation_theme"; // "light" | "dark" | "auto"
+  const BANNER_LAYOUT_STORAGE_KEY = "complete_irrigation_banner_layout";
   const ELEMENT_NAME = "complete-irrigation-panel";
   const DEFAULT_MANUAL_MINUTES = 10;
   const MAX_MANUAL_MINUTES = 60;
@@ -90,8 +92,13 @@
       this._hass = null;
       this._panel = null;
       this._collapsed = false;
+      this._theme = "auto"; // "light" | "dark" | "auto"
+      this._bannerLayout = null; // {visible: {key: bool}, order: [key, ...]}
       try {
         this._collapsed = localStorage.getItem(SIDEBAR_STORAGE_KEY) === "true";
+        this._theme = localStorage.getItem(THEME_STORAGE_KEY) || "auto";
+        const layout = localStorage.getItem(BANNER_LAYOUT_STORAGE_KEY);
+        if (layout) this._bannerLayout = JSON.parse(layout);
       } catch (_) {}
       this._currentSection = "today";
 
@@ -109,6 +116,9 @@
       // Sensor (moisture) modal state
       this._sensorModalOpen = false;
       this._sensorEditor = null;
+
+      // Weather banner customization modal state
+      this._bannerModalOpen = false;
 
       // Weather + config cached from WS API
       this._config = {};
@@ -249,6 +259,15 @@
         if (action === "configure-sensor")
           return this._openConfigureSensor(node.dataset.entityId);
         if (action === "clear-rain-lockout") return this._clearRainLockout();
+        if (action === "toggle-theme") return this._cycleTheme();
+        if (action === "open-banner-settings") {
+          this._bannerModalOpen = true;
+          return this._renderNow();
+        }
+        if (action === "banner-up") return this._bannerReorder(node.dataset.key, -1);
+        if (action === "banner-down") return this._bannerReorder(node.dataset.key, 1);
+        if (action === "test-notification") return this._testNotification();
+        if (action === "copy-ical") return this._copyICalUrl();
       }
     }
 
@@ -267,6 +286,14 @@
         this._closeAllModals();
         return;
       }
+      // dataset.form check first — overrides class-based dispatch so
+      // forms can share styling classes (e.g., .weather-form) without
+      // colliding with the catch-all weather handler below.
+      if (e.target?.dataset?.form === "notifications") {
+        e.preventDefault();
+        this._saveNotificationConfig(e.target);
+        return;
+      }
       if (e.target?.classList.contains("schedule-form")) {
         e.preventDefault();
         this._saveSchedule();
@@ -275,6 +302,11 @@
       if (e.target?.classList.contains("sensor-form")) {
         e.preventDefault();
         this._saveSensorConfig();
+        return;
+      }
+      if (e.target?.classList.contains("banner-settings-form")) {
+        e.preventDefault();
+        this._saveBannerLayout(e.target);
         return;
       }
       if (e.target?.classList.contains("weather-form")) {
@@ -289,11 +321,21 @@
       if (!t || !t.name) return;
       // Sensor modal — track moisture checkbox toggles + the other fields
       if (this._sensorModalOpen && this._sensorEditor) {
-        if (t.name === "moisture_entity") {
-          const set = new Set(this._sensorEditor.moisture_entities);
+        if (
+          t.name === "moisture_entity" ||
+          t.name === "temperature_entity" ||
+          t.name === "humidity_entity"
+        ) {
+          const field =
+            t.name === "moisture_entity"
+              ? "moisture_entities"
+              : t.name === "temperature_entity"
+              ? "temperature_entities"
+              : "humidity_entities";
+          const set = new Set(this._sensorEditor[field]);
           if (t.checked) set.add(t.value);
           else set.delete(t.value);
-          this._sensorEditor.moisture_entities = Array.from(set);
+          this._sensorEditor[field] = Array.from(set);
           return;
         }
         if (
@@ -439,6 +481,7 @@
       this._scheduleModalOpen = false;
       this._sensorModalOpen = false;
       this._sensorEditor = null;
+      this._bannerModalOpen = false;
       this._renderNow();
     }
 
@@ -576,7 +619,7 @@
         }
         this._scheduleRender();
       } catch (err) {
-        // Pre-v1.5.2 backends don't have this command — no-op, fall
+        // Pre-v1.6.0 backends don't have this command — no-op, fall
         // back to the local-only countdown behavior.
         console.warn("[complete-irrigation] get_active_runs not available:", err);
       }
@@ -711,8 +754,39 @@
     }
 
     // ── Rendering ──────────────────────────────────────────────────
+    _effectiveTheme() {
+      // "auto" follows HA / OS preference; "light" or "dark" are explicit
+      if (this._theme === "dark") return "dark";
+      if (this._theme === "light") return "light";
+      try {
+        return window.matchMedia("(prefers-color-scheme: dark)").matches
+          ? "dark"
+          : "light";
+      } catch (_) {
+        return "light";
+      }
+    }
+
+    _cycleTheme() {
+      // light → dark → auto → light. Three positions so users can opt
+      // back into "follow HA" without clearing browser data.
+      this._theme =
+        this._theme === "light"
+          ? "dark"
+          : this._theme === "dark"
+          ? "auto"
+          : "light";
+      try {
+        localStorage.setItem(THEME_STORAGE_KEY, this._theme);
+      } catch (_) {}
+      this._renderNow();
+    }
+
     _render() {
       const sidebarClass = this._collapsed ? "sidebar collapsed" : "sidebar";
+      // Reflect the effective theme on the host so CSS variables in
+      // _styles() can switch via [data-theme="dark"] selectors.
+      this.setAttribute("data-theme", this._effectiveTheme());
 
       const navItems = SECTIONS.map(
         (s) =>
@@ -740,7 +814,8 @@
         `</div>` +
         (this._runModalOpen ? this._renderRunModal() : "") +
         (this._scheduleModalOpen ? this._renderScheduleModal() : "") +
-        (this._sensorModalOpen ? this._renderSensorModal() : "");
+        (this._sensorModalOpen ? this._renderSensorModal() : "") +
+        (this._bannerModalOpen ? this._renderBannerSettingsModal() : "");
     }
 
     _renderSection() {
@@ -749,6 +824,7 @@
       if (this._currentSection === "zones") return this._renderZones();
       if (this._currentSection === "sensors") return this._renderSensors();
       if (this._currentSection === "weather") return this._renderWeather();
+      if (this._currentSection === "notifications") return this._renderNotifications();
       if (this._currentSection === "settings") return this._renderSettings();
       const section = SECTIONS.find((s) => s.id === this._currentSection) || {
         icon: "",
@@ -777,26 +853,132 @@
       );
     }
 
-    _renderSettings() {
+    _renderNotifications() {
+      const n = (this._config && this._config.notifications) || {};
+      const target = n.notify_target || "";
+      const qStart = n.quiet_hours_start || "22:00";
+      const qEnd = n.quiet_hours_end || "07:00";
+      const enabled = n.enabled !== false; // default true
+      const lowMoistureAlerts = n.low_moisture_alerts !== false; // default true
+      const tip = (text) =>
+        `<span class="help-tip" title="${escapeAttr(text)}" aria-label="${escapeAttr(text)}">ⓘ</span>`;
+
       return (
-        `<header class="page-header"><h2>Settings</h2></header>` +
-        `<section><h3 class="section-title">v1.1 quick reference</h3>` +
-        `<div class="placeholder">` +
-        `<p><strong>Quick configuration UI coming in v1.2.</strong> All features work today via Developer Tools → Services:</p>` +
-        `<table style="width:100%;font-size:13px;border-collapse:collapse;margin-top:12px">` +
-        `<tr><td style="padding:6px 0;color:var(--secondary-text-color)">Notifications</td><td><code>complete_irrigation.set_notification_config</code></td></tr>` +
-        `<tr><td style="padding:6px 0;color:var(--secondary-text-color)">Test notification</td><td><code>complete_irrigation.test_notification</code></td></tr>` +
-        `<tr><td style="padding:6px 0;color:var(--secondary-text-color)">Rain + hot weather</td><td><code>complete_irrigation.set_weather_config</code></td></tr>` +
-        `<tr><td style="padding:6px 0;color:var(--secondary-text-color)">Per-zone moisture</td><td><code>complete_irrigation.set_zone_moisture</code></td></tr>` +
-        `<tr><td style="padding:6px 0;color:var(--secondary-text-color)">New grass mode</td><td><code>complete_irrigation.start_establishment</code></td></tr>` +
-        `<tr><td style="padding:6px 0;color:var(--secondary-text-color)">Clear rain lockout</td><td><code>complete_irrigation.clear_rain_lockout</code></td></tr>` +
-        `</table>` +
-        `<p style="margin-top:16px;font-size:12px;color:var(--secondary-text-color)">` +
-        `iCal feed: <code>/api/complete_irrigation/calendar.ics</code> ` +
-        `(subscribe from your phone's calendar app for the next 30 days of planned runs).` +
-        `</p>` +
-        `</div></section>`
+        `<header class="page-header"><h2>Notifications</h2>` +
+        `<span class="version-pill">v1.6.0</span></header>` +
+        `<form class="weather-form" data-form="notifications">` +
+        `<label class="enabled-check"><input type="checkbox" name="enabled"${
+          enabled ? " checked" : ""
+        } /> Notifications enabled ${tip("Master switch. Turn off to silence all push notifications without losing your config.")}</label>` +
+        `<label>Notify target ${tip("HA notify service like notify.mobile_app_pete_iphone. Leave blank to disable push.")}</label>` +
+        `<input name="notify_target" type="text" placeholder="notify.mobile_app_your_phone" value="${escapeAttr(target)}" />` +
+        `<h3 class="section-title">Quiet hours</h3>` +
+        `<p class="section-hint">Non-urgent notifications received in this window are bundled into a single morning summary.</p>` +
+        `<div class="row-2">` +
+        `<div><label>Start ${tip("24h, e.g. 22:00")}</label><input name="quiet_hours_start" type="time" value="${escapeAttr(qStart)}" /></div>` +
+        `<div><label>End ${tip("24h, e.g. 07:00 — morning summary fires at this time")}</label><input name="quiet_hours_end" type="time" value="${escapeAttr(qEnd)}" /></div>` +
+        `</div>` +
+        `<h3 class="section-title">Daily low-moisture summary</h3>` +
+        `<label class="enabled-check"><input type="checkbox" name="low_moisture_alerts"${
+          lowMoistureAlerts ? " checked" : ""
+        } /> Send a daily summary when any zone sensor is below its minimum ${tip("Fires once per day at quiet-hours-end. Lists every zone whose moisture sensor has dropped below the configured min%.")}</label>` +
+        `<div class="modal-actions">` +
+        `<button type="button" class="btn btn-secondary" data-action="test-notification">Send test</button>` +
+        `<button type="submit" class="btn btn-primary">Save</button>` +
+        `</div>` +
+        `</form>`
       );
+    }
+
+    async _saveNotificationConfig(form) {
+      const data = new FormData(form);
+      const payload = {
+        notify_target: data.get("notify_target") || "",
+        quiet_hours_start: data.get("quiet_hours_start") || "22:00",
+        quiet_hours_end: data.get("quiet_hours_end") || "07:00",
+        enabled: form.querySelector('input[name="enabled"]').checked,
+      };
+      // low_moisture_alerts is a panel-side preference (stored in the
+      // notifications blob so it survives restarts).
+      const lowToggle = form.querySelector('input[name="low_moisture_alerts"]');
+      try {
+        await this._hass.callService(
+          "complete_irrigation",
+          "set_notification_config",
+          payload
+        );
+        if (lowToggle) {
+          await this._hass.callService(
+            "complete_irrigation",
+            "set_notification_config",
+            { low_moisture_alerts: lowToggle.checked }
+          );
+        }
+        await this._fetchConfig();
+        alert("Notification config saved.");
+      } catch (err) {
+        alert("Failed to save: " + (err?.message || err));
+      }
+    }
+
+    async _testNotification() {
+      try {
+        await this._hass.callService(
+          "complete_irrigation",
+          "test_notification",
+          { message: "Hello from Complete Irrigation 🌱" }
+        );
+        alert(
+          "Test sent. If you don't see it, check your notify target in HA Settings → Devices & Services."
+        );
+      } catch (err) {
+        alert("Test failed: " + (err?.message || err));
+      }
+    }
+
+    _renderSettings() {
+      const c = this._config || {};
+      const themeLabel =
+        this._theme === "dark" ? "Dark" : this._theme === "light" ? "Light" : "Auto (follow HA)";
+      const tip = (text) =>
+        `<span class="help-tip" title="${escapeAttr(text)}" aria-label="${escapeAttr(text)}">ⓘ</span>`;
+      const icalUrl = "/api/complete_irrigation/calendar.ics";
+      const repoUrl = "https://github.com/HL-Apprentice/ha-complete-irrigation";
+
+      return (
+        `<header class="page-header"><h2>Settings</h2>` +
+        `<span class="version-pill">v1.6.0</span></header>` +
+        `<section class="settings-card">` +
+        `<h3 class="section-title">Theme</h3>` +
+        `<p class="section-hint">Current: <strong>${escapeHtml(themeLabel)}</strong>. Use the ☀️/🌙 button on the Today screen to cycle: Light → Dark → Auto.</p>` +
+        `</section>` +
+        `<section class="settings-card">` +
+        `<h3 class="section-title">Calendar feed</h3>` +
+        `<p class="section-hint">Subscribe from your phone's calendar app to see the next 30 days of planned runs.</p>` +
+        `<div class="copy-row"><code>${escapeHtml(icalUrl)}</code><button class="btn btn-small" data-action="copy-ical">Copy</button></div>` +
+        `</section>` +
+        `<section class="settings-card">` +
+        `<h3 class="section-title">About</h3>` +
+        `<table class="settings-table">` +
+        `<tr><td>Version</td><td><strong>v1.6.0</strong></td></tr>` +
+        `<tr><td>Repository</td><td><a href="${repoUrl}" target="_blank">${escapeHtml(repoUrl)}</a></td></tr>` +
+        `<tr><td>Zones configured</td><td>${(this._panel?.config?.zones || []).length}</td></tr>` +
+        `<tr><td>Schedules</td><td>${(this._schedules || []).length}</td></tr>` +
+        `</table>` +
+        `<p class="section-hint" style="margin-top:12px">All configuration is also reachable via Developer Tools → Services — useful for advanced automations.</p>` +
+        `</section>`
+      );
+    }
+
+    async _copyICalUrl() {
+      // Best-effort: copy to clipboard, fall back to alert with the URL.
+      const url = window.location.origin + "/api/complete_irrigation/calendar.ics";
+      try {
+        await navigator.clipboard.writeText(url);
+        alert("iCal feed URL copied:\n" + url);
+      } catch (_) {
+        prompt("Copy this URL:", url);
+      }
     }
 
     _renderToday() {
@@ -814,9 +996,14 @@
         }</button>`;
       }
 
+      const themeBtn =
+        `<button class="btn-icon theme-toggle" data-action="toggle-theme" title="Toggle light / dark">${
+          this._effectiveTheme() === "dark" ? "☀️" : "🌙"
+        }</button>`;
       return (
         `<header class="page-header"><h2>Today</h2>` +
-        `<span class="version-pill">v1.5.2</span></header>` +
+        `<div class="page-header-right">${themeBtn}` +
+        `<span class="version-pill">v1.6.0</span></div></header>` +
         this._renderRainLockoutBanner() +
         this._renderWeatherBanner() +
         `<section>` +
@@ -864,127 +1051,274 @@
       return state;
     }
 
-    _renderWeatherBanner() {
-      // Auto-detected sensors plus anything explicitly bound via service.
+    _buildBannerCells() {
+      // Build a keyed map of all available banner cells from current
+      // hass state + config. Returns {key: {icon, label, value}}.
+      const out = {};
       const detected = this._autoDetectWeatherSensors();
-      const cells = [];
-
       const sunState = this._readSensor("sun.sun");
       const weatherEntity = this._findWeatherEntity();
 
-      // Current condition (sunny / partly cloudy / etc.) from weather.*
       if (weatherEntity) {
         const cond = WEATHER_CONDITION_MAP[weatherEntity.state] || {
           icon: "🌤️",
           label: weatherEntity.state || "Unknown",
         };
-        cells.push(this._weatherCell(cond.icon, "Condition", cond.label));
+        out.condition = { icon: cond.icon, label: "Condition", value: cond.label };
       }
 
-      // Temperature (explicit > auto > weather.* attribute)
       const tempState =
         this._readSensor(this._config?.temperature_sensor) || detected.temperature;
       if (tempState) {
         const unit = tempState.attributes?.unit_of_measurement || "°";
-        cells.push(this._weatherCell("🌡️", "Temp", `${tempState.state}${unit}`));
+        out.temp = { icon: "🌡️", label: "Temp", value: `${tempState.state}${unit}` };
       } else if (weatherEntity?.attributes?.temperature != null) {
         const unit = weatherEntity.attributes.temperature_unit || "°";
-        cells.push(
-          this._weatherCell("🌡️", "Temp", `${weatherEntity.attributes.temperature}${unit}`)
-        );
+        out.temp = {
+          icon: "🌡️",
+          label: "Temp",
+          value: `${weatherEntity.attributes.temperature}${unit}`,
+        };
       }
 
-      // Feels like
       if (detected.feels_like) {
         const unit = detected.feels_like.attributes?.unit_of_measurement || "°";
-        cells.push(this._weatherCell("🤚", "Feels like", `${detected.feels_like.state}${unit}`));
+        out.feels_like = {
+          icon: "🤚",
+          label: "Feels like",
+          value: `${detected.feels_like.state}${unit}`,
+        };
       }
-
-      // Humidity
       if (detected.humidity) {
-        cells.push(this._weatherCell("💧", "Humidity", `${detected.humidity.state}%`));
+        out.humidity = { icon: "💧", label: "Humidity", value: `${detected.humidity.state}%` };
       }
-
-      // Dew point
       if (detected.dew_point) {
         const unit = detected.dew_point.attributes?.unit_of_measurement || "°";
-        cells.push(this._weatherCell("🌫️", "Dew pt", `${detected.dew_point.state}${unit}`));
+        out.dew_point = {
+          icon: "🌫️",
+          label: "Dew pt",
+          value: `${detected.dew_point.state}${unit}`,
+        };
       }
 
-      // Rain today (explicit > auto)
-      const rainState = this._readSensor(this._config?.rain_sensor) || detected.rain;
-      if (rainState) {
-        const unit = rainState.attributes?.unit_of_measurement || "in";
-        cells.push(this._weatherCell("☔", "Rain today", `${rainState.state} ${unit}`));
-      }
+      // Rain — supports either legacy single `rain_sensor` or the new
+      // multi-sensor `rain_sensors` array. Each bound sensor becomes
+      // its own cell so the user sees all readings.
+      const rainList =
+        (this._config?.rain_sensors && this._config.rain_sensors.length
+          ? this._config.rain_sensors
+          : this._config?.rain_sensor
+          ? [this._config.rain_sensor]
+          : []) || [];
+      const rainStates = rainList
+        .map((eid) => this._readSensor(eid))
+        .filter(Boolean);
+      if (rainStates.length === 0 && detected.rain) rainStates.push(detected.rain);
+      rainStates.forEach((s, i) => {
+        const unit = s.attributes?.unit_of_measurement || "in";
+        const friendly = s.attributes?.friendly_name || s.entity_id;
+        out[`rain_${i}`] = {
+          icon: "☔",
+          label: rainStates.length > 1 ? friendly : "Rain",
+          value: `${s.state} ${unit}`,
+        };
+      });
 
-      // Wind
       if (detected.wind_speed) {
         const unit = detected.wind_speed.attributes?.unit_of_measurement || "mph";
         let val = `${detected.wind_speed.state} ${unit}`;
-        if (detected.wind_gust) {
-          val += ` (gust ${detected.wind_gust.state})`;
-        }
-        cells.push(this._weatherCell("💨", "Wind", val));
+        if (detected.wind_gust) val += ` (gust ${detected.wind_gust.state})`;
+        out.wind = { icon: "💨", label: "Wind", value: val };
       }
-
-      // UV
-      if (detected.uv) {
-        cells.push(this._weatherCell("🔆", "UV index", detected.uv.state));
-      }
-
-      // Solar
+      if (detected.uv) out.uv = { icon: "🔆", label: "UV index", value: detected.uv.state };
       if (detected.solar) {
         const unit = detected.solar.attributes?.unit_of_measurement || "W/m²";
-        cells.push(this._weatherCell("☀️", "Solar", `${detected.solar.state} ${unit}`));
+        out.solar = { icon: "☀️", label: "Solar", value: `${detected.solar.state} ${unit}` };
       }
-
-      // Pressure
       if (detected.pressure) {
         const unit = detected.pressure.attributes?.unit_of_measurement || "";
-        cells.push(this._weatherCell("📊", "Pressure", `${detected.pressure.state} ${unit}`));
+        out.pressure = {
+          icon: "📊",
+          label: "Pressure",
+          value: `${detected.pressure.state} ${unit}`,
+        };
       }
-
-      // Sunrise/sunset
       if (sunState) {
-        const setNext = sunState.attributes?.next_setting;
         const riseNext = sunState.attributes?.next_rising;
+        const setNext = sunState.attributes?.next_setting;
         if (riseNext) {
           const dt = new Date(riseNext);
-          cells.push(this._weatherCell("🌄", "Sunrise",
-            dt.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })));
+          out.sunrise = {
+            icon: "🌄",
+            label: "Sunrise",
+            value: dt.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }),
+          };
         }
         if (setNext) {
           const dt = new Date(setNext);
-          cells.push(this._weatherCell("🌅", "Sunset",
-            dt.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })));
+          out.sunset = {
+            icon: "🌅",
+            label: "Sunset",
+            value: dt.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }),
+          };
         }
       }
-
-      // Hot weather threshold if configured
-      const hotThreshold = this._config?.hot_threshold_f;
-      const boostPct = this._config?.boost_percent;
-      if (hotThreshold && boostPct) {
-        cells.push(this._weatherCell("🔥", "Hot boost",
-          `>${hotThreshold}°F = +${boostPct}%`));
+      const hotF = this._config?.hot_threshold_f;
+      const boost = this._config?.boost_percent;
+      if (hotF && boost) {
+        out.hot_boost = {
+          icon: "🔥",
+          label: "Hot boost",
+          value: `>${hotF}°F = +${boost}%`,
+        };
       }
+      return out;
+    }
 
-      // Empty-state hint if literally nothing was found
-      if (cells.length === 0) {
+    _bannerOrderedKeys(available) {
+      // Resolve which keys to render and in what order. User layout (if
+      // any) is respected first; any newly-available keys not in their
+      // saved layout are appended at the end so they're discoverable.
+      const layout = this._bannerLayout || { visible: {}, order: [] };
+      const visible = layout.visible || {};
+      const order = layout.order || [];
+      const seen = new Set();
+      const resolved = [];
+      for (const key of order) {
+        if (available[key] && visible[key] !== false) {
+          resolved.push(key);
+          seen.add(key);
+        }
+      }
+      // Append newly-detected keys not in the saved order
+      for (const key of Object.keys(available)) {
+        if (!seen.has(key) && visible[key] !== false) {
+          resolved.push(key);
+        }
+      }
+      return resolved;
+    }
+
+    _renderWeatherBanner() {
+      const cellMap = this._buildBannerCells();
+      const order = this._bannerOrderedKeys(cellMap);
+      const gear =
+        `<button class="btn-icon banner-gear" data-action="open-banner-settings" title="Customize what shows here">⚙️</button>`;
+
+      if (order.length === 0) {
+        // Empty state
         return (
           `<div class="weather-banner weather-banner-empty">` +
           `<span style="font-size:20px">🌤️</span>` +
           `<div style="flex:1">` +
           `<div style="font-weight:600;font-size:13px">No weather data found yet</div>` +
           `<div style="font-size:12px;color:var(--secondary-text-color)">` +
-          `Install the WeatherFlow Tempest integration (or any weather entity) ` +
-          `and the banner will auto-populate. Or call ` +
-          `<code>complete_irrigation.set_weather_config</code> to bind specific sensors.` +
-          `</div></div></div>`
+          `Install a weather integration or bind sensors in the Weather tab.` +
+          `</div></div>` +
+          gear +
+          `</div>`
         );
       }
+      const cellsHtml = order
+        .map((k) => this._weatherCell(cellMap[k].icon, cellMap[k].label, cellMap[k].value))
+        .join("");
+      return `<div class="weather-banner">${cellsHtml}${gear}</div>`;
+    }
 
-      return `<div class="weather-banner">${cells.join("")}</div>`;
+    _renderBannerSettingsModal() {
+      // Show every cell that *could* be displayed (visible + hidden),
+      // each row a checkbox + up/down arrows. Save persists to localStorage.
+      const cellMap = this._buildBannerCells();
+      const layout = this._bannerLayout || { visible: {}, order: [] };
+      // Compose a stable list: existing order first, then unseen keys
+      const seen = new Set();
+      const list = [];
+      for (const k of layout.order || []) {
+        if (cellMap[k]) {
+          list.push(k);
+          seen.add(k);
+        }
+      }
+      for (const k of Object.keys(cellMap)) {
+        if (!seen.has(k)) list.push(k);
+      }
+
+      const rows = list
+        .map(
+          (k, i) =>
+            `<div class="banner-row" data-key="${escapeAttr(k)}">` +
+            `<label class="banner-row-check"><input type="checkbox" name="banner_visible" value="${escapeAttr(k)}"${
+              layout.visible?.[k] === false ? "" : " checked"
+            } /> <span>${escapeHtml(cellMap[k].icon)} ${escapeHtml(cellMap[k].label)}</span></label>` +
+            `<div class="banner-row-arrows">` +
+            `<button type="button" class="btn-icon" data-action="banner-up" data-key="${escapeAttr(k)}"${
+              i === 0 ? " disabled" : ""
+            }>▲</button>` +
+            `<button type="button" class="btn-icon" data-action="banner-down" data-key="${escapeAttr(k)}"${
+              i === list.length - 1 ? " disabled" : ""
+            }>▼</button>` +
+            `</div></div>`
+        )
+        .join("");
+
+      return (
+        `<div class="modal-backdrop"></div>` +
+        `<div class="modal modal-wide" role="dialog" aria-modal="true">` +
+        `<form class="modal-form banner-settings-form">` +
+        `<h3>Customize weather banner</h3>` +
+        `<p class="section-hint" style="margin:0 0 12px">Toggle cells and reorder with ▲▼. Changes save when you hit Done.</p>` +
+        `<div class="banner-list">${rows}</div>` +
+        `<div class="modal-actions">` +
+        `<button type="button" class="btn btn-secondary modal-cancel">Cancel</button>` +
+        `<button type="submit" class="btn btn-primary">Done</button>` +
+        `</div>` +
+        `</form>` +
+        `</div>`
+      );
+    }
+
+    _saveBannerLayout(form) {
+      // Read the on-screen order + the on-screen checkbox state and
+      // commit it to localStorage. Order is derived from current DOM
+      // (after any ▲▼ presses), not from form data.
+      const rows = form.querySelectorAll(".banner-row");
+      const order = [];
+      const visible = {};
+      rows.forEach((r) => {
+        const key = r.dataset.key;
+        order.push(key);
+        visible[key] = r.querySelector('input[type="checkbox"]').checked;
+      });
+      this._bannerLayout = { order, visible };
+      try {
+        localStorage.setItem(
+          BANNER_LAYOUT_STORAGE_KEY,
+          JSON.stringify(this._bannerLayout)
+        );
+      } catch (_) {}
+      this._closeAllModals();
+    }
+
+    _bannerReorder(key, direction) {
+      // Move `key` up (-1) or down (+1) in the current modal DOM.
+      const form = this.shadowRoot.querySelector(".banner-settings-form");
+      if (!form) return;
+      const rows = Array.from(form.querySelectorAll(".banner-row"));
+      const idx = rows.findIndex((r) => r.dataset.key === key);
+      if (idx === -1) return;
+      const target = idx + direction;
+      if (target < 0 || target >= rows.length) return;
+      const list = form.querySelector(".banner-list");
+      if (direction < 0) list.insertBefore(rows[idx], rows[target]);
+      else list.insertBefore(rows[target], rows[idx]);
+      // Update disabled state on first/last arrows
+      const newRows = Array.from(list.querySelectorAll(".banner-row"));
+      newRows.forEach((r, i) => {
+        const up = r.querySelector('[data-action="banner-up"]');
+        const down = r.querySelector('[data-action="banner-down"]');
+        if (up) up.disabled = i === 0;
+        if (down) down.disabled = i === newRows.length - 1;
+      });
     }
 
     _findWeatherEntity() {
@@ -1115,14 +1449,14 @@
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Zones</h2>` +
-          `<span class="version-pill">v1.5.2</span></header>` +
+          `<span class="version-pill">v1.6.0</span></header>` +
           `<div class="empty"><p>No zones configured. Add them via Settings → Devices &amp; Services.</p></div>`
         );
       }
       const rows = zones.map((z) => this._renderZoneRow(z)).join("");
       return (
         `<header class="page-header"><h2>Zones</h2>` +
-        `<span class="version-pill">v1.5.2</span></header>` +
+        `<span class="version-pill">v1.6.0</span></header>` +
         `<p class="section-hint">Hidden zones still run on schedule — they're just hidden from the Today view.</p>` +
         `<div class="zones-list">${rows}</div>`
       );
@@ -1145,6 +1479,12 @@
         ? `<button class="btn btn-small" data-action="show-zone" data-entity-id="${escapeAttr(zone.entityId)}">👁️ Show in Today</button>`
         : `<button class="btn btn-small" data-action="hide-zone" data-entity-id="${escapeAttr(zone.entityId)}">🚫 Hide from Today</button>`;
 
+      // Climate chips (temp / humidity / moisture) — show whatever the
+      // user has bound to this zone. Each chip shows the averaged value
+      // across the bound sensors of that kind.
+      const cfg = this._config?.zones?.[zone.entityId] || {};
+      const climateChips = this._renderZoneClimateChips(cfg);
+
       return (
         `<article class="zone-row${isHidden ? " zone-row-hidden" : ""}">` +
         `<div class="zone-row-main">` +
@@ -1152,11 +1492,65 @@
         `<div class="zone-row-text">` +
         `<div class="zone-row-name">${escapeHtml(zone.name)}${isHidden ? ' <span class="zone-row-badge">HIDDEN</span>' : ""}</div>` +
         `<div class="zone-row-meta">${escapeHtml(zone.entityId)} • ${statusLabel}</div>` +
+        (climateChips ? `<div class="zone-row-climate">${climateChips}</div>` : "") +
         `</div></div>` +
         `<div class="zone-row-strip">${dayStrip}</div>` +
         `<div class="zone-row-actions">${hideBtn}</div>` +
         `</article>`
       );
+    }
+
+    _renderZoneClimateChips(zoneCfg) {
+      const chips = [];
+      const moistures = this._readPercentSensors(zoneCfg.moisture_entities || []);
+      if (moistures.length > 0) {
+        const combined = this._combineReadings(moistures, zoneCfg.combine_mode);
+        const minPct = zoneCfg.min_pct;
+        const low = minPct != null && combined !== null && combined < minPct;
+        chips.push(
+          `<span class="zone-chip${low ? " zone-chip-low" : ""}" title="${escapeAttr(
+            moistures.map((m) => `${m.friendly}: ${m.value.toFixed(1)}%`).join("\n")
+          )}">💧 ${combined.toFixed(0)}%${moistures.length > 1 ? ` (${moistures.length})` : ""}</span>`
+        );
+      }
+      // Temp — always averaged, unit pulled from the first sensor
+      const tempEids = zoneCfg.temperature_entities || [];
+      if (tempEids.length > 0) {
+        const readings = tempEids
+          .map((eid) => this._readSensor(eid))
+          .filter(Boolean)
+          .map((s) => ({
+            value: parseFloat(s.state),
+            unit: s.attributes?.unit_of_measurement || "°",
+            friendly: s.attributes?.friendly_name || s.entity_id,
+          }))
+          .filter((r) => !Number.isNaN(r.value));
+        if (readings.length > 0) {
+          const avg = readings.reduce((a, b) => a + b.value, 0) / readings.length;
+          const unit = readings[0].unit;
+          chips.push(
+            `<span class="zone-chip" title="${escapeAttr(
+              readings.map((r) => `${r.friendly}: ${r.value.toFixed(1)}${unit}`).join("\n")
+            )}">🌡️ ${avg.toFixed(0)}${unit}${readings.length > 1 ? ` (${readings.length})` : ""}</span>`
+          );
+        }
+      }
+      // Humidity
+      const humEids = zoneCfg.humidity_entities || [];
+      if (humEids.length > 0) {
+        const readings = humEids
+          .map((eid) => this._readSensor(eid))
+          .filter(Boolean)
+          .map((s) => parseFloat(s.state))
+          .filter((v) => !Number.isNaN(v));
+        if (readings.length > 0) {
+          const avg = readings.reduce((a, b) => a + b, 0) / readings.length;
+          chips.push(
+            `<span class="zone-chip">💨 ${avg.toFixed(0)}%${readings.length > 1 ? ` (${readings.length})` : ""}</span>`
+          );
+        }
+      }
+      return chips.join("");
     }
 
     _renderZone7DayStrip(entityId) {
@@ -1230,7 +1624,7 @@
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Sensors</h2>` +
-          `<span class="version-pill">v1.5.2</span></header>` +
+          `<span class="version-pill">v1.6.0</span></header>` +
           `<div class="empty"><p>No zones configured.</p></div>`
         );
       }
@@ -1239,50 +1633,100 @@
         .join("");
       return (
         `<header class="page-header"><h2>Sensors</h2>` +
-        `<span class="version-pill">v1.5.2</span></header>` +
+        `<span class="version-pill">v1.6.0</span></header>` +
         `<p class="section-hint">Bind soil-moisture sensors to a zone so runtimes auto-adjust based on actual moisture. You can attach one sensor or several (combined as average, lowest, highest, or just the primary).</p>` +
         `<div class="sensor-zone-list">${cards}</div>`
       );
     }
 
-    _renderSensorZoneCard(zone) {
-      const zoneCfg = this._config?.zones?.[zone.entityId];
-      const bound = zoneCfg?.moisture_entities || [];
-      const combine = zoneCfg?.combine_mode;
-      const category = zoneCfg?.category;
-      const minPct = zoneCfg?.min_pct;
-      const targetPct = zoneCfg?.target_pct;
-      const maxPct = zoneCfg?.max_pct;
+    _readPercentSensors(entity_ids) {
+      // Helper: read a list of % sensor entities, returning
+      // [{entity_id, friendly, value: number}, ...] for the live ones.
+      const out = [];
+      for (const eid of entity_ids || []) {
+        const s = this._readSensor(eid);
+        if (!s) continue;
+        const val = parseFloat(s.state);
+        if (Number.isNaN(val)) continue;
+        out.push({
+          entity_id: eid,
+          friendly: s.attributes?.friendly_name || eid,
+          value: val,
+          unit: s.attributes?.unit_of_measurement || "%",
+        });
+      }
+      return out;
+    }
 
-      // Live readings if any sensors are bound
-      let liveReading = "";
+    _combineReadings(readings, combine) {
+      // Apply combine_mode to a list of {value} readings, return number or null.
+      if (!readings.length) return null;
+      const vals = readings.map((r) => r.value);
+      switch (combine) {
+        case "lowest":
+          return Math.min(...vals);
+        case "highest":
+          return Math.max(...vals);
+        case "primary":
+          return vals[0];
+        default:
+          return vals.reduce((a, b) => a + b, 0) / vals.length;
+      }
+    }
+
+    _renderSensorZoneCard(zone) {
+      const zoneCfg = this._config?.zones?.[zone.entityId] || {};
+      const bound = zoneCfg.moisture_entities || [];
+      const combine = zoneCfg.combine_mode;
+      const category = zoneCfg.category;
+      const minPct = zoneCfg.min_pct;
+      const targetPct = zoneCfg.target_pct;
+      const maxPct = zoneCfg.max_pct;
+
+      const readings = this._readPercentSensors(bound);
+      const combined = this._combineReadings(readings, combine);
+
+      // Header live readout = combined value
+      const headerReadout =
+        combined !== null
+          ? `<span class="sensor-live${minPct != null && combined < minPct ? " sensor-low" : ""}">${combined.toFixed(1)}%</span>`
+          : "";
+
+      // Per-sensor breakdown — one row per bound sensor + a separate
+      // "Combined" row showing the value used for irrigation decisions.
+      let breakdown = "";
       if (bound.length > 0) {
-        const vals = bound
-          .map((eid) => this._readSensor(eid))
-          .filter((s) => s && s.state !== "unknown" && s.state !== "unavailable")
-          .map((s) => parseFloat(s.state))
-          .filter((v) => !Number.isNaN(v));
-        if (vals.length > 0) {
-          const combined =
-            combine === "lowest"
-              ? Math.min(...vals)
-              : combine === "highest"
-              ? Math.max(...vals)
-              : combine === "primary"
-              ? vals[0]
-              : vals.reduce((a, b) => a + b, 0) / vals.length; // average default
-          liveReading = `<span class="sensor-live">${combined.toFixed(1)}%</span>`;
-        }
+        const sensorRows = bound
+          .map((eid) => {
+            const r = readings.find((x) => x.entity_id === eid);
+            const friendly = r?.friendly || this._hass?.states?.[eid]?.attributes?.friendly_name || eid;
+            const valHtml =
+              r != null
+                ? `<span class="sensor-reading${minPct != null && r.value < minPct ? " sensor-low" : ""}">${r.value.toFixed(1)}%</span>`
+                : `<span class="sensor-reading sensor-unavailable">—</span>`;
+            return (
+              `<div class="sensor-bound-row sensor-reading-row">` +
+              `<span class="sensor-label" title="${escapeAttr(eid)}">${escapeHtml(friendly)}</span>` +
+              valHtml +
+              `</div>`
+            );
+          })
+          .join("");
+        const combinedRow =
+          bound.length > 1 && combined !== null
+            ? `<div class="sensor-bound-row sensor-combined-row">` +
+              `<span class="sensor-label"><strong>Combined (${escapeHtml(combine || "average")})</strong></span>` +
+              `<span class="sensor-reading sensor-reading-combined">${combined.toFixed(1)}%</span>` +
+              `</div>`
+            : "";
+        breakdown = sensorRows + combinedRow;
       }
 
       const status =
         bound.length === 0
           ? `<div class="sensor-empty">No sensors bound — runtime is fixed at the scheduled duration.</div>`
           : `<div class="sensor-bound">` +
-            `<div class="sensor-bound-row"><span class="sensor-label">Sensors</span><span>${bound
-              .map((e) => `<code>${escapeHtml(e)}</code>`)
-              .join(", ")}</span></div>` +
-            `<div class="sensor-bound-row"><span class="sensor-label">Combine</span><span>${escapeHtml(combine || "—")}</span></div>` +
+            breakdown +
             `<div class="sensor-bound-row"><span class="sensor-label">Range</span><span>min ${minPct ?? "—"}% • target ${targetPct ?? "—"}% • max ${maxPct ?? "—"}%</span></div>` +
             (category
               ? `<div class="sensor-bound-row"><span class="sensor-label">Category</span><span>${escapeHtml(category)}</span></div>`
@@ -1293,7 +1737,7 @@
         `<article class="sensor-zone-card">` +
         `<header class="sensor-zone-head">` +
         `<div><h4>${escapeHtml(zone.name)}</h4><div class="sensor-zone-eid">${escapeHtml(zone.entityId)}</div></div>` +
-        `<div class="sensor-zone-right">${liveReading}<button class="btn btn-small" data-action="configure-sensor" data-entity-id="${escapeAttr(zone.entityId)}">${bound.length > 0 ? "Edit" : "Configure"}</button></div>` +
+        `<div class="sensor-zone-right">${headerReadout}<button class="btn btn-small" data-action="configure-sensor" data-entity-id="${escapeAttr(zone.entityId)}">${bound.length > 0 ? "Edit" : "Configure"}</button></div>` +
         `</header>` +
         status +
         `</article>`
@@ -1310,6 +1754,8 @@
         target_pct: zoneCfg.target_pct ?? 31,
         max_pct: zoneCfg.max_pct ?? 40,
         category: zoneCfg.category || "",
+        temperature_entities: [...(zoneCfg.temperature_entities || [])],
+        humidity_entities: [...(zoneCfg.humidity_entities || [])],
       };
       this._sensorModalOpen = true;
       this._renderNow();
@@ -1381,6 +1827,12 @@
           )
           .join("") +
         `</select>` +
+        // Climate sensors (optional, display-only on Zones tab)
+        `<h3 class="section-title">Climate sensors (optional, display-only)</h3>` +
+        `<label>Temperature sensors ${tip("One or more temperature sensors near this zone. Multiple sensors are averaged.")}</label>` +
+        this._renderClimateChecks(allSensors, e.temperature_entities, "temperature_entity", "temp") +
+        `<label>Humidity sensors ${tip("One or more humidity sensors near this zone. Multiple sensors are averaged.")}</label>` +
+        this._renderClimateChecks(allSensors, e.humidity_entities, "humidity_entity", "humidity") +
         `<div class="modal-actions">` +
         `<button type="button" class="btn btn-secondary modal-cancel">Cancel</button>` +
         `<button type="submit" class="btn btn-primary">Save</button>` +
@@ -1388,6 +1840,41 @@
         `</form>` +
         `</div>`
       );
+    }
+
+    _renderClimateChecks(allSensors, selected, inputName, kind) {
+      // Build a checkbox list of candidate temperature OR humidity sensors.
+      // Filters by unit (°F/°C for temp, % for humidity) + keyword in name.
+      const tempUnits = ["°F", "°C", "F", "C"];
+      const matches = allSensors
+        .filter((s) => s.entity_id.startsWith("sensor."))
+        .filter((s) => {
+          const unit = (s.attributes?.unit_of_measurement || "").trim();
+          if (kind === "temp") {
+            if (tempUnits.includes(unit)) return true;
+            return /temperature|temp\b/i.test(s.entity_id);
+          }
+          // humidity
+          if (unit === "%") return /humidity|humid/i.test(s.entity_id);
+          return /humidity/i.test(s.entity_id);
+        })
+        .map((s) => s.entity_id)
+        .sort();
+      if (matches.length === 0) {
+        return `<div class="empty" style="margin-bottom:8px">No matching sensors found in HA.</div>`;
+      }
+      const rows = matches
+        .map((eid) => {
+          const friendly = this._hass.states[eid]?.attributes?.friendly_name || eid;
+          const checked = selected.includes(eid);
+          return (
+            `<label class="sensor-pick"><input type="checkbox" name="${inputName}" value="${escapeAttr(eid)}"${
+              checked ? " checked" : ""
+            } /><span><strong>${escapeHtml(friendly)}</strong><br /><code>${escapeHtml(eid)}</code></span></label>`
+          );
+        })
+        .join("");
+      return `<div class="sensor-pick-list">${rows}</div>`;
     }
 
     async _saveSensorConfig() {
@@ -1410,6 +1897,8 @@
           target_pct: parseInt(e.target_pct, 10),
           max_pct: parseInt(e.max_pct, 10),
           ...(e.category ? { category: e.category } : {}),
+          temperature_entities: e.temperature_entities,
+          humidity_entities: e.humidity_entities,
         });
         this._closeAllModals();
         await this._fetchConfig();
@@ -1421,32 +1910,57 @@
     // ── Weather tab ────────────────────────────────────────────────
     _renderWeather() {
       const c = this._config || {};
-      const rainSensor = c.rain_sensor || "";
+      const rainSensors =
+        c.rain_sensors && c.rain_sensors.length
+          ? c.rain_sensors
+          : c.rain_sensor
+          ? [c.rain_sensor]
+          : [];
       const tempSensor = c.temperature_sensor || "";
       const hotF = c.hot_threshold_f ?? 100;
       const boost = c.boost_percent ?? 25;
 
-      // Pull list of candidate sensors for the pickers
       const allSensors = this._hass?.states
         ? Object.values(this._hass.states)
             .filter((s) => s.entity_id.startsWith("sensor."))
             .map((s) => s.entity_id)
             .sort()
         : [];
-      const opts = (selected, predicate) =>
-        allSensors
-          .filter(predicate)
-          .map(
-            (eid) =>
-              `<option value="${escapeAttr(eid)}"${
-                eid === selected ? " selected" : ""
-              }>${escapeHtml(eid)}</option>`
-          )
-          .join("");
+
       const tip = (text) =>
         `<span class="help-tip" title="${escapeAttr(text)}" aria-label="${escapeAttr(text)}">ⓘ</span>`;
 
-      // Forecast (next ~3 days) from any weather.* entity
+      // Multi-pick rain sensor checkbox list (rain-named sensors first).
+      const rainCandidates = allSensors.filter((eid) => /rain|precip/i.test(eid));
+      const otherSensors = allSensors.filter((eid) => !/rain|precip/i.test(eid));
+      const rainChecks = (rainCandidates.length > 0 ? rainCandidates : otherSensors)
+        .map((eid) => {
+          const friendly = this._hass.states[eid]?.attributes?.friendly_name || eid;
+          const s = this._hass.states[eid];
+          const liveVal =
+            s && s.state !== "unknown" && s.state !== "unavailable"
+              ? ` <span class="rain-live">${escapeHtml(s.state)} ${escapeHtml(s.attributes?.unit_of_measurement || "")}</span>`
+              : "";
+          const idx = rainSensors.indexOf(eid);
+          const primary = idx === 0;
+          return (
+            `<label class="rain-pick"><input type="checkbox" name="rain_sensor_pick" value="${escapeAttr(eid)}"${
+              idx >= 0 ? " checked" : ""
+            } /> <span><strong>${escapeHtml(friendly)}</strong>${primary ? ' <span class="rain-primary-tag">primary</span>' : ""}<br /><code>${escapeHtml(eid)}</code>${liveVal}</span></label>`
+          );
+        })
+        .join("");
+
+      // Single-pick temperature sensor (still scalar in coordinator logic)
+      const tempOptHtml = allSensors
+        .map(
+          (eid) =>
+            `<option value="${escapeAttr(eid)}"${
+              eid === tempSensor ? " selected" : ""
+            }>${escapeHtml(eid)}</option>`
+        )
+        .join("");
+
       const weather = this._findWeatherEntity();
       const forecastHtml = this._renderForecast(weather);
 
@@ -1458,22 +1972,16 @@
 
       return (
         `<header class="page-header"><h2>Weather</h2>` +
-        `<span class="version-pill">v1.5.2</span></header>` +
+        `<span class="version-pill">v1.6.0</span></header>` +
         lockoutHtml +
         forecastHtml +
         `<form class="weather-form" data-form="weather">` +
         `<h3 class="section-title">Rain lockout</h3>` +
-        `<label>Rain sensor ${tip("Sensor reporting rainfall (usually in inches). Recent rain pauses schedules.")}</label>` +
-        `<select name="rain_sensor"><option value="">— None —</option>${opts(
-          rainSensor,
-          (eid) => /rain|precip/i.test(eid)
-        )}${opts(rainSensor, (eid) => !/rain|precip/i.test(eid)).length > 0 ? `<optgroup label="Other sensors">${opts(rainSensor, (eid) => !/rain|precip/i.test(eid))}</optgroup>` : ""}</select>` +
+        `<label>Rain sensors ${tip("Pick one or more rainfall sensors (accumulation today / yesterday / duration / intensity, etc.). The first checked sensor is used for the lockout calc; the others show on the Today banner. Check the boxes in your preferred priority order.")}</label>` +
+        `<div class="rain-pick-list">${rainChecks || '<div class="empty">No sensors found in HA.</div>'}</div>` +
         `<h3 class="section-title">Hot weather boost</h3>` +
         `<label>Temperature sensor ${tip("Sensor reporting outdoor temp in °F. Hot days trigger a runtime boost.")}</label>` +
-        `<select name="temperature_sensor"><option value="">— None —</option>${opts(
-          tempSensor,
-          (eid) => /temp/i.test(eid)
-        )}${opts(tempSensor, (eid) => !/temp/i.test(eid)).length > 0 ? `<optgroup label="Other sensors">${opts(tempSensor, (eid) => !/temp/i.test(eid))}</optgroup>` : ""}</select>` +
+        `<select name="temperature_sensor"><option value="">— None —</option>${tempOptHtml}</select>` +
         `<div class="row-2">` +
         `<div><label>Hot threshold (°F) ${tip("Boost runtime when temp meets or exceeds this.")}</label><input name="hot_threshold_f" type="number" min="50" max="130" step="1" value="${hotF}" /></div>` +
         `<div><label>Boost (%) ${tip("Increase runtime by this percent on hot days.")}</label><input name="boost_percent" type="number" min="0" max="100" step="1" value="${boost}" /></div>` +
@@ -1524,9 +2032,14 @@
     async _saveWeatherConfig(form) {
       const data = new FormData(form);
       const payload = {};
-      const rs = data.get("rain_sensor");
+
+      // rain_sensors: collect all checked rain checkboxes (preserves DOM order).
+      const rainChecks = Array.from(
+        form.querySelectorAll('input[name="rain_sensor_pick"]:checked')
+      ).map((el) => el.value);
+      payload.rain_sensors = rainChecks;
+
       const ts = data.get("temperature_sensor");
-      if (rs) payload.rain_sensor = rs;
       if (ts) payload.temperature_sensor = ts;
       const hot = parseInt(data.get("hot_threshold_f"), 10);
       const boost = parseInt(data.get("boost_percent"), 10);
@@ -1717,7 +2230,40 @@
 
     _styles() {
       return (
-        `:host{display:block;height:100%;background:var(--primary-background-color,#fafafa);color:var(--primary-text-color,#212121);font-family:var(--paper-font-body1_-_font-family,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif);font-size:14px}` +
+        // Default (light) palette uses HA's CSS variables, which already
+        // follow the user's HA theme. When [data-theme="dark"] is set
+        // on the host we override the palette to a known dark scheme so
+        // the panel reads well even if HA itself is light.
+        `:host{display:block;height:100%;background:var(--primary-background-color,#fafafa);color:var(--primary-text-color,#212121);font-family:var(--paper-font-body1_-_font-family,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif);font-size:14px;--ci-bg:var(--primary-background-color,#fafafa);--ci-card:var(--card-background-color,#fff);--ci-text:var(--primary-text-color,#212121);--ci-text-2:var(--secondary-text-color,#727272);--ci-border:var(--divider-color,rgba(0,0,0,0.12));--ci-input-bg:var(--primary-background-color,#fff);--ci-hover:var(--primary-background-color,#f6f6f6);--ci-accent:var(--primary-color,#03a9f4)}` +
+        `:host([data-theme="dark"]){--ci-bg:#121417;--ci-card:#1d2024;--ci-text:#e6e8eb;--ci-text-2:#9aa0a6;--ci-border:rgba(255,255,255,0.08);--ci-input-bg:#262a2f;--ci-hover:#2a2e34;--ci-accent:#4fc3f7;background:#121417;color:#e6e8eb}` +
+        // Apply the resolved palette across the panel
+        `:host([data-theme="dark"]) .sidebar{background:var(--ci-card);border-right-color:var(--ci-border)}` +
+        `:host([data-theme="dark"]) .sidebar-item{color:var(--ci-text-2)}` +
+        `:host([data-theme="dark"]) .sidebar-item:hover{background:var(--ci-hover);color:var(--ci-text)}` +
+        `:host([data-theme="dark"]) .sidebar-item.active{color:var(--ci-accent);background:rgba(79,195,247,0.08);border-left-color:var(--ci-accent)}` +
+        `:host([data-theme="dark"]) .zone-tile,:host([data-theme="dark"]) .zone-row,:host([data-theme="dark"]) .schedule-row,:host([data-theme="dark"]) .weather-banner,:host([data-theme="dark"]) .sensor-zone-card,:host([data-theme="dark"]) .weather-form,:host([data-theme="dark"]) .modal,:host([data-theme="dark"]) .forecast-cell,:host([data-theme="dark"]) .placeholder,:host([data-theme="dark"]) .empty{background:var(--ci-card);border-color:var(--ci-border);color:var(--ci-text)}` +
+        `:host([data-theme="dark"]) .modal input,:host([data-theme="dark"]) .modal select,:host([data-theme="dark"]) .weather-form input,:host([data-theme="dark"]) .weather-form select{background:var(--ci-input-bg);color:var(--ci-text);border-color:var(--ci-border)}` +
+        `:host([data-theme="dark"]) .btn{background:var(--ci-card);color:var(--ci-text);border-color:var(--ci-border)}` +
+        `:host([data-theme="dark"]) .btn:hover{background:var(--ci-hover)}` +
+        `:host([data-theme="dark"]) .zone-day{background:#262a2f;border-color:var(--ci-border)}` +
+        `:host([data-theme="dark"]) .zone-day-on{background:rgba(79,195,247,0.12);border-color:var(--ci-accent)}` +
+        `:host([data-theme="dark"]) .version-pill{background:var(--ci-card);color:var(--ci-text-2);border-color:var(--ci-border)}` +
+        `:host([data-theme="dark"]) .help-tip{background:#262a2f;color:var(--ci-text-2)}` +
+        `:host([data-theme="dark"]) code{background:#262a2f}` +
+        // Layout
+        `.page-header-right{display:flex;align-items:center;gap:8px}` +
+        `.theme-toggle{font-size:18px;line-height:1;opacity:1}` +
+        // Banner gear + settings modal
+        `.weather-banner{position:relative}` +
+        `.banner-gear{position:absolute;top:8px;right:8px;font-size:14px;opacity:0.6}` +
+        `.banner-gear:hover{opacity:1}` +
+        `.banner-list{max-height:50vh;overflow-y:auto;border:1px solid var(--ci-border);border-radius:6px;padding:4px}` +
+        `.banner-row{display:flex;align-items:center;justify-content:space-between;padding:8px 10px;border-bottom:1px solid var(--ci-border);gap:8px}` +
+        `.banner-row:last-child{border-bottom:none}` +
+        `.banner-row-check{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ci-text);flex:1;cursor:pointer}` +
+        `.banner-row-arrows{display:flex;gap:2px}` +
+        `.banner-row-arrows .btn-icon{font-size:12px;padding:4px 8px}` +
+        `.banner-row-arrows .btn-icon[disabled]{opacity:0.3;cursor:not-allowed}` +
         `*{box-sizing:border-box}` +
         `.root{display:grid;grid-template-columns:auto 1fr;height:100%;min-height:100vh}` +
         `.sidebar{width:220px;background:var(--card-background-color,#fff);border-right:1px solid var(--divider-color,rgba(0,0,0,0.12));display:flex;flex-direction:column;transition:width 0.18s ease}` +
@@ -1830,6 +2376,9 @@
         `.zone-row-name{font-weight:600;font-size:15px;color:var(--primary-text-color,#212121)}` +
         `.zone-row-badge{display:inline-block;font-size:10px;background:#bdbdbd;color:#fff;padding:1px 6px;border-radius:4px;margin-left:6px;letter-spacing:0.5px}` +
         `.zone-row-meta{font-size:11px;color:var(--secondary-text-color,#727272);margin-top:2px;word-break:break-all}` +
+        `.zone-row-climate{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}` +
+        `.zone-chip{display:inline-flex;align-items:center;gap:4px;font-size:12px;background:var(--ci-hover,var(--primary-background-color,#f0f0f0));border:1px solid var(--ci-border,rgba(0,0,0,0.08));border-radius:999px;padding:2px 8px;color:var(--ci-text,var(--primary-text-color,#212121));cursor:help}` +
+        `.zone-chip-low{background:rgba(219,68,55,0.12);border-color:#db4437;color:#db4437;font-weight:600}` +
         `.zone-row-strip{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}` +
         `.zone-day{background:var(--primary-background-color,#f6f6f6);border:1px solid var(--divider-color,rgba(0,0,0,0.08));border-radius:6px;padding:6px 4px;text-align:center;font-size:11px;cursor:default}` +
         `.zone-day-today{outline:2px solid var(--primary-color,#03a9f4);outline-offset:-2px}` +
@@ -1849,6 +2398,13 @@
         `.sensor-zone-eid{font-size:11px;color:var(--secondary-text-color,#727272);font-family:var(--ha-font-family-code,monospace);margin-top:2px}` +
         `.sensor-zone-right{display:flex;align-items:center;gap:10px}` +
         `.sensor-live{font-size:18px;font-weight:600;color:var(--primary-color,#03a9f4)}` +
+        `.sensor-low{color:#db4437 !important}` +
+        `.sensor-reading{font-variant-numeric:tabular-nums;font-weight:500}` +
+        `.sensor-reading-row .sensor-label{flex:1}` +
+        `.sensor-reading-row{justify-content:space-between}` +
+        `.sensor-combined-row{margin-top:4px;padding-top:6px;border-top:1px dashed var(--ci-border,rgba(0,0,0,0.12))}` +
+        `.sensor-reading-combined{color:var(--ci-accent,var(--primary-color,#03a9f4));font-weight:700}` +
+        `.sensor-unavailable{color:var(--secondary-text-color);font-style:italic}` +
         `.sensor-empty{font-size:12px;color:var(--secondary-text-color,#727272);padding:8px 0}` +
         `.sensor-bound{display:flex;flex-direction:column;gap:4px}` +
         `.sensor-bound-row{display:flex;gap:10px;font-size:12px;color:var(--primary-text-color,#212121)}` +
@@ -1858,6 +2414,20 @@
         `.sensor-pick{display:flex;align-items:flex-start;gap:8px;padding:6px;border-radius:4px;cursor:pointer;font-size:13px}` +
         `.sensor-pick:hover{background:var(--primary-background-color,#f6f6f6)}` +
         `.sensor-pick code{font-size:10px;color:var(--secondary-text-color,#727272)}` +
+        `.rain-pick-list{max-height:280px;overflow-y:auto;border:1px solid var(--ci-border,rgba(0,0,0,0.12));border-radius:6px;padding:6px;margin-bottom:8px}` +
+        `.rain-pick{display:flex;align-items:flex-start;gap:8px;padding:8px;border-radius:4px;cursor:pointer;font-size:13px}` +
+        `.rain-pick:hover{background:var(--ci-hover,var(--primary-background-color,#f6f6f6))}` +
+        `.rain-pick code{font-size:10px;color:var(--ci-text-2,var(--secondary-text-color,#727272))}` +
+        `.rain-live{font-size:11px;color:var(--ci-accent,var(--primary-color,#03a9f4));font-weight:600;margin-left:6px}` +
+        `.rain-primary-tag{display:inline-block;font-size:9px;background:var(--ci-accent,var(--primary-color,#03a9f4));color:#fff;padding:1px 5px;border-radius:3px;margin-left:4px;vertical-align:middle;font-weight:700;letter-spacing:0.4px}` +
+        // Settings cards
+        `.settings-card{background:var(--ci-card,var(--card-background-color,#fff));border:1px solid var(--ci-border,var(--divider-color,rgba(0,0,0,0.12)));border-radius:12px;padding:16px 20px;margin-bottom:14px;max-width:640px}` +
+        `.settings-card h3{margin-top:0}` +
+        `.settings-table{width:100%;font-size:13px;border-collapse:collapse}` +
+        `.settings-table td{padding:6px 0;color:var(--ci-text,var(--primary-text-color,#212121))}` +
+        `.settings-table td:first-child{color:var(--ci-text-2,var(--secondary-text-color,#727272));width:160px}` +
+        `.copy-row{display:flex;align-items:center;gap:8px;margin-top:6px}` +
+        `.copy-row code{flex:1;font-size:11px;background:var(--ci-hover,#f0f0f0);padding:6px 8px;border-radius:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}` +
         `.row-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}` +
         `.row-3 > *{min-width:0}` +
         // ── Weather tab ───────────────────────────────────────────
@@ -1906,5 +2476,5 @@
   }
 
   customElements.define(ELEMENT_NAME, CompleteIrrigationPanel);
-  console.info("[complete-irrigation] panel registered, version v1.5.2");
+  console.info("[complete-irrigation] panel registered, version v1.6.0");
 })();
