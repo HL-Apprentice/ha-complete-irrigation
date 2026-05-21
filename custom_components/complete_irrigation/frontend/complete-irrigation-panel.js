@@ -619,7 +619,7 @@
         }
         this._scheduleRender();
       } catch (err) {
-        // Pre-v1.6.0 backends don't have this command — no-op, fall
+        // Pre-v1.6.1 backends don't have this command — no-op, fall
         // back to the local-only countdown behavior.
         console.warn("[complete-irrigation] get_active_runs not available:", err);
       }
@@ -865,7 +865,7 @@
 
       return (
         `<header class="page-header"><h2>Notifications</h2>` +
-        `<span class="version-pill">v1.6.0</span></header>` +
+        `<span class="version-pill">v1.6.1</span></header>` +
         `<form class="weather-form" data-form="notifications">` +
         `<label class="enabled-check"><input type="checkbox" name="enabled"${
           enabled ? " checked" : ""
@@ -947,7 +947,7 @@
 
       return (
         `<header class="page-header"><h2>Settings</h2>` +
-        `<span class="version-pill">v1.6.0</span></header>` +
+        `<span class="version-pill">v1.6.1</span></header>` +
         `<section class="settings-card">` +
         `<h3 class="section-title">Theme</h3>` +
         `<p class="section-hint">Current: <strong>${escapeHtml(themeLabel)}</strong>. Use the ☀️/🌙 button on the Today screen to cycle: Light → Dark → Auto.</p>` +
@@ -960,7 +960,7 @@
         `<section class="settings-card">` +
         `<h3 class="section-title">About</h3>` +
         `<table class="settings-table">` +
-        `<tr><td>Version</td><td><strong>v1.6.0</strong></td></tr>` +
+        `<tr><td>Version</td><td><strong>v1.6.1</strong></td></tr>` +
         `<tr><td>Repository</td><td><a href="${repoUrl}" target="_blank">${escapeHtml(repoUrl)}</a></td></tr>` +
         `<tr><td>Zones configured</td><td>${(this._panel?.config?.zones || []).length}</td></tr>` +
         `<tr><td>Schedules</td><td>${(this._schedules || []).length}</td></tr>` +
@@ -1003,7 +1003,7 @@
       return (
         `<header class="page-header"><h2>Today</h2>` +
         `<div class="page-header-right">${themeBtn}` +
-        `<span class="version-pill">v1.6.0</span></div></header>` +
+        `<span class="version-pill">v1.6.1</span></div></header>` +
         this._renderRainLockoutBanner() +
         this._renderWeatherBanner() +
         `<section>` +
@@ -1212,7 +1212,7 @@
           `<span style="font-size:20px">🌤️</span>` +
           `<div style="flex:1">` +
           `<div style="font-weight:600;font-size:13px">No weather data found yet</div>` +
-          `<div style="font-size:12px;color:var(--secondary-text-color)">` +
+          `<div style="font-size:12px;color:var(--ci-text-2)">` +
           `Install a weather integration or bind sensors in the Weather tab.` +
           `</div></div>` +
           gear +
@@ -1449,14 +1449,14 @@
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Zones</h2>` +
-          `<span class="version-pill">v1.6.0</span></header>` +
+          `<span class="version-pill">v1.6.1</span></header>` +
           `<div class="empty"><p>No zones configured. Add them via Settings → Devices &amp; Services.</p></div>`
         );
       }
       const rows = zones.map((z) => this._renderZoneRow(z)).join("");
       return (
         `<header class="page-header"><h2>Zones</h2>` +
-        `<span class="version-pill">v1.6.0</span></header>` +
+        `<span class="version-pill">v1.6.1</span></header>` +
         `<p class="section-hint">Hidden zones still run on schedule — they're just hidden from the Today view.</p>` +
         `<div class="zones-list">${rows}</div>`
       );
@@ -1624,7 +1624,7 @@
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Sensors</h2>` +
-          `<span class="version-pill">v1.6.0</span></header>` +
+          `<span class="version-pill">v1.6.1</span></header>` +
           `<div class="empty"><p>No zones configured.</p></div>`
         );
       }
@@ -1633,7 +1633,7 @@
         .join("");
       return (
         `<header class="page-header"><h2>Sensors</h2>` +
-        `<span class="version-pill">v1.6.0</span></header>` +
+        `<span class="version-pill">v1.6.1</span></header>` +
         `<p class="section-hint">Bind soil-moisture sensors to a zone so runtimes auto-adjust based on actual moisture. You can attach one sensor or several (combined as average, lowest, highest, or just the primary).</p>` +
         `<div class="sensor-zone-list">${cards}</div>`
       );
@@ -1972,7 +1972,7 @@
 
       return (
         `<header class="page-header"><h2>Weather</h2>` +
-        `<span class="version-pill">v1.6.0</span></header>` +
+        `<span class="version-pill">v1.6.1</span></header>` +
         lockoutHtml +
         forecastHtml +
         `<form class="weather-form" data-form="weather">` +
@@ -2234,7 +2234,11 @@
         // follow the user's HA theme. When [data-theme="dark"] is set
         // on the host we override the palette to a known dark scheme so
         // the panel reads well even if HA itself is light.
-        `:host{display:block;height:100%;background:var(--primary-background-color,#fafafa);color:var(--primary-text-color,#212121);font-family:var(--paper-font-body1_-_font-family,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif);font-size:14px;--ci-bg:var(--primary-background-color,#fafafa);--ci-card:var(--card-background-color,#fff);--ci-text:var(--primary-text-color,#212121);--ci-text-2:var(--secondary-text-color,#727272);--ci-border:var(--divider-color,rgba(0,0,0,0.12));--ci-input-bg:var(--primary-background-color,#fff);--ci-hover:var(--primary-background-color,#f6f6f6);--ci-accent:var(--primary-color,#03a9f4)}` +
+        // Note: spaces after commas in the var() fallbacks here are
+        // intentional — they keep the bulk replaces of consumer rules
+        // (which use the spaceless form) from recursively pointing
+        // --ci-text → var(--ci-text). Don't reformat this line.
+        `:host{display:block;height:100%;background:var(--ci-bg);color:var(--ci-text);font-family:var(--paper-font-body1_-_font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);font-size:14px;--ci-bg:var(--primary-background-color, #fafafa);--ci-card:var(--card-background-color, #fff);--ci-text:var(--primary-text-color, #212121);--ci-text-2:var(--secondary-text-color, #727272);--ci-border:var(--divider-color, rgba(0,0,0,0.12));--ci-input-bg:var(--primary-background-color, #fff);--ci-hover:var(--primary-background-color, #f6f6f6);--ci-accent:var(--primary-color, #03a9f4)}` +
         `:host([data-theme="dark"]){--ci-bg:#121417;--ci-card:#1d2024;--ci-text:#e6e8eb;--ci-text-2:#9aa0a6;--ci-border:rgba(255,255,255,0.08);--ci-input-bg:#262a2f;--ci-hover:#2a2e34;--ci-accent:#4fc3f7;background:#121417;color:#e6e8eb}` +
         // Apply the resolved palette across the panel
         `:host([data-theme="dark"]) .sidebar{background:var(--ci-card);border-right-color:var(--ci-border)}` +
@@ -2266,67 +2270,67 @@
         `.banner-row-arrows .btn-icon[disabled]{opacity:0.3;cursor:not-allowed}` +
         `*{box-sizing:border-box}` +
         `.root{display:grid;grid-template-columns:auto 1fr;height:100%;min-height:100vh}` +
-        `.sidebar{width:220px;background:var(--card-background-color,#fff);border-right:1px solid var(--divider-color,rgba(0,0,0,0.12));display:flex;flex-direction:column;transition:width 0.18s ease}` +
+        `.sidebar{width:220px;background:var(--ci-card);border-right:1px solid var(--ci-border);display:flex;flex-direction:column;transition:width 0.18s ease}` +
         `.sidebar.collapsed{width:60px}` +
-        `.sidebar-header{display:flex;align-items:center;padding:12px;border-bottom:1px solid var(--divider-color,rgba(0,0,0,0.12));gap:8px}` +
-        `.collapse-btn{background:transparent;border:1px solid var(--divider-color,rgba(0,0,0,0.12));border-radius:6px;width:28px;height:28px;cursor:pointer;color:inherit;font-size:16px;line-height:1;display:flex;align-items:center;justify-content:center;flex-shrink:0}` +
+        `.sidebar-header{display:flex;align-items:center;padding:12px;border-bottom:1px solid var(--ci-border);gap:8px}` +
+        `.collapse-btn{background:transparent;border:1px solid var(--ci-border);border-radius:6px;width:28px;height:28px;cursor:pointer;color:inherit;font-size:16px;line-height:1;display:flex;align-items:center;justify-content:center;flex-shrink:0}` +
         `.brand{font-weight:600;white-space:nowrap;overflow:hidden}` +
         `.sidebar.collapsed .brand,.sidebar.collapsed .sidebar-label{display:none}` +
         `nav{display:flex;flex-direction:column;padding:8px 0;gap:2px}` +
-        `.sidebar-item{display:flex;align-items:center;gap:12px;padding:10px 14px;background:transparent;border:none;border-left:3px solid transparent;color:var(--secondary-text-color,#727272);font-size:14px;text-align:left;cursor:pointer;font-family:inherit}` +
-        `.sidebar-item:hover{background:var(--primary-background-color,#f6f6f6);color:var(--primary-text-color,#212121)}` +
-        `.sidebar-item.active{color:var(--primary-color,#03a9f4);background:var(--primary-background-color,rgba(3,169,244,0.08));border-left-color:var(--primary-color,#03a9f4);font-weight:500}` +
+        `.sidebar-item{display:flex;align-items:center;gap:12px;padding:10px 14px;background:transparent;border:none;border-left:3px solid transparent;color:var(--ci-text-2);font-size:14px;text-align:left;cursor:pointer;font-family:inherit}` +
+        `.sidebar-item:hover{background:var(--ci-hover);color:var(--ci-text)}` +
+        `.sidebar-item.active{color:var(--ci-accent);background:var(--ci-hover);border-left-color:var(--ci-accent);font-weight:500}` +
         `.sidebar-icon{width:24px;text-align:center;font-size:16px;flex-shrink:0}` +
         `main{padding:24px;overflow:auto}` +
         `.page-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;gap:12px}` +
         `.page-header h2{margin:0;font-size:22px;font-weight:600}` +
-        `.version-pill{background:var(--card-background-color,#fff);border:1px solid var(--divider-color,rgba(0,0,0,0.12));padding:4px 10px;border-radius:999px;font-size:11px;color:var(--secondary-text-color,#727272)}` +
-        `.section-title{font-size:13px;text-transform:uppercase;letter-spacing:0.05em;color:var(--secondary-text-color,#727272);margin:16px 0 8px}` +
+        `.version-pill{background:var(--ci-card);border:1px solid var(--ci-border);padding:4px 10px;border-radius:999px;font-size:11px;color:var(--ci-text-2)}` +
+        `.section-title{font-size:13px;text-transform:uppercase;letter-spacing:0.05em;color:var(--ci-text-2);margin:16px 0 8px}` +
         // Zone tiles
         `.zone-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px}` +
-        `.zone-tile{background:var(--card-background-color,#fff);border:1px solid var(--divider-color,rgba(0,0,0,0.12));border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:6px}` +
+        `.zone-tile{background:var(--ci-card);border:1px solid var(--ci-border);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:6px}` +
         `.zone-tile header{display:flex;align-items:center;gap:10px}` +
         `.zone-tile h4{margin:0;font-size:15px;font-weight:600}` +
         `.status-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}` +
         `.status-dot.idle{background:#bdbdbd}` +
         `.status-dot.running{background:#43a047;box-shadow:0 0 0 4px rgba(67,160,71,0.2)}` +
         `.status-dot.unavailable{background:#db4437}` +
-        `.entity-id{font-size:11px;color:var(--secondary-text-color,#727272);font-family:var(--ha-font-family-code,monospace);word-break:break-all}` +
-        `.status-text{font-size:12px;color:var(--secondary-text-color,#727272)}` +
+        `.entity-id{font-size:11px;color:var(--ci-text-2);font-family:var(--ha-font-family-code,monospace);word-break:break-all}` +
+        `.status-text{font-size:12px;color:var(--ci-text-2)}` +
         `.zone-actions{margin-top:8px}` +
         // Schedule list
         `.schedule-list{display:flex;flex-direction:column;gap:8px}` +
-        `.schedule-row{background:var(--card-background-color,#fff);border:1px solid var(--divider-color,rgba(0,0,0,0.12));border-radius:10px;padding:12px 14px;display:flex;align-items:center;justify-content:space-between;gap:12px}` +
+        `.schedule-row{background:var(--ci-card);border:1px solid var(--ci-border);border-radius:10px;padding:12px 14px;display:flex;align-items:center;justify-content:space-between;gap:12px}` +
         `.schedule-row.disabled{opacity:0.55}` +
         `.schedule-row-main{flex:1;min-width:0}` +
         `.schedule-name{font-weight:600;font-size:15px}` +
-        `.schedule-meta{color:var(--secondary-text-color,#727272);font-size:12px;margin-top:4px}` +
+        `.schedule-meta{color:var(--ci-text-2);font-size:12px;margin-top:4px}` +
         `.schedule-row-actions{display:flex;gap:6px;flex-shrink:0}` +
         // Buttons
-        `.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:8px 14px;border-radius:8px;border:1px solid var(--divider-color,rgba(0,0,0,0.12));background:var(--card-background-color,#fff);color:var(--primary-text-color,#212121);font-family:inherit;font-size:13px;font-weight:500;cursor:pointer}` +
-        `.btn:hover{background:var(--primary-background-color,#f6f6f6)}` +
+        `.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:8px 14px;border-radius:8px;border:1px solid var(--ci-border);background:var(--ci-card);color:var(--ci-text);font-family:inherit;font-size:13px;font-weight:500;cursor:pointer}` +
+        `.btn:hover{background:var(--ci-hover)}` +
         `.btn:disabled{opacity:0.5;cursor:not-allowed}` +
         `.btn-run,.btn-stop,.btn-primary{color:#fff}` +
-        `.btn-run{background:var(--primary-color,#03a9f4);border-color:var(--primary-color,#03a9f4);width:100%}` +
+        `.btn-run{background:var(--ci-accent);border-color:var(--ci-accent);width:100%}` +
         `.btn-stop{background:#db4437;border-color:#db4437;width:100%}` +
-        `.btn-primary{background:var(--primary-color,#03a9f4);border-color:var(--primary-color,#03a9f4)}` +
+        `.btn-primary{background:var(--ci-accent);border-color:var(--ci-accent)}` +
         // Keep colored buttons their color on hover — the generic
         // .btn:hover above would otherwise override their background.
-        `.btn-run:hover{background:var(--primary-color,#03a9f4);filter:brightness(1.08)}` +
+        `.btn-run:hover{background:var(--ci-accent);filter:brightness(1.08)}` +
         `.btn-stop:hover{background:#db4437;filter:brightness(1.08)}` +
-        `.btn-primary:hover{background:var(--primary-color,#03a9f4);filter:brightness(1.08)}` +
+        `.btn-primary:hover{background:var(--ci-accent);filter:brightness(1.08)}` +
         `.btn-secondary{background:transparent}` +
         `.btn-small{padding:6px 10px;font-size:12px}` +
-        `.empty{background:var(--card-background-color,#fff);border:1px dashed var(--divider-color,rgba(0,0,0,0.2));border-radius:12px;padding:24px;text-align:center;color:var(--secondary-text-color,#727272)}` +
-        `.placeholder{background:var(--card-background-color,#fff);border:1px solid var(--divider-color,rgba(0,0,0,0.12));border-radius:12px;padding:24px}` +
+        `.empty{background:var(--ci-card);border:1px dashed var(--ci-border);border-radius:12px;padding:24px;text-align:center;color:var(--ci-text-2)}` +
+        `.placeholder{background:var(--ci-card);border:1px solid var(--ci-border);border-radius:12px;padding:24px}` +
         // Modal
         `.modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:99}` +
-        `.modal{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--card-background-color,#fff);color:var(--primary-text-color,#212121);border-radius:12px;padding:24px;min-width:320px;max-width:90vw;z-index:100;box-shadow:0 10px 40px rgba(0,0,0,0.3)}` +
+        `.modal{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--ci-card);color:var(--ci-text);border-radius:12px;padding:24px;min-width:320px;max-width:90vw;z-index:100;box-shadow:0 10px 40px rgba(0,0,0,0.3)}` +
         `.modal-wide{min-width:420px;max-width:480px}` +
         `.modal h3{margin:0 0 16px;font-size:16px}` +
-        `.modal label{display:block;font-size:12px;color:var(--secondary-text-color,#727272);margin:10px 0 4px}` +
-        `.modal input[type=number],.modal input[type=text],.modal input[type=time],.modal input[type=date],.modal select{width:100%;min-width:0;padding:8px 10px;border:1px solid var(--divider-color,rgba(0,0,0,0.18));border-radius:6px;font-size:14px;background:var(--primary-background-color,#fff);color:inherit;font-family:inherit;box-sizing:border-box}` +
-        `.modal .hint{margin:6px 0 16px;font-size:11px;color:var(--secondary-text-color,#727272)}` +
+        `.modal label{display:block;font-size:12px;color:var(--ci-text-2);margin:10px 0 4px}` +
+        `.modal input[type=number],.modal input[type=text],.modal input[type=time],.modal input[type=date],.modal select{width:100%;min-width:0;padding:8px 10px;border:1px solid var(--ci-border);border-radius:6px;font-size:14px;background:var(--ci-input-bg);color:inherit;font-family:inherit;box-sizing:border-box}` +
+        `.modal .hint{margin:6px 0 16px;font-size:11px;color:var(--ci-text-2)}` +
         `.modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:18px}` +
         // Two-column row: min-width:0 on each cell lets <input type=time/date> shrink
         // so the right cell doesn't overflow into the left.
@@ -2335,113 +2339,113 @@
         // Duration row (hours + minutes side by side inside one cell)
         `.duration-row{display:flex;align-items:center;gap:6px}` +
         `.duration-row input{flex:1;min-width:0;text-align:center}` +
-        `.duration-unit{font-size:12px;color:var(--secondary-text-color,#727272)}` +
+        `.duration-unit{font-size:12px;color:var(--ci-text-2)}` +
         // Mode toggle (weekdays / interval radios)
         `.mode-group{display:flex;gap:8px;margin-bottom:4px}` +
-        `.mode-radio{display:inline-flex;align-items:center;gap:6px;padding:8px 12px;border:1px solid var(--divider-color,rgba(0,0,0,0.18));border-radius:6px;cursor:pointer;font-size:13px;color:var(--primary-text-color,#212121);margin:0;flex:1}` +
+        `.mode-radio{display:inline-flex;align-items:center;gap:6px;padding:8px 12px;border:1px solid var(--ci-border);border-radius:6px;cursor:pointer;font-size:13px;color:var(--ci-text);margin:0;flex:1}` +
         `.mode-radio input{margin:0}` +
         `.weekday-group{display:flex;flex-wrap:wrap;gap:6px}` +
-        `.weekday-check{display:inline-flex;align-items:center;gap:4px;padding:6px 10px;border:1px solid var(--divider-color,rgba(0,0,0,0.18));border-radius:6px;cursor:pointer;font-size:12px;color:var(--primary-text-color,#212121);margin:0}` +
+        `.weekday-check{display:inline-flex;align-items:center;gap:4px;padding:6px 10px;border:1px solid var(--ci-border);border-radius:6px;cursor:pointer;font-size:12px;color:var(--ci-text);margin:0}` +
         `.weekday-check input{margin-right:4px}` +
-        `.enabled-check{display:inline-flex;align-items:center;gap:6px;margin-top:14px;color:var(--primary-text-color,#212121);font-size:13px}` +
-        `.help-tip{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;background:var(--primary-background-color,#f0f0f0);color:var(--secondary-text-color,#727272);font-size:11px;margin-left:4px;cursor:help;vertical-align:middle}` +
-        `.help-tip:hover{background:var(--primary-color,#03a9f4);color:#fff}` +
+        `.enabled-check{display:inline-flex;align-items:center;gap:6px;margin-top:14px;color:var(--ci-text);font-size:13px}` +
+        `.help-tip{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;background:var(--ci-hover);color:var(--ci-text-2);font-size:11px;margin-left:4px;cursor:help;vertical-align:middle}` +
+        `.help-tip:hover{background:var(--ci-accent);color:#fff}` +
         // Weather banner
-        `.weather-banner{background:var(--card-background-color,#fff);border:1px solid var(--divider-color,rgba(0,0,0,0.12));border-radius:12px;padding:16px;margin-bottom:16px;display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px}` +
+        `.weather-banner{background:var(--ci-card);border:1px solid var(--ci-border);border-radius:12px;padding:16px;margin-bottom:16px;display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px}` +
         `.weather-banner-empty{display:flex;align-items:flex-start;gap:12px;grid-template-columns:none}` +
-        `.weather-banner-empty code{background:var(--primary-background-color,#f0f0f0);padding:2px 6px;border-radius:4px;font-size:11px}` +
+        `.weather-banner-empty code{background:var(--ci-hover);padding:2px 6px;border-radius:4px;font-size:11px}` +
         `.weather-cell{display:flex;align-items:center;gap:10px}` +
         `.weather-cell-icon{font-size:22px;flex-shrink:0}` +
         `.weather-cell-body{min-width:0}` +
-        `.weather-cell-label{font-size:11px;color:var(--secondary-text-color,#727272);text-transform:uppercase;letter-spacing:0.05em}` +
-        `.weather-cell-value{font-size:15px;font-weight:600;color:var(--primary-text-color,#212121);margin-top:2px}` +
+        `.weather-cell-label{font-size:11px;color:var(--ci-text-2);text-transform:uppercase;letter-spacing:0.05em}` +
+        `.weather-cell-value{font-size:15px;font-weight:600;color:var(--ci-text);margin-top:2px}` +
         // Rain lockout banner
         `.rain-lockout-banner{background:#ffa726;color:#1c1c1c;padding:12px 16px;border-radius:12px;margin-bottom:16px;display:flex;align-items:center;gap:12px}` +
         // Section title row + zone hide
         `.section-title-row{display:flex;align-items:center;justify-content:space-between;margin:16px 0 8px}` +
         `.section-title-row .section-title{margin:0}` +
-        `.btn-link{background:none;border:none;color:var(--primary-color,#03a9f4);cursor:pointer;font-size:12px;text-decoration:underline;font-family:inherit;padding:0}` +
+        `.btn-link{background:none;border:none;color:var(--ci-accent);cursor:pointer;font-size:12px;text-decoration:underline;font-family:inherit;padding:0}` +
         `.btn-icon{background:transparent;border:none;cursor:pointer;font-size:14px;padding:4px 6px;border-radius:4px;opacity:0.5;transition:opacity 0.15s}` +
-        `.btn-icon:hover{opacity:1;background:var(--primary-background-color,#f0f0f0)}` +
+        `.btn-icon:hover{opacity:1;background:var(--ci-hover)}` +
         `.zone-tile.zone-hidden{opacity:0.55;border-style:dashed}` +
         `.zone-tile header{justify-content:space-between}` +
         `.zone-tile header h4{flex:1}` +
-        `.section-hint{font-size:12px;color:var(--secondary-text-color,#727272);margin:0 0 16px}` +
+        `.section-hint{font-size:12px;color:var(--ci-text-2);margin:0 0 16px}` +
         // ── Zones tab (horizontal rows + 7-day strip) ─────────────
         `.zones-list{display:flex;flex-direction:column;gap:10px}` +
-        `.zone-row{background:var(--card-background-color,#fff);border:1px solid var(--divider-color,rgba(0,0,0,0.12));border-radius:12px;padding:14px 16px;display:grid;grid-template-columns:minmax(220px,1fr) minmax(280px,2fr) auto;gap:16px;align-items:center}` +
+        `.zone-row{background:var(--ci-card);border:1px solid var(--ci-border);border-radius:12px;padding:14px 16px;display:grid;grid-template-columns:minmax(220px,1fr) minmax(280px,2fr) auto;gap:16px;align-items:center}` +
         `.zone-row-hidden{opacity:0.55;border-style:dashed}` +
         `.zone-row-main{display:flex;align-items:center;gap:10px;min-width:0}` +
         `.zone-row-text{min-width:0}` +
-        `.zone-row-name{font-weight:600;font-size:15px;color:var(--primary-text-color,#212121)}` +
+        `.zone-row-name{font-weight:600;font-size:15px;color:var(--ci-text)}` +
         `.zone-row-badge{display:inline-block;font-size:10px;background:#bdbdbd;color:#fff;padding:1px 6px;border-radius:4px;margin-left:6px;letter-spacing:0.5px}` +
-        `.zone-row-meta{font-size:11px;color:var(--secondary-text-color,#727272);margin-top:2px;word-break:break-all}` +
+        `.zone-row-meta{font-size:11px;color:var(--ci-text-2);margin-top:2px;word-break:break-all}` +
         `.zone-row-climate{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}` +
-        `.zone-chip{display:inline-flex;align-items:center;gap:4px;font-size:12px;background:var(--ci-hover,var(--primary-background-color,#f0f0f0));border:1px solid var(--ci-border,rgba(0,0,0,0.08));border-radius:999px;padding:2px 8px;color:var(--ci-text,var(--primary-text-color,#212121));cursor:help}` +
+        `.zone-chip{display:inline-flex;align-items:center;gap:4px;font-size:12px;background:var(--ci-hover);border:1px solid var(--ci-border,rgba(0,0,0,0.08));border-radius:999px;padding:2px 8px;color:var(--ci-text);cursor:help}` +
         `.zone-chip-low{background:rgba(219,68,55,0.12);border-color:#db4437;color:#db4437;font-weight:600}` +
         `.zone-row-strip{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}` +
-        `.zone-day{background:var(--primary-background-color,#f6f6f6);border:1px solid var(--divider-color,rgba(0,0,0,0.08));border-radius:6px;padding:6px 4px;text-align:center;font-size:11px;cursor:default}` +
-        `.zone-day-today{outline:2px solid var(--primary-color,#03a9f4);outline-offset:-2px}` +
-        `.zone-day-on{background:rgba(3,169,244,0.08);border-color:var(--primary-color,#03a9f4)}` +
-        `.zone-day-label{font-weight:600;color:var(--secondary-text-color,#727272)}` +
-        `.zone-day-date{font-size:13px;color:var(--primary-text-color,#212121);margin:1px 0}` +
+        `.zone-day{background:var(--ci-hover);border:1px solid var(--ci-border);border-radius:6px;padding:6px 4px;text-align:center;font-size:11px;cursor:default}` +
+        `.zone-day-today{outline:2px solid var(--ci-accent);outline-offset:-2px}` +
+        `.zone-day-on{background:rgba(3,169,244,0.08);border-color:var(--ci-accent)}` +
+        `.zone-day-label{font-weight:600;color:var(--ci-text-2)}` +
+        `.zone-day-date{font-size:13px;color:var(--ci-text);margin:1px 0}` +
         `.zone-day-dots{display:flex;justify-content:center;gap:2px;min-height:8px;align-items:center}` +
-        `.zone-day-dot{width:5px;height:5px;border-radius:50%;background:var(--primary-color,#03a9f4)}` +
-        `.zone-day-empty{color:var(--secondary-text-color,#bdbdbd)}` +
-        `.zone-day-more{font-size:9px;color:var(--secondary-text-color,#727272);margin-left:2px}` +
+        `.zone-day-dot{width:5px;height:5px;border-radius:50%;background:var(--ci-accent)}` +
+        `.zone-day-empty{color:var(--ci-text-2)}` +
+        `.zone-day-more{font-size:9px;color:var(--ci-text-2);margin-left:2px}` +
         `.zone-row-actions{display:flex;gap:6px}` +
         // ── Sensors tab ───────────────────────────────────────────
         `.sensor-zone-list{display:flex;flex-direction:column;gap:10px}` +
-        `.sensor-zone-card{background:var(--card-background-color,#fff);border:1px solid var(--divider-color,rgba(0,0,0,0.12));border-radius:12px;padding:14px 16px}` +
+        `.sensor-zone-card{background:var(--ci-card);border:1px solid var(--ci-border);border-radius:12px;padding:14px 16px}` +
         `.sensor-zone-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}` +
         `.sensor-zone-head h4{margin:0;font-size:15px;font-weight:600}` +
-        `.sensor-zone-eid{font-size:11px;color:var(--secondary-text-color,#727272);font-family:var(--ha-font-family-code,monospace);margin-top:2px}` +
+        `.sensor-zone-eid{font-size:11px;color:var(--ci-text-2);font-family:var(--ha-font-family-code,monospace);margin-top:2px}` +
         `.sensor-zone-right{display:flex;align-items:center;gap:10px}` +
-        `.sensor-live{font-size:18px;font-weight:600;color:var(--primary-color,#03a9f4)}` +
+        `.sensor-live{font-size:18px;font-weight:600;color:var(--ci-accent)}` +
         `.sensor-low{color:#db4437 !important}` +
         `.sensor-reading{font-variant-numeric:tabular-nums;font-weight:500}` +
         `.sensor-reading-row .sensor-label{flex:1}` +
         `.sensor-reading-row{justify-content:space-between}` +
         `.sensor-combined-row{margin-top:4px;padding-top:6px;border-top:1px dashed var(--ci-border,rgba(0,0,0,0.12))}` +
-        `.sensor-reading-combined{color:var(--ci-accent,var(--primary-color,#03a9f4));font-weight:700}` +
-        `.sensor-unavailable{color:var(--secondary-text-color);font-style:italic}` +
-        `.sensor-empty{font-size:12px;color:var(--secondary-text-color,#727272);padding:8px 0}` +
+        `.sensor-reading-combined{color:var(--ci-accent);font-weight:700}` +
+        `.sensor-unavailable{color:var(--ci-text-2);font-style:italic}` +
+        `.sensor-empty{font-size:12px;color:var(--ci-text-2);padding:8px 0}` +
         `.sensor-bound{display:flex;flex-direction:column;gap:4px}` +
-        `.sensor-bound-row{display:flex;gap:10px;font-size:12px;color:var(--primary-text-color,#212121)}` +
-        `.sensor-label{min-width:80px;color:var(--secondary-text-color,#727272);font-weight:500}` +
-        `.sensor-bound code{font-size:11px;background:var(--primary-background-color,#f0f0f0);padding:1px 4px;border-radius:3px}` +
-        `.sensor-pick-list{max-height:280px;overflow-y:auto;border:1px solid var(--divider-color,rgba(0,0,0,0.12));border-radius:6px;padding:6px;margin-bottom:6px}` +
+        `.sensor-bound-row{display:flex;gap:10px;font-size:12px;color:var(--ci-text)}` +
+        `.sensor-label{min-width:80px;color:var(--ci-text-2);font-weight:500}` +
+        `.sensor-bound code{font-size:11px;background:var(--ci-hover);padding:1px 4px;border-radius:3px}` +
+        `.sensor-pick-list{max-height:280px;overflow-y:auto;border:1px solid var(--ci-border);border-radius:6px;padding:6px;margin-bottom:6px}` +
         `.sensor-pick{display:flex;align-items:flex-start;gap:8px;padding:6px;border-radius:4px;cursor:pointer;font-size:13px}` +
-        `.sensor-pick:hover{background:var(--primary-background-color,#f6f6f6)}` +
-        `.sensor-pick code{font-size:10px;color:var(--secondary-text-color,#727272)}` +
+        `.sensor-pick:hover{background:var(--ci-hover)}` +
+        `.sensor-pick code{font-size:10px;color:var(--ci-text-2)}` +
         `.rain-pick-list{max-height:280px;overflow-y:auto;border:1px solid var(--ci-border,rgba(0,0,0,0.12));border-radius:6px;padding:6px;margin-bottom:8px}` +
         `.rain-pick{display:flex;align-items:flex-start;gap:8px;padding:8px;border-radius:4px;cursor:pointer;font-size:13px}` +
-        `.rain-pick:hover{background:var(--ci-hover,var(--primary-background-color,#f6f6f6))}` +
-        `.rain-pick code{font-size:10px;color:var(--ci-text-2,var(--secondary-text-color,#727272))}` +
-        `.rain-live{font-size:11px;color:var(--ci-accent,var(--primary-color,#03a9f4));font-weight:600;margin-left:6px}` +
-        `.rain-primary-tag{display:inline-block;font-size:9px;background:var(--ci-accent,var(--primary-color,#03a9f4));color:#fff;padding:1px 5px;border-radius:3px;margin-left:4px;vertical-align:middle;font-weight:700;letter-spacing:0.4px}` +
+        `.rain-pick:hover{background:var(--ci-hover)}` +
+        `.rain-pick code{font-size:10px;color:var(--ci-text-2)}` +
+        `.rain-live{font-size:11px;color:var(--ci-accent);font-weight:600;margin-left:6px}` +
+        `.rain-primary-tag{display:inline-block;font-size:9px;background:var(--ci-accent);color:#fff;padding:1px 5px;border-radius:3px;margin-left:4px;vertical-align:middle;font-weight:700;letter-spacing:0.4px}` +
         // Settings cards
-        `.settings-card{background:var(--ci-card,var(--card-background-color,#fff));border:1px solid var(--ci-border,var(--divider-color,rgba(0,0,0,0.12)));border-radius:12px;padding:16px 20px;margin-bottom:14px;max-width:640px}` +
+        `.settings-card{background:var(--ci-card);border:1px solid var(--ci-border);border-radius:12px;padding:16px 20px;margin-bottom:14px;max-width:640px}` +
         `.settings-card h3{margin-top:0}` +
         `.settings-table{width:100%;font-size:13px;border-collapse:collapse}` +
-        `.settings-table td{padding:6px 0;color:var(--ci-text,var(--primary-text-color,#212121))}` +
-        `.settings-table td:first-child{color:var(--ci-text-2,var(--secondary-text-color,#727272));width:160px}` +
+        `.settings-table td{padding:6px 0;color:var(--ci-text)}` +
+        `.settings-table td:first-child{color:var(--ci-text-2);width:160px}` +
         `.copy-row{display:flex;align-items:center;gap:8px;margin-top:6px}` +
         `.copy-row code{flex:1;font-size:11px;background:var(--ci-hover,#f0f0f0);padding:6px 8px;border-radius:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}` +
         `.row-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}` +
         `.row-3 > *{min-width:0}` +
         // ── Weather tab ───────────────────────────────────────────
-        `.weather-form{background:var(--card-background-color,#fff);border:1px solid var(--divider-color,rgba(0,0,0,0.12));border-radius:12px;padding:16px 20px;max-width:640px}` +
+        `.weather-form{background:var(--ci-card);border:1px solid var(--ci-border);border-radius:12px;padding:16px 20px;max-width:640px}` +
         `.weather-form .section-title{margin-top:12px}` +
-        `.weather-form label{display:block;font-size:12px;color:var(--secondary-text-color,#727272);margin:10px 0 4px}` +
-        `.weather-form input,.weather-form select{width:100%;min-width:0;padding:8px 10px;border:1px solid var(--divider-color,rgba(0,0,0,0.18));border-radius:6px;font-size:14px;background:var(--primary-background-color,#fff);color:inherit;font-family:inherit;box-sizing:border-box}` +
+        `.weather-form label{display:block;font-size:12px;color:var(--ci-text-2);margin:10px 0 4px}` +
+        `.weather-form input,.weather-form select{width:100%;min-width:0;padding:8px 10px;border:1px solid var(--ci-border);border-radius:6px;font-size:14px;background:var(--ci-input-bg);color:inherit;font-family:inherit;box-sizing:border-box}` +
         `.forecast{margin-bottom:16px}` +
         `.forecast-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}` +
-        `.forecast-cell{background:var(--card-background-color,#fff);border:1px solid var(--divider-color,rgba(0,0,0,0.12));border-radius:10px;padding:12px;text-align:center}` +
-        `.forecast-date{font-size:12px;color:var(--secondary-text-color,#727272)}` +
+        `.forecast-cell{background:var(--ci-card);border:1px solid var(--ci-border);border-radius:10px;padding:12px;text-align:center}` +
+        `.forecast-date{font-size:12px;color:var(--ci-text-2)}` +
         `.forecast-icon{font-size:28px;margin:4px 0}` +
         `.forecast-label{font-size:13px;font-weight:500}` +
-        `.forecast-temp{font-size:12px;color:var(--secondary-text-color,#727272);margin-top:2px}` +
+        `.forecast-temp{font-size:12px;color:var(--ci-text-2);margin-top:2px}` +
         // Mobile
         `@media (max-width:700px){.sidebar:not(.collapsed){position:fixed;z-index:10;height:100%}.sidebar.collapsed{width:56px}.root{grid-template-columns:56px 1fr}.schedule-row{flex-direction:column;align-items:stretch}.zone-row{grid-template-columns:1fr;gap:10px}}`
       );
@@ -2476,5 +2480,5 @@
   }
 
   customElements.define(ELEMENT_NAME, CompleteIrrigationPanel);
-  console.info("[complete-irrigation] panel registered, version v1.6.0");
+  console.info("[complete-irrigation] panel registered, version v1.6.1");
 })();
