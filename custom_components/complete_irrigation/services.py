@@ -148,6 +148,10 @@ _SET_WEATHER_CONFIG_SCHEMA = vol.Schema(
         vol.Optional("temperature_sensor"): cv.entity_id,
         vol.Optional("hot_threshold_f"): vol.All(vol.Coerce(float), vol.Range(min=50, max=130)),
         vol.Optional("boost_percent"): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
+        # PRD #52 — wind-based defer. 0 (default) disables; otherwise
+        # current wind ≥ threshold causes scheduled runs to skip.
+        vol.Optional("wind_sensor"): cv.entity_id,
+        vol.Optional("wind_defer_mph"): vol.All(vol.Coerce(float), vol.Range(min=0, max=80)),
     }
 )
 
@@ -272,6 +276,30 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         # Replace any existing run for this entity (cancel old timer + listener).
         _cancel_handles(entry_data, entity_id)
 
+        # Hard-failure guard (PRD #43): if the underlying switch entity is
+        # missing or already unavailable, refuse to run and notify the user
+        # immediately instead of silently logging.
+        state = hass.states.get(entity_id)
+        coord = entry_data.get("coordinator")
+        if state is None or state.state == "unavailable":
+            _LOGGER.warning(
+                "run_zone: entity %s is %s — refusing to start",
+                entity_id,
+                "missing" if state is None else "unavailable",
+            )
+            if coord is not None and coord.notifier is not None:
+                from .notifications import CATEGORY_CRITICAL
+
+                friendly = (state.attributes.get("friendly_name") if state else None) or entity_id
+                await coord.notifier.notify(
+                    f"Cannot start {friendly} — the zone switch is "
+                    f"{'missing from HA' if state is None else 'unavailable'}.",
+                    title="Zone failed to start",
+                    category=CATEGORY_CRITICAL,
+                    event_type="zone_start_failed",
+                )
+            return
+
         # Record the run + turn the switch on.
         now = dt_util.utcnow()
         run = ManualRun(
@@ -281,12 +309,29 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         )
         entry_data["manual_runs"].start(run)
 
-        await hass.services.async_call(
-            "switch",
-            SERVICE_TURN_ON,
-            {"entity_id": entity_id},
-            blocking=False,
-        )
+        try:
+            await hass.services.async_call(
+                "switch",
+                SERVICE_TURN_ON,
+                {"entity_id": entity_id},
+                blocking=True,
+            )
+        except Exception as err:
+            # Roll back tracker + notify so the user knows the start failed
+            # even though we recorded a run.
+            entry_data["manual_runs"].stop(entity_id)
+            _LOGGER.exception("switch.turn_on failed for %s", entity_id)
+            if coord is not None and coord.notifier is not None:
+                from .notifications import CATEGORY_CRITICAL
+
+                friendly = state.attributes.get("friendly_name") or entity_id
+                await coord.notifier.notify(
+                    f"Zone {friendly} failed to start: {err}",
+                    title="Zone failed to start",
+                    category=CATEGORY_CRITICAL,
+                    event_type="zone_start_failed",
+                )
+            return
 
         # ── auto-stop timer ──
         async def _auto_stop(_now=None):
@@ -503,6 +548,8 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             "temperature_sensor",
             "hot_threshold_f",
             "boost_percent",
+            "wind_sensor",
+            "wind_defer_mph",
         ):
             if key in data:
                 coord.config[key] = data[key]
