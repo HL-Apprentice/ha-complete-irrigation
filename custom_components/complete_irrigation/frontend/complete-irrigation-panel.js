@@ -805,7 +805,7 @@
         }
         this._scheduleRender();
       } catch (err) {
-        // Pre-v1.8.0 backends don't have this command — no-op, fall
+        // Pre-v1.9.0 backends don't have this command — no-op, fall
         // back to the local-only countdown behavior.
         console.warn("[complete-irrigation] get_active_runs not available:", err);
       }
@@ -1071,7 +1071,7 @@
 
       return (
         `<header class="page-header"><h2>Notifications</h2>` +
-        `<span class="version-pill">v1.8.0</span></header>` +
+        `<span class="version-pill">v1.9.0</span></header>` +
         `<form class="weather-form" data-form="notifications">` +
         `<label class="enabled-check"><input type="checkbox" name="enabled"${
           enabled ? " checked" : ""
@@ -1157,7 +1157,7 @@
 
       return (
         `<header class="page-header"><h2>Settings</h2>` +
-        `<span class="version-pill">v1.8.0</span></header>` +
+        `<span class="version-pill">v1.9.0</span></header>` +
         `<section class="settings-card">` +
         `<h3 class="section-title">Theme ${tip("Cycle Light/Dark/Auto with the ☀️/🌙 button on Today, or pick one of your HA-installed themes below.")}</h3>` +
         `<p class="section-hint">Light/Dark/Auto: <strong>${escapeHtml(themeLabel)}</strong>.</p>` +
@@ -1207,7 +1207,7 @@
         `<section class="settings-card">` +
         `<h3 class="section-title">About</h3>` +
         `<table class="settings-table">` +
-        `<tr><td>Version</td><td><strong>v1.8.0</strong></td></tr>` +
+        `<tr><td>Version</td><td><strong>v1.9.0</strong></td></tr>` +
         `<tr><td>Repository</td><td><a href="${repoUrl}" target="_blank">${escapeHtml(repoUrl)}</a></td></tr>` +
         `<tr><td>Zones configured</td><td>${(this._panel?.config?.zones || []).length}</td></tr>` +
         `<tr><td>Schedules</td><td>${(this._schedules || []).length}</td></tr>` +
@@ -1292,7 +1292,7 @@
       return (
         `<header class="page-header"><h2>Today</h2>` +
         `<div class="page-header-right">${themeBtn}` +
-        `<span class="version-pill">v1.8.0</span></div></header>` +
+        `<span class="version-pill">v1.9.0</span></div></header>` +
         this._renderRainLockoutBanner() +
         this._renderWeatherBanner() +
         `<section>` +
@@ -1801,14 +1801,14 @@
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Zones</h2>` +
-          `<span class="version-pill">v1.8.0</span></header>` +
+          `<span class="version-pill">v1.9.0</span></header>` +
           `<div class="empty"><p>No zones configured. Add them via Settings → Devices &amp; Services.</p></div>`
         );
       }
       const rows = zones.map((z) => this._renderZoneRow(z)).join("");
       return (
         `<header class="page-header"><h2>Zones</h2>` +
-        `<span class="version-pill">v1.8.0</span></header>` +
+        `<span class="version-pill">v1.9.0</span></header>` +
         `<p class="section-hint">Hidden zones still run on schedule — they're just hidden from the Today view.</p>` +
         `<div class="zones-list">${rows}</div>`
       );
@@ -1978,7 +1978,7 @@
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Sensors</h2>` +
-          `<span class="version-pill">v1.8.0</span></header>` +
+          `<span class="version-pill">v1.9.0</span></header>` +
           `<div class="empty"><p>No zones configured.</p></div>`
         );
       }
@@ -1987,7 +1987,7 @@
         .join("");
       return (
         `<header class="page-header"><h2>Sensors</h2>` +
-        `<span class="version-pill">v1.8.0</span></header>` +
+        `<span class="version-pill">v1.9.0</span></header>` +
         `<p class="section-hint">Bind soil-moisture sensors to a zone so runtimes auto-adjust based on actual moisture. You can attach one sensor or several (combined as average, lowest, highest, or just the primary).</p>` +
         `<div class="sensor-zone-list">${cards}</div>`
       );
@@ -2341,6 +2341,8 @@
           ? [c.rain_sensor]
           : [];
       const tempSensor = c.temperature_sensor || "";
+      const windSensor = c.wind_sensor || "";
+      const windMph = c.wind_defer_mph ?? 0;
       const hotF = c.hot_threshold_f ?? 100;
       const boost = c.boost_percent ?? 25;
 
@@ -2396,7 +2398,7 @@
 
       return (
         `<header class="page-header"><h2>Weather</h2>` +
-        `<span class="version-pill">v1.8.0</span></header>` +
+        `<span class="version-pill">v1.9.0</span></header>` +
         lockoutHtml +
         forecastHtml +
         `<form class="weather-form" data-form="weather">` +
@@ -2410,6 +2412,21 @@
         `<div><label>Hot threshold (°F) ${tip("Boost runtime when temp meets or exceeds this.")}</label><input name="hot_threshold_f" type="number" min="50" max="130" step="1" value="${hotF}" /></div>` +
         `<div><label>Boost (%) ${tip("Increase runtime by this percent on hot days.")}</label><input name="boost_percent" type="number" min="0" max="100" step="1" value="${boost}" /></div>` +
         `</div>` +
+        // PRD #52 — wind defer
+        `<h3 class="section-title">Wind defer</h3>` +
+        `<label>Wind sensor (optional) ${tip("Sensor reporting current wind speed in mph. If omitted, falls back to any weather.* entity's wind_speed attribute.")}</label>` +
+        `<select name="wind_sensor"><option value="">— None (auto from weather.*) —</option>${allSensors
+          .filter((eid) => /wind|gust/i.test(eid))
+          .concat(allSensors.filter((eid) => !/wind|gust/i.test(eid)))
+          .map(
+            (eid) =>
+              `<option value="${escapeAttr(eid)}"${
+                eid === windSensor ? " selected" : ""
+              }>${escapeHtml(eid)}</option>`
+          )
+          .join("")}</select>` +
+        `<label>Wind defer threshold (mph) ${tip("Skip scheduled runs when current wind meets or exceeds this. 0 disables wind defer.")}</label>` +
+        `<input name="wind_defer_mph" type="number" min="0" max="80" step="1" value="${windMph}" />` +
         `<div class="modal-actions"><button type="submit" class="btn btn-primary">Save weather config</button></div>` +
         `</form>`
       );
@@ -2468,10 +2485,14 @@
 
       const ts = data.get("temperature_sensor");
       if (ts) payload.temperature_sensor = ts;
+      const ws = data.get("wind_sensor");
+      if (ws) payload.wind_sensor = ws;
       const hot = parseInt(data.get("hot_threshold_f"), 10);
       const boost = parseInt(data.get("boost_percent"), 10);
+      const windMph = parseFloat(data.get("wind_defer_mph"));
       if (!Number.isNaN(hot)) payload.hot_threshold_f = hot;
       if (!Number.isNaN(boost)) payload.boost_percent = boost;
+      if (Number.isFinite(windMph)) payload.wind_defer_mph = windMph;
       try {
         await this._hass.callService(
           "complete_irrigation",
@@ -2986,5 +3007,5 @@
   }
 
   customElements.define(ELEMENT_NAME, CompleteIrrigationPanel);
-  console.info("[complete-irrigation] panel registered, version v1.8.0");
+  console.info("[complete-irrigation] panel registered, version v1.9.0");
 })();

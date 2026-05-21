@@ -32,7 +32,7 @@ from .notifications import (
 )
 from .run_planner import due_runs_since, next_runs
 from .schedule import ScheduleStore
-from .weather_gate import evaluate_hot_weather, evaluate_rain_lockout
+from .weather_gate import evaluate_hot_weather, evaluate_rain_lockout, evaluate_wind_defer
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -47,6 +47,53 @@ _VALID_CONFLICT_POLICIES = {
 
 STORAGE_VERSION = 1
 TICK_SECONDS = 60
+
+
+def compute_expired_establishment_schedules(
+    schedules: list, today, already_prompted: set[str]
+) -> list:
+    """Pure-logic for PRD #76.
+
+    Returns the list of schedules whose `end_date` is on or before `today`
+    AND whose id is not in `already_prompted`. Used by the coordinator's
+    daily check to fire a "what's next?" prompt exactly once per
+    establishment window completion.
+    """
+    out = []
+    for s in schedules:
+        end_date = getattr(s, "end_date", None)
+        if end_date is None:
+            continue
+        if end_date > today:
+            continue
+        if s.id in already_prompted:
+            continue
+        out.append(s)
+    return out
+
+
+def detect_sensor_offline_transitions(
+    zones: dict, get_state, previously_offline: set[str]
+) -> tuple[set[str], set[str]]:
+    """Pure-logic for PRD #57.
+
+    Returns (newly_offline, newly_back_online) — the set of bound moisture
+    sensor entity_ids whose availability flipped since the last tick.
+    Caller is expected to merge `newly_offline` into and remove
+    `newly_back_online` from its tracked set after dispatching alerts.
+
+    A sensor is "offline" when its state is None (missing from HA) or
+    in {"unknown", "unavailable"}.
+    """
+    currently_offline: set[str] = set()
+    for zone_cfg in zones.values():
+        for eid in zone_cfg.get("moisture_entities") or []:
+            state = get_state(eid)
+            if state is None or state.state in ("unknown", "unavailable"):
+                currently_offline.add(eid)
+    newly_offline = currently_offline - previously_offline
+    newly_back_online = previously_offline - currently_offline
+    return newly_offline, newly_back_online
 
 
 def compute_low_moisture_offenders(zones: dict, get_state) -> list[str]:
@@ -141,6 +188,14 @@ class ScheduleCoordinator:
         self.notifier: NotificationDispatcher | None = None
         self._cancel_summary = None
         self._cancel_weekly = None
+        self._cancel_post_install = None
+        # Sensor-availability tracking (PRD #57): remembers which bound
+        # moisture sensors are currently offline so we only push a
+        # notification once per crossing (not on every tick).
+        self._offline_sensors: set[str] = set()
+        # End-of-establishment tracking (PRD #76): schedule ids we've
+        # already prompted about, so the prompt doesn't fire daily.
+        self._establishment_prompted: set[str] = set()
 
     @property
     def schedule_store(self) -> ScheduleStore:
@@ -199,14 +254,67 @@ class ScheduleCoordinator:
             self._hass, self._fire_weekly_reminder, hour=8, minute=0, second=0
         )
 
+        # PRD #78 — one-shot 7-day post-install reminder. Tracked in
+        # coordinator config so it only fires once per integration setup,
+        # not on every HA restart.
+        from homeassistant.helpers.event import async_call_later
+
+        first_run_at = self._config.get("first_run_at")
+        post_install_fired = self._config.get("post_install_reminder_fired", False)
+        if first_run_at is None:
+            self._config["first_run_at"] = dt_util.now().isoformat()
+            await self.async_save_config()
+            first_run_at = self._config["first_run_at"]
+        if not post_install_fired:
+            try:
+                first_dt = datetime.fromisoformat(first_run_at)
+            except (TypeError, ValueError):
+                first_dt = dt_util.now()
+            seven_days_later = first_dt + timedelta(days=7)
+            delay_seconds = (seven_days_later - dt_util.now()).total_seconds()
+            if delay_seconds <= 0:
+                # We're past the 7-day mark already — fire on next tick.
+                self._hass.async_create_task(self._fire_post_install_reminder())
+            else:
+                self._cancel_post_install = async_call_later(
+                    self._hass,
+                    delay_seconds,
+                    lambda _now: self._hass.async_create_task(self._fire_post_install_reminder()),
+                )
+
         _LOGGER.info(
             "Schedule coordinator started for entry %s — %d schedule(s) loaded",
             self._entry_id,
             len(self._store.all()),
         )
 
+    async def _fire_post_install_reminder(self) -> None:
+        """PRD #78 — fires once, 7 days after first setup, prompting the
+        user to verify schedules are firing as expected."""
+        if not self.notifier:
+            return
+        if self._config.get("post_install_reminder_fired"):
+            return
+        zone_count = len(self._config.get("zones", {}))
+        sched_count = len(self._store.all())
+        await self.notifier.notify(
+            f"Your irrigation has been running for a week. "
+            f"Currently {sched_count} schedule(s) across {zone_count} zone(s). "
+            f"Open the panel to verify recent runs look right and tune any zones.",
+            title="Irrigation: 7-day check-in",
+            category=CATEGORY_IMPORTANT,
+            event_type="post_install_reminder",
+        )
+        self._config["post_install_reminder_fired"] = True
+        await self.async_save_config()
+
     def async_unload(self) -> None:
-        for cancel_attr in ("_cancel_tick", "_cancel_summary", "_cancel_weekly"):
+        for cancel_attr in (
+            "_cancel_tick",
+            "_cancel_summary",
+            "_cancel_weekly",
+            "_cancel_post_install",
+        ):
             cancel = getattr(self, cancel_attr, None)
             if cancel:
                 cancel()
@@ -220,6 +328,72 @@ class ScheduleCoordinator:
         notif_cfg = self._config.get("notifications", {})
         if notif_cfg.get("low_moisture_alerts", True):
             await self._fire_low_moisture_summary()
+        # PRD #76: daily check for ended establishment ("New Grass") schedules
+        await self._fire_establishment_end_prompts()
+
+    async def _check_sensor_availability(self) -> None:
+        """PRD #57 — push a notification when a bound moisture sensor goes
+        offline (and a friendly 'back online' note when it recovers).
+        Only fires on the transition, not on every tick the sensor is down.
+        """
+        if not self.notifier:
+            return
+        zones = self._config.get("zones", {})
+        if not zones:
+            return
+        newly_off, newly_back = detect_sensor_offline_transitions(
+            zones,
+            lambda eid: self._hass.states.get(eid),
+            self._offline_sensors,
+        )
+        for eid in newly_off:
+            state = self._hass.states.get(eid)
+            friendly = (state.attributes.get("friendly_name") if state else None) or eid
+            await self.notifier.notify(
+                (
+                    f"Moisture sensor {friendly} is offline — "
+                    "low-moisture alerts won't fire for any zone using it "
+                    "until it comes back."
+                ),
+                title="Sensor offline",
+                category=CATEGORY_IMPORTANT,
+                event_type="sensor_offline",
+            )
+        for eid in newly_back:
+            state = self._hass.states.get(eid)
+            friendly = (state.attributes.get("friendly_name") if state else None) or eid
+            await self.notifier.notify(
+                f"Moisture sensor {friendly} is back online.",
+                title="Sensor recovered",
+                category=CATEGORY_IMPORTANT,
+                event_type="sensor_back_online",
+            )
+        # Update tracked state
+        self._offline_sensors = (self._offline_sensors | newly_off) - newly_back
+
+    async def _fire_establishment_end_prompts(self) -> None:
+        """PRD #76 — when a 'New Grass' schedule's end_date passes, prompt
+        the user to continue / extend / switch to a normal schedule.
+        Only fires once per schedule id.
+        """
+        if not self.notifier:
+            return
+        from homeassistant.util import dt as dt_util
+
+        today = dt_util.now().date()
+        expired = compute_expired_establishment_schedules(
+            self._store.all(), today, self._establishment_prompted
+        )
+        for s in expired:
+            await self.notifier.notify(
+                f"Establishment schedule '{s.name}' for {s.zone_entity_id} "
+                "has reached its end date. Continue, extend, or switch back "
+                "to a normal schedule from the Irrigation panel.",
+                title="New Grass establishment finished",
+                category=CATEGORY_IMPORTANT,
+                event_type="establishment_finished",
+            )
+            self._establishment_prompted.add(s.id)
 
     async def _fire_low_moisture_summary(self) -> None:
         """Walk zones; notify if any bound moisture sensor is below min%."""
@@ -280,6 +454,10 @@ class ScheduleCoordinator:
 
         # Evaluate rain lockout on every tick.
         await self._evaluate_lockout(now)
+
+        # PRD #57: per-tick sensor-offline detection. Pushes one
+        # notification per crossing; clears when sensor recovers.
+        await self._check_sensor_availability()
 
         last = self._last_tick
         self._last_tick = now
@@ -348,6 +526,16 @@ class ScheduleCoordinator:
                     skip_reasons.append(decision.reason)
                 else:
                     adjusted_minutes = decision.runtime_minutes
+
+        # ── Wind defer (PRD #52) ──
+        # Conservative: skip the run if current wind speed meets/exceeds
+        # the user-configured threshold. Threshold of 0 / missing → off.
+        if not skip_reasons:
+            wind_threshold = self._config.get("wind_defer_mph", 0)
+            if wind_threshold and float(wind_threshold) > 0:
+                wind = self._read_current_wind_mph()
+                if evaluate_wind_defer(wind, float(wind_threshold)):
+                    skip_reasons.append(f"wind defer (current {wind} mph >= {wind_threshold} mph)")
 
         # ── Hot weather boost (single, integration-wide for now) ──
         if not skip_reasons:
@@ -448,3 +636,31 @@ class ScheduleCoordinator:
             return float(state.state)
         except (TypeError, ValueError):
             return None
+
+    def _read_current_wind_mph(self) -> float | None:
+        """PRD #52 — current wind speed (mph) from configured sensor.
+
+        Prefers the explicit `wind_sensor` config key; falls back to any
+        weather.* entity's `wind_speed` attribute. Returns None when no
+        wind data is available."""
+        ent = self._config.get("wind_sensor")
+        if ent:
+            state = self._hass.states.get(ent)
+            if state is not None and state.state not in ("unknown", "unavailable"):
+                try:
+                    return float(state.state)
+                except (TypeError, ValueError):
+                    pass
+        # Fallback: scan for a weather.* entity with a wind_speed attr
+        for eid in self._hass.states.async_entity_ids("weather"):
+            state = self._hass.states.get(eid)
+            if not state:
+                continue
+            wind = state.attributes.get("wind_speed")
+            if wind is None:
+                continue
+            try:
+                return float(wind)
+            except (TypeError, ValueError):
+                continue
+        return None

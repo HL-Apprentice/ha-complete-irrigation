@@ -269,6 +269,24 @@ set_weather_config:
           max: 100
           step: 1
           mode: box
+    wind_sensor:
+      name: Wind sensor (optional)
+      description: Sensor reporting current wind speed (mph). If omitted, falls back to any `weather.*` entity's `wind_speed` attribute.
+      required: false
+      selector:
+        entity:
+          domain: sensor
+    wind_defer_mph:
+      name: Wind defer threshold (mph)
+      description: Skip scheduled runs when current wind ≥ this many mph. 0 disables wind defer entirely.
+      required: false
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 80
+          step: 1
+          mode: box
 
 set_zone_moisture:
   name: Set zone moisture config
