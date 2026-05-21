@@ -337,6 +337,25 @@ clear_rain_lockout:
   name: Clear rain lockout
   description: Manually end the current rain lockout (schedules resume immediately).
 
+set_conflict_policy:
+  name: Set schedule-conflict policy
+  description: >
+    When two schedules' run windows overlap, this picks how the coordinator
+    resolves them. Default is `defer_new` (skip the new one).
+  fields:
+    policy:
+      name: Policy
+      description: >
+        defer_new = new run skipped; shift_existing = move existing earlier
+        to make room; split_difference = move both equally apart.
+      required: true
+      selector:
+        select:
+          options:
+            - "defer_new"
+            - "shift_existing"
+            - "split_difference"
+
 set_notification_config:
   name: Set notification config
   description: Configure where to push notifications + quiet hours window.

@@ -120,6 +120,15 @@
       // Weather banner customization modal state
       this._bannerModalOpen = false;
 
+      // Forecast cache: HA 2024+ deprecated weather.* attributes.forecast
+      // in favor of the weather.get_forecasts service. We call it on demand
+      // (when the Weather tab opens) and cache by entity_id.
+      this._forecastCache = {};
+
+      // Establishment mode ("New grass") modal state
+      this._establishmentModalOpen = false;
+      this._establishmentEditor = null;
+
       // Weather + config cached from WS API
       this._config = {};
       this._configLoaded = false;
@@ -268,6 +277,8 @@
         if (action === "banner-down") return this._bannerReorder(node.dataset.key, 1);
         if (action === "test-notification") return this._testNotification();
         if (action === "copy-ical") return this._copyICalUrl();
+        if (action === "open-establishment")
+          return this._openEstablishmentModal(node.dataset.entityId, node.dataset.zoneName);
       }
     }
 
@@ -294,6 +305,11 @@
         this._saveNotificationConfig(e.target);
         return;
       }
+      if (e.target?.dataset?.form === "conflict-policy") {
+        e.preventDefault();
+        this._saveConflictPolicy(e.target);
+        return;
+      }
       if (e.target?.classList.contains("schedule-form")) {
         e.preventDefault();
         this._saveSchedule();
@@ -307,6 +323,11 @@
       if (e.target?.classList.contains("banner-settings-form")) {
         e.preventDefault();
         this._saveBannerLayout(e.target);
+        return;
+      }
+      if (e.target?.classList.contains("establishment-form")) {
+        e.preventDefault();
+        this._saveEstablishment(e.target);
         return;
       }
       if (e.target?.classList.contains("weather-form")) {
@@ -439,6 +460,12 @@
     _navigateTo(sectionId) {
       this._currentSection = sectionId;
       if (sectionId === "schedules" && !this._schedulesLoaded) this._fetchSchedules();
+      if (sectionId === "weather") {
+        const w = this._findWeatherEntity();
+        if (w && !this._forecastCache[w.entity_id]) {
+          this._fetchForecast(w.entity_id);
+        }
+      }
       this._renderNow();
     }
 
@@ -482,6 +509,8 @@
       this._sensorModalOpen = false;
       this._sensorEditor = null;
       this._bannerModalOpen = false;
+      this._establishmentModalOpen = false;
+      this._establishmentEditor = null;
       this._renderNow();
     }
 
@@ -619,7 +648,7 @@
         }
         this._scheduleRender();
       } catch (err) {
-        // Pre-v1.6.1 backends don't have this command — no-op, fall
+        // Pre-v1.7.0 backends don't have this command — no-op, fall
         // back to the local-only countdown behavior.
         console.warn("[complete-irrigation] get_active_runs not available:", err);
       }
@@ -815,7 +844,8 @@
         (this._runModalOpen ? this._renderRunModal() : "") +
         (this._scheduleModalOpen ? this._renderScheduleModal() : "") +
         (this._sensorModalOpen ? this._renderSensorModal() : "") +
-        (this._bannerModalOpen ? this._renderBannerSettingsModal() : "");
+        (this._bannerModalOpen ? this._renderBannerSettingsModal() : "") +
+        (this._establishmentModalOpen ? this._renderEstablishmentModal() : "");
     }
 
     _renderSection() {
@@ -865,7 +895,7 @@
 
       return (
         `<header class="page-header"><h2>Notifications</h2>` +
-        `<span class="version-pill">v1.6.1</span></header>` +
+        `<span class="version-pill">v1.7.0</span></header>` +
         `<form class="weather-form" data-form="notifications">` +
         `<label class="enabled-check"><input type="checkbox" name="enabled"${
           enabled ? " checked" : ""
@@ -945,12 +975,28 @@
       const icalUrl = "/api/complete_irrigation/calendar.ics";
       const repoUrl = "https://github.com/HL-Apprentice/ha-complete-irrigation";
 
+      const policy = c.conflict_policy || "defer_new";
+      const policyOpt = (val, label) =>
+        `<option value="${val}"${policy === val ? " selected" : ""}>${label}</option>`;
+
       return (
         `<header class="page-header"><h2>Settings</h2>` +
-        `<span class="version-pill">v1.6.1</span></header>` +
+        `<span class="version-pill">v1.7.0</span></header>` +
         `<section class="settings-card">` +
         `<h3 class="section-title">Theme</h3>` +
         `<p class="section-hint">Current: <strong>${escapeHtml(themeLabel)}</strong>. Use the ☀️/🌙 button on the Today screen to cycle: Light → Dark → Auto.</p>` +
+        `</section>` +
+        `<section class="settings-card">` +
+        `<h3 class="section-title">Schedule conflicts ${tip("When two schedules' run windows overlap, this picks how the coordinator resolves them. Applies to all schedules.")}</h3>` +
+        `<form class="weather-form" data-form="conflict-policy" style="background:transparent;border:none;padding:0;max-width:none">` +
+        `<label>Policy</label>` +
+        `<select name="policy">` +
+        policyOpt("defer_new", "Defer the new one (skip overlapping new run) — safest") +
+        policyOpt("shift_existing", "Shift existing earlier to make room") +
+        policyOpt("split_difference", "Split the difference (both move equally apart)") +
+        `</select>` +
+        `<div class="modal-actions"><button type="submit" class="btn btn-primary">Save policy</button></div>` +
+        `</form>` +
         `</section>` +
         `<section class="settings-card">` +
         `<h3 class="section-title">Calendar feed</h3>` +
@@ -960,7 +1006,7 @@
         `<section class="settings-card">` +
         `<h3 class="section-title">About</h3>` +
         `<table class="settings-table">` +
-        `<tr><td>Version</td><td><strong>v1.6.1</strong></td></tr>` +
+        `<tr><td>Version</td><td><strong>v1.7.0</strong></td></tr>` +
         `<tr><td>Repository</td><td><a href="${repoUrl}" target="_blank">${escapeHtml(repoUrl)}</a></td></tr>` +
         `<tr><td>Zones configured</td><td>${(this._panel?.config?.zones || []).length}</td></tr>` +
         `<tr><td>Schedules</td><td>${(this._schedules || []).length}</td></tr>` +
@@ -968,6 +1014,20 @@
         `<p class="section-hint" style="margin-top:12px">All configuration is also reachable via Developer Tools → Services — useful for advanced automations.</p>` +
         `</section>`
       );
+    }
+
+    async _saveConflictPolicy(form) {
+      const policy = form.querySelector('select[name="policy"]')?.value;
+      if (!policy) return;
+      try {
+        await this._hass.callService("complete_irrigation", "set_conflict_policy", {
+          policy,
+        });
+        await this._fetchConfig();
+        alert("Conflict policy saved.");
+      } catch (err) {
+        alert("Failed to save policy: " + (err?.message || err));
+      }
     }
 
     async _copyICalUrl() {
@@ -1003,7 +1063,7 @@
       return (
         `<header class="page-header"><h2>Today</h2>` +
         `<div class="page-header-right">${themeBtn}` +
-        `<span class="version-pill">v1.6.1</span></div></header>` +
+        `<span class="version-pill">v1.7.0</span></div></header>` +
         this._renderRainLockoutBanner() +
         this._renderWeatherBanner() +
         `<section>` +
@@ -1321,6 +1381,32 @@
       });
     }
 
+    async _fetchForecast(entityId) {
+      // HA 2024+ deprecated weather.* attributes.forecast in favor of the
+      // weather.get_forecasts service, which we invoke via call_service
+      // with return_response: true. Response shape:
+      //   { response: { "weather.xxx": { forecast: [...] } } }
+      if (!this._hass?.callWS) return;
+      try {
+        const resp = await this._hass.callWS({
+          type: "call_service",
+          domain: "weather",
+          service: "get_forecasts",
+          service_data: { type: "daily" },
+          target: { entity_id: entityId },
+          return_response: true,
+        });
+        const days = resp?.response?.[entityId]?.forecast;
+        if (Array.isArray(days)) {
+          this._forecastCache[entityId] = days;
+          this._renderNow();
+        }
+      } catch (err) {
+        // Some entities don't support the daily forecast call — silent fallback.
+        console.warn("[complete-irrigation] get_forecasts failed:", err?.message || err);
+      }
+    }
+
     _findWeatherEntity() {
       // Return the first weather.* entity that has a real condition state.
       // HA's weather component is the easiest way to get a current
@@ -1449,14 +1535,14 @@
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Zones</h2>` +
-          `<span class="version-pill">v1.6.1</span></header>` +
+          `<span class="version-pill">v1.7.0</span></header>` +
           `<div class="empty"><p>No zones configured. Add them via Settings → Devices &amp; Services.</p></div>`
         );
       }
       const rows = zones.map((z) => this._renderZoneRow(z)).join("");
       return (
         `<header class="page-header"><h2>Zones</h2>` +
-        `<span class="version-pill">v1.6.1</span></header>` +
+        `<span class="version-pill">v1.7.0</span></header>` +
         `<p class="section-hint">Hidden zones still run on schedule — they're just hidden from the Today view.</p>` +
         `<div class="zones-list">${rows}</div>`
       );
@@ -1478,6 +1564,8 @@
       const hideBtn = isHidden
         ? `<button class="btn btn-small" data-action="show-zone" data-entity-id="${escapeAttr(zone.entityId)}">👁️ Show in Today</button>`
         : `<button class="btn btn-small" data-action="hide-zone" data-entity-id="${escapeAttr(zone.entityId)}">🚫 Hide from Today</button>`;
+      const grassBtn =
+        `<button class="btn btn-small" data-action="open-establishment" data-entity-id="${escapeAttr(zone.entityId)}" data-zone-name="${escapeAttr(zone.name)}">🌱 New Grass</button>`;
 
       // Climate chips (temp / humidity / moisture) — show whatever the
       // user has bound to this zone. Each chip shows the averaged value
@@ -1495,7 +1583,7 @@
         (climateChips ? `<div class="zone-row-climate">${climateChips}</div>` : "") +
         `</div></div>` +
         `<div class="zone-row-strip">${dayStrip}</div>` +
-        `<div class="zone-row-actions">${hideBtn}</div>` +
+        `<div class="zone-row-actions">${grassBtn}${hideBtn}</div>` +
         `</article>`
       );
     }
@@ -1624,7 +1712,7 @@
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Sensors</h2>` +
-          `<span class="version-pill">v1.6.1</span></header>` +
+          `<span class="version-pill">v1.7.0</span></header>` +
           `<div class="empty"><p>No zones configured.</p></div>`
         );
       }
@@ -1633,7 +1721,7 @@
         .join("");
       return (
         `<header class="page-header"><h2>Sensors</h2>` +
-        `<span class="version-pill">v1.6.1</span></header>` +
+        `<span class="version-pill">v1.7.0</span></header>` +
         `<p class="section-hint">Bind soil-moisture sensors to a zone so runtimes auto-adjust based on actual moisture. You can attach one sensor or several (combined as average, lowest, highest, or just the primary).</p>` +
         `<div class="sensor-zone-list">${cards}</div>`
       );
@@ -1907,6 +1995,73 @@
       }
     }
 
+    // ── New grass establishment modal ──────────────────────────────
+    _openEstablishmentModal(entityId, zoneName) {
+      this._establishmentEditor = {
+        zone_entity_id: entityId,
+        zone_name: zoneName || entityId,
+        cycles_per_day: 3,
+        minutes_per_cycle: 10,
+        days: 12,
+        start_hour: 6,
+      };
+      this._establishmentModalOpen = true;
+      this._renderNow();
+    }
+
+    _renderEstablishmentModal() {
+      const e = this._establishmentEditor;
+      if (!e) return "";
+      const tip = (text) =>
+        `<span class="help-tip" title="${escapeAttr(text)}" aria-label="${escapeAttr(text)}">ⓘ</span>`;
+      return (
+        `<div class="modal-backdrop"></div>` +
+        `<div class="modal modal-wide" role="dialog" aria-modal="true">` +
+        `<form class="modal-form establishment-form">` +
+        `<h3>🌱 New grass establishment for ${escapeHtml(e.zone_name)}</h3>` +
+        `<p class="section-hint">Runs multiple short cycles per day for N days to keep seed beds wet without overwatering. The zone's normal schedule is paused while establishment is active; moisture min/max thresholds are bypassed (seed beds are naturally wet).</p>` +
+        `<div class="row-2">` +
+        `<div><label>Cycles per day ${tip("How many short waterings each day. 3 is a good default for cool-season grass.")}</label><input name="cycles_per_day" type="number" min="1" max="8" step="1" value="${e.cycles_per_day}" required /></div>` +
+        `<div><label>Minutes per cycle ${tip("Length of each cycle. Keep short to avoid runoff on bare soil.")}</label><input name="minutes_per_cycle" type="number" min="1" max="60" step="1" value="${e.minutes_per_cycle}" required /></div>` +
+        `</div>` +
+        `<div class="row-2">` +
+        `<div><label>Total days ${tip("Establishment window. 12-14 days is typical until germination.")}</label><input name="days" type="number" min="1" max="60" step="1" value="${e.days}" required /></div>` +
+        `<div><label>First cycle hour (0-23) ${tip("When the first cycle of the day fires. Subsequent cycles spread evenly through the daylight hours.")}</label><input name="start_hour" type="number" min="0" max="23" step="1" value="${e.start_hour}" required /></div>` +
+        `</div>` +
+        `<div class="modal-actions">` +
+        `<button type="button" class="btn btn-secondary modal-cancel">Cancel</button>` +
+        `<button type="submit" class="btn btn-primary">Start establishment</button>` +
+        `</div>` +
+        `</form>` +
+        `</div>`
+      );
+    }
+
+    async _saveEstablishment(form) {
+      const e = this._establishmentEditor;
+      if (!e) return;
+      const data = new FormData(form);
+      const payload = {
+        zone_entity_id: e.zone_entity_id,
+        cycles_per_day: parseInt(data.get("cycles_per_day"), 10),
+        minutes_per_cycle: parseInt(data.get("minutes_per_cycle"), 10),
+        days: parseInt(data.get("days"), 10),
+        start_hour: parseInt(data.get("start_hour"), 10),
+      };
+      try {
+        await this._hass.callService(
+          "complete_irrigation",
+          "start_establishment",
+          payload
+        );
+        this._closeAllModals();
+        await this._fetchSchedules();
+        alert(`Establishment started for ${e.zone_name}.`);
+      } catch (err) {
+        alert("Failed to start establishment: " + (err?.message || err));
+      }
+    }
+
     // ── Weather tab ────────────────────────────────────────────────
     _renderWeather() {
       const c = this._config || {};
@@ -1972,7 +2127,7 @@
 
       return (
         `<header class="page-header"><h2>Weather</h2>` +
-        `<span class="version-pill">v1.6.1</span></header>` +
+        `<span class="version-pill">v1.7.0</span></header>` +
         lockoutHtml +
         forecastHtml +
         `<form class="weather-form" data-form="weather">` +
@@ -1992,7 +2147,10 @@
     }
 
     _renderForecast(weather) {
-      const fc = weather?.attributes?.forecast;
+      // Prefer the fresh forecast we fetched via service (HA 2024+ way).
+      // Fall back to the legacy attributes.forecast for older HA installs.
+      const cached = weather && this._forecastCache[weather.entity_id];
+      const fc = (cached && cached.length ? cached : null) || weather?.attributes?.forecast;
       if (!Array.isArray(fc) || fc.length === 0) return "";
       const unitT = weather.attributes.temperature_unit || "°";
       const cells = fc
@@ -2082,8 +2240,18 @@
     }
 
     _renderScheduleRow(s) {
-      const days = s.weekdays.map((d) => WEEKDAY_LABELS[d] || "?").join(" ");
+      // Recurrence label: weekdays mode lists day codes; interval mode shows "every N days".
+      const recurrence =
+        s.mode === "interval"
+          ? `every ${s.interval_days || "?"} day${s.interval_days === 1 ? "" : "s"}`
+          : (s.weekdays || []).map((d) => WEEKDAY_LABELS[d] || "?").join(" ") || "—";
       const zoneName = this._zoneName(s.zone_entity_id);
+      // Format duration as "Xh YYm" if >60 min, else "Xm"
+      const dur = s.duration_minutes;
+      const durLabel =
+        dur >= 60
+          ? `${Math.floor(dur / 60)}h ${dur % 60 ? String(dur % 60).padStart(2, "0") + "m" : ""}`.trim()
+          : `${dur}m`;
       const enabledClass = s.enabled ? "enabled" : "disabled";
       return (
         `<article class="schedule-row ${enabledClass}">` +
@@ -2092,9 +2260,7 @@
           s.enabled ? "" : " (disabled)"
         }</div>` +
         `<div class="schedule-meta">` +
-        `${escapeHtml(zoneName)} · ${s.start_time} · ${s.duration_minutes} min · ${escapeHtml(
-          days
-        )}` +
+        `${escapeHtml(zoneName)} · ${s.start_time} · ${durLabel} · ${escapeHtml(recurrence)}` +
         `</div>` +
         `</div>` +
         `<div class="schedule-row-actions">` +
@@ -2447,7 +2613,30 @@
         `.forecast-label{font-size:13px;font-weight:500}` +
         `.forecast-temp{font-size:12px;color:var(--ci-text-2);margin-top:2px}` +
         // Mobile
-        `@media (max-width:700px){.sidebar:not(.collapsed){position:fixed;z-index:10;height:100%}.sidebar.collapsed{width:56px}.root{grid-template-columns:56px 1fr}.schedule-row{flex-direction:column;align-items:stretch}.zone-row{grid-template-columns:1fr;gap:10px}}`
+        `@media (max-width:700px){` +
+        `.sidebar:not(.collapsed){position:fixed;z-index:10;height:100%}` +
+        `.sidebar.collapsed{width:56px}` +
+        `.root{grid-template-columns:56px 1fr}` +
+        `main{padding:12px}` +
+        `.page-header{flex-wrap:wrap}` +
+        `.schedule-row{flex-direction:column;align-items:stretch}` +
+        // Zones: stack name/strip/actions vertically; strip stays scrollable
+        `.zone-row{grid-template-columns:1fr;gap:10px}` +
+        `.zone-row-strip{overflow-x:auto;grid-template-columns:repeat(7,minmax(40px,1fr))}` +
+        `.zone-row-actions{flex-wrap:wrap;justify-content:flex-end}` +
+        // Modal: nearly full-width on phones
+        `.modal{min-width:0;width:calc(100vw - 24px);max-width:calc(100vw - 24px);padding:16px}` +
+        `.modal-wide{min-width:0}` +
+        // Two-column rows become single-column
+        `.row-2,.row-3{grid-template-columns:1fr}` +
+        // Weather banner: keep cells flowing
+        `.weather-banner{grid-template-columns:repeat(auto-fit,minmax(120px,1fr));padding:12px}` +
+        `.banner-gear{top:6px;right:6px}` +
+        // Sensor card head wraps so the Edit button doesn't crowd long names
+        `.sensor-zone-head{flex-wrap:wrap}` +
+        // Settings cards trim padding
+        `.settings-card{padding:14px 16px}` +
+        `}`
       );
     }
   }
@@ -2480,5 +2669,5 @@
   }
 
   customElements.define(ELEMENT_NAME, CompleteIrrigationPanel);
-  console.info("[complete-irrigation] panel registered, version v1.6.1");
+  console.info("[complete-irrigation] panel registered, version v1.7.0");
 })();

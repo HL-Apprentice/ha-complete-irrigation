@@ -171,6 +171,12 @@ _SET_NOTIFICATION_CONFIG_SCHEMA = vol.Schema(
 
 _TEST_NOTIFICATION_SCHEMA = vol.Schema({vol.Optional("message", default="Test"): cv.string})
 
+_SET_CONFLICT_POLICY_SCHEMA = vol.Schema(
+    {
+        vol.Required("policy"): vol.In(["defer_new", "shift_existing", "split_difference"]),
+    }
+)
+
 _START_ESTABLISHMENT_SCHEMA = vol.Schema(
     {
         vol.Required("zone_entity_id"): cv.entity_id,
@@ -545,6 +551,22 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         SERVICE_TEST_NOTIFICATION,
         handle_test_notification,
         schema=_TEST_NOTIFICATION_SCHEMA,
+    )
+
+    async def handle_set_conflict_policy(call: ServiceCall) -> None:
+        data = _SET_CONFLICT_POLICY_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None:
+            return
+        coord.config["conflict_policy"] = data["policy"]
+        await coord.async_save_config()
+        _LOGGER.info("Conflict policy updated: %s", data["policy"])
+
+    hass.services.async_register(
+        DOMAIN,
+        "set_conflict_policy",
+        handle_set_conflict_policy,
+        schema=_SET_CONFLICT_POLICY_SCHEMA,
     )
 
     async def handle_start_establishment(call: ServiceCall) -> None:
