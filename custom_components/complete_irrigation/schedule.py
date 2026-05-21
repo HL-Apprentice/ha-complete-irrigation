@@ -19,6 +19,44 @@ MODE_WEEKDAYS = "weekdays"
 MODE_INTERVAL = "interval"
 _VALID_MODES = (MODE_WEEKDAYS, MODE_INTERVAL)
 
+# Default gap (seconds) between back-to-back zones in a multi-zone schedule.
+# Lets the valve close fully before the next opens.
+DEFAULT_ZONE_BUFFER_SECONDS = 30
+
+
+@dataclass(frozen=True)
+class ZoneStep:
+    """One zone in a multi-zone schedule: which zone, how long.
+
+    Multi-zone schedules carry an ordered tuple of these. The schedule's
+    zone_entity_id + duration_minutes mirror the first step for
+    backward compat with single-zone consumers.
+    """
+
+    zone_entity_id: str
+    duration_minutes: int
+
+    def __post_init__(self) -> None:
+        if not self.zone_entity_id:
+            raise ValueError("ZoneStep.zone_entity_id must be set")
+        if self.duration_minutes <= 0:
+            raise ValueError(
+                f"ZoneStep.duration_minutes must be positive, got {self.duration_minutes}"
+            )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "zone_entity_id": self.zone_entity_id,
+            "duration_minutes": int(self.duration_minutes),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ZoneStep:
+        return cls(
+            zone_entity_id=data["zone_entity_id"],
+            duration_minutes=int(data["duration_minutes"]),
+        )
+
 
 @dataclass(frozen=True)
 class Schedule:
@@ -47,6 +85,11 @@ class Schedule:
     # interval mode: fire every N days starting interval_anchor
     interval_days: int | None = None
     interval_anchor: date | None = None
+    # Multi-zone: ordered tuple of ZoneStep. When non-empty the schedule
+    # fires zones back-to-back at run time (each waits for the previous to
+    # finish, plus DEFAULT_ZONE_BUFFER_SECONDS). The first step mirrors
+    # zone_entity_id + duration_minutes so single-zone consumers still work.
+    zone_steps: tuple[ZoneStep, ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
         if not self.name or not self.name.strip():
@@ -69,6 +112,30 @@ class Schedule:
                 )
             if self.interval_anchor is None:
                 raise ValueError("interval mode requires interval_anchor (start date)")
+        # Multi-zone: first step must agree with the top-level zone/duration
+        # (the top-level fields stay authoritative for legacy single-zone
+        # consumers; the steps tuple is an extension).
+        if self.zone_steps:
+            first = self.zone_steps[0]
+            if first.zone_entity_id != self.zone_entity_id:
+                raise ValueError("zone_steps[0].zone_entity_id must match top-level zone_entity_id")
+            if first.duration_minutes != self.duration_minutes:
+                raise ValueError(
+                    "zone_steps[0].duration_minutes must match top-level duration_minutes"
+                )
+
+    def all_steps(self) -> tuple[ZoneStep, ...]:
+        """Return the zone sequence. Falls back to a single ZoneStep
+        built from the top-level fields when zone_steps is empty (legacy
+        single-zone schedule)."""
+        if self.zone_steps:
+            return self.zone_steps
+        return (
+            ZoneStep(
+                zone_entity_id=self.zone_entity_id,
+                duration_minutes=self.duration_minutes,
+            ),
+        )
 
     def to_dict(self) -> dict[str, Any]:
         """Serializable form (lists + strings; HA storage stores JSON)."""
@@ -84,23 +151,23 @@ class Schedule:
             "mode": self.mode,
             "interval_days": self.interval_days,
             "interval_anchor": (self.interval_anchor.isoformat() if self.interval_anchor else None),
+            "zone_steps": [s.to_dict() for s in self.zone_steps],
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Schedule:
         """Parse from the serializable form. Backward compatible with
         pre-v1.4 schedules that have no `mode` field — they're treated
-        as weekdays-mode."""
+        as weekdays-mode. Pre-v1.8 schedules have no zone_steps."""
         hour_str, minute_str = data["start_time"].split(":")
         end_date_str = data.get("end_date")
         end_date_val = date.fromisoformat(end_date_str) if end_date_str else None
         anchor_str = data.get("interval_anchor")
         anchor_val = date.fromisoformat(anchor_str) if anchor_str else None
         mode = data.get("mode") or MODE_WEEKDAYS
+        steps_raw = data.get("zone_steps") or []
+        zone_steps = tuple(ZoneStep.from_dict(s) for s in steps_raw)
 
-        # Pre-v1.4 schedules predate the mode field. weekdays could be empty
-        # if the stored value used interval semantics implicitly — but in
-        # practice every old schedule had weekdays set.
         return cls(
             id=data["id"],
             name=data["name"],
@@ -113,6 +180,7 @@ class Schedule:
             mode=mode,
             interval_days=data.get("interval_days"),
             interval_anchor=anchor_val,
+            zone_steps=zone_steps,
         )
 
 
