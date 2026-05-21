@@ -100,6 +100,33 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "coordinator": coordinator,
     }
 
+    # PRD #13 — apply zone aliases the user set during config flow into
+    # HA's entity registry, so panels/automations show the friendly names.
+    aliases = entry.data.get("zone_aliases") or {}
+    if aliases:
+        from homeassistant.helpers import entity_registry as er
+
+        registry = er.async_get(hass)
+        for entity_id, alias in aliases.items():
+            try:
+                registry.async_update_entity(entity_id, name=alias)
+            except Exception:
+                _LOGGER.warning("Could not rename %s to %r", entity_id, alias)
+
+    # PRD #20 — seed plant category suggestions into per-zone moisture
+    # config (only when the user hasn't already set a category).
+    suggestions = entry.data.get("zone_category_suggestions") or {}
+    if suggestions:
+        zones_cfg = coordinator.config.setdefault("zones", {})
+        dirty = False
+        for entity_id, cat in suggestions.items():
+            zcfg = zones_cfg.setdefault(entity_id, {})
+            if not zcfg.get("category"):
+                zcfg["category"] = cat
+                dirty = True
+        if dirty:
+            await coordinator.async_save_config()
+
     # Register all integration services (idempotent — services are
     # shared across config entries via the _find_coordinator lookup).
     await _async_register_services(hass)

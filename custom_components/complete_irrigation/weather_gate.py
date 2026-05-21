@@ -53,3 +53,26 @@ def evaluate_hot_weather(
     if boost_percent <= 0 or daily_high_f < threshold_f:
         return HotWeatherDecision.none()
     return HotWeatherDecision(boost=True, multiplier=1.0 + boost_percent / 100.0)
+
+
+# PRD #52 — wind-based defer. Default threshold conservative; tuned for
+# typical fixed-nozzle drift (mph). Adjustable via set_weather_config.
+DEFAULT_WIND_DEFER_MPH = 15.0
+
+
+def evaluate_wind_defer(wind_mph: float | None, threshold_mph: float) -> bool:
+    """Should this run be deferred because of wind?
+
+    Returns True when the current wind speed meets or exceeds the
+    threshold. None/NaN wind values fall through as False (no wind data
+    → don't gate runs on it; user opt-in via setting the threshold).
+    """
+    if wind_mph is None:
+        return False
+    try:
+        w = float(wind_mph)
+    except (TypeError, ValueError):
+        return False
+    if threshold_mph <= 0:
+        return False
+    return w >= threshold_mph

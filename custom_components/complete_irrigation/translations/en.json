@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "HA Complete Irrigation Integration",
-        "description": "Pick the irrigation controller this integration should manage. Detected integrations are listed first; if your controller isn't in the list, pick \"manual\" and we'll show you all switches.",
+        "description": "Pick the irrigation controller this integration should manage. Detected integrations are listed first; if your controller isn't in the list, pick \"manual\" and we'll show you all switches.\n\n⚠️ Heads-up: once you create schedules here, this becomes the source of truth for irrigation. Schedules set in your controller's own app (Rachio, Hydrawise, etc.) should be paused or removed — or they'll fire alongside ours.",
         "data": {
           "controller": "Irrigation controller"
         }
@@ -14,6 +14,10 @@
         "data": {
           "zones": "Zones"
         }
+      },
+      "aliases": {
+        "title": "Name your zones",
+        "description": "Give each of your {zone_count} zone(s) a friendly name. Defaults to the current HA name. We'll auto-suggest a plant category (Lawn / Vegetable / Bushes / Citrus / Trees) based on the name — you can change it later in the Sensors tab."
       }
     },
     "abort": {

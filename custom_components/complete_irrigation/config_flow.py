@@ -20,6 +20,7 @@ from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import selector
 
+from .category_match import suggest_category as _suggest_category
 from .const import DOMAIN, NAME
 from .helpers import detect_irrigation_integrations, select_zone_candidates
 
@@ -34,6 +35,12 @@ class CompleteIrrigationConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def __init__(self) -> None:
         # `None` means manual switch-picker mode (no specific source integration).
         self._controller_domain: str | None = None
+        # Zones the user picked in step 2; held in flow state until the
+        # final create_entry call after the optional aliases step.
+        self._selected_zones: list[str] = []
+        # entity_id → current friendly name (computed before step 3) so the
+        # aliases form has sensible defaults.
+        self._zone_defaults: dict[str, str] = {}
 
     # ── Step 1: pick irrigation integration ───────────────────────────
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
@@ -119,13 +126,20 @@ class CompleteIrrigationConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         candidates = select_zone_candidates(entities, controller_domain=self._controller_domain)
 
         if user_input is not None:
-            return self.async_create_entry(
-                title=NAME,
-                data={
-                    "controller_domain": self._controller_domain,
-                    "zones": user_input.get("zones", []),
-                },
-            )
+            # Stash selections for the optional aliases step
+            self._selected_zones = user_input.get("zones", [])
+            # Pre-compute current friendly names so the aliases form has
+            # something readable to show even for entities without a name.
+            self._zone_defaults = {}
+            for c in candidates:
+                if c["entity_id"] in self._selected_zones:
+                    fallback = (
+                        c.get("name")
+                        or c.get("original_name")
+                        or c["entity_id"].split(".", 1)[-1].replace("_", " ").title()
+                    )
+                    self._zone_defaults[c["entity_id"]] = fallback
+            return await self.async_step_aliases()
 
         if not candidates:
             return self.async_abort(reason="no_zones_found")
@@ -154,3 +168,48 @@ class CompleteIrrigationConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             }
         )
         return self.async_show_form(step_id="zones", data_schema=schema)
+
+    # ── Step 3: optional rename + name-based category defaults ──────
+    async def async_step_aliases(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        """Let the user rename zones (PRD #13) before the integration commits.
+
+        Also computes a suggested plant category from the (renamed) zone
+        name (PRD #20) so the Sensors tab starts with sensible defaults.
+        """
+        if user_input is not None:
+            # Build {entity_id: alias} only for entries the user actually
+            # changed away from the default.
+            aliases = {}
+            categories = {}
+            for entity_id in self._selected_zones:
+                key = f"alias_{entity_id}"
+                alias = (user_input.get(key) or "").strip()
+                if alias and alias != self._zone_defaults.get(entity_id):
+                    aliases[entity_id] = alias
+                # Auto-suggest plant category from name
+                source_name = alias or self._zone_defaults.get(entity_id, "")
+                cat = _suggest_category(source_name)
+                if cat:
+                    categories[entity_id] = cat
+            return self.async_create_entry(
+                title=NAME,
+                data={
+                    "controller_domain": self._controller_domain,
+                    "zones": self._selected_zones,
+                    "zone_aliases": aliases,
+                    "zone_category_suggestions": categories,
+                },
+            )
+
+        # Build the form: one text field per zone, defaulted to current name.
+        schema_dict: dict[Any, Any] = {}
+        for entity_id in self._selected_zones:
+            default = self._zone_defaults.get(entity_id, entity_id)
+            schema_dict[vol.Optional(f"alias_{entity_id}", default=default)] = (
+                selector.TextSelector()
+            )
+        return self.async_show_form(
+            step_id="aliases",
+            data_schema=vol.Schema(schema_dict),
+            description_placeholders={"zone_count": str(len(self._selected_zones))},
+        )
