@@ -66,7 +66,7 @@ Use [Semantic Versioning](https://semver.org/):
 - **Minor** (`0.3.0`): new features, breaking config-flow changes, new entities
 - **Major** (`1.0.0`): first stable release; thereafter, breaking changes to entities/services
 
-Bump in both `manifest.json` AND `pyproject.toml`. Tag the commit, push the tag, GitHub auto-creates the release.
+Bump in both `manifest.json` AND `pyproject.toml`. Then publish with `scripts/release.sh vX.Y.Z` — that script tags, pushes, **and creates the GitHub Release**. HACS only reads GitHub Releases, not raw tags, so the Release step is non-negotiable.
 
 ## Workflow for a typical change
 
@@ -89,13 +89,18 @@ gh run watch
 
 # 6. If this is a release:
 #    a. Smoke-test in real HA (Check 3)
+scripts/smoke-test.sh
 #    b. Bump version in manifest.json + pyproject.toml
 #    c. Commit + push the bump
-#    d. Tag + push tag
-git tag v0.2.1
-git push origin v0.2.1
-#    e. Auto-creates GitHub release; HACS picks it up within ~15 min
+#    d. Publish — tag + push + create GitHub Release in one step:
+scripts/release.sh v0.2.1
+#    HACS picks the new Release up within ~15 min.
 ```
+
+> **Why `release.sh`?** Pushing a tag does NOT automatically create a
+> GitHub Release. HACS only reads Releases, so a tagged-but-not-released
+> version is invisible to users. `scripts/release.sh` bundles tag +
+> push + `gh release create` so the Release step can't be skipped.
 
 ## Module architecture
 
