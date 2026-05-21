@@ -2,31 +2,33 @@
 
 A Home Assistant custom integration for complete, sensor-driven irrigation control. Works with any controller that exposes zone switches.
 
-> ⚠️ **v1.0.0 is a feature-complete first release.** It has been smoke-tested against a real HA container per the 3-check protocol, and the spec items are all wired in. That said, it is brand new — back up your HA before installing, and report bugs at the [issues page](https://github.com/HL-Apprentice/ha-complete-irrigation/issues).
+> **Latest: v1.7.0.** Smoke-tested against a real HA container per the 3-check protocol every release. Back up your HA before installing; report bugs at the [issues page](https://github.com/HL-Apprentice/ha-complete-irrigation/issues).
 
-## Features (all wired in v1.0.0)
+## What it does
 
-- **Hardware-agnostic** — auto-detects Rachio, Hydrawise, RainMachine, B-Hyve, OpenSprinkler, ESPHome, and any switch-based controller via the HA entity registry
-- **Daily schedules** with time, duration, weekday pattern, enable/disable; persisted across restarts
-- **Manual Run-Now** per zone with duration popup and Stop button
-- **Calendar entity** (`calendar.complete_irrigation`) — next 30 days of planned runs in HA's Calendar dashboard
-- **iCal feed** at `/api/complete_irrigation/calendar.ics` — subscribe from any phone calendar app
-- **Conflict resolver** with three policies (defer / shift / split), 2-min auto-buffer, 2-hour cascade cap. Default: defer-new.
-- **Rain lockout** — Tempest rainfall triggers a tiered system-wide lockout (4/6/12/24h depending on accumulation)
-- **Hot weather boost** — configurable temp threshold + runtime % boost
-- **Moisture-driven runtime** — per-zone min/target/max with 4-band controller (saturated → skip; light → reduced; normal → base; urgent → +50%)
-- **Multi-sensor combine modes** per zone: average / lowest / highest / primary
-- **Notifications** via `notify.*` with quiet-hours queueing and morning summary
-- **Weekly verification reminder** (Sunday 8 AM by default)
-- **"New grass" establishment mode** — bounded multi-cycle schedule that auto-expires
-- **Custom sidebar panel** with collapsible nav (Today / Schedules / Zones / Sensors / Weather / Notifications / Settings)
-- **Iframe-sandboxed panel** so any future panel JS bug physically cannot affect HA's main frontend
+- **Hardware-agnostic** — auto-detects Rachio, Hydrawise, RainMachine, B-Hyve, OpenSprinkler, ESPHome relays, and any switch-based controller via HA's entity registry.
+- **Schedules** with weekday OR "every N days" recurrence, hours+minutes duration up to 8h, enable/disable. Persisted across restarts.
+- **Manual Run-Now** per zone with duration popup and Stop button. Tile shows "Running — 4:52 left of 10 min" — hydrates after page reload via WS so external runs (Developer Tools, automations) also show the countdown.
+- **Calendar entity** (`calendar.complete_irrigation`) + **iCal feed** at `/api/complete_irrigation/calendar.ics` for phone calendar subscription.
+- **Conflict resolver** with three policies (defer / shift earlier / split difference) — picker in the Settings tab. 2-min auto-buffer + 2-hour cascade cap.
+- **Rain lockout** — Tempest (or any rainfall sensor) triggers tiered system-wide lockout. **Multi-rain** support: bind several rain sensors; first is primary for lockout, all show on the banner.
+- **Hot weather boost** — temp threshold + runtime % boost.
+- **Moisture-driven runtime** — per-zone min/target/max with 4-band controller (saturated → skip; light → reduced; normal → base; urgent → +50%).
+- **Multi-sensor combine modes** per zone: average / lowest / highest / primary. Each sensor's reading + the combined value display side-by-side.
+- **Per-zone temperature + humidity sensors** (display-only) — chips on the Zones tab show live averaged values across multiple sensors.
+- **Notifications** via `notify.*` with master toggle, quiet hours window, morning summary, and **daily low-moisture alert** (fires once at quiet-hours-end if any zone sensor is below its min%).
+- **"New grass" establishment mode** — start from any zone row with a 🌱 button. Bounded multi-cycle schedule that auto-expires.
+- **Custom sidebar panel** with Today / Schedules / Zones / Sensors / Weather / Notifications / Settings.
+- **Light + Dark themes** — Auto follows HA/OS preference; ☀️/🌙 toggle on Today cycles Light → Dark → Auto. All text WCAG AA contrast verified.
+- **User-arrangeable weather banner** — ⚙️ gear opens a modal to show/hide and reorder cells (condition, temp, humidity, wind, UV, sunrise/sunset, etc.). Layout persists in browser.
+- **Modern 3-day forecast** — uses `weather.get_forecasts` service (HA 2024+ API) instead of the deprecated forecast attribute.
+- **Iframe-sandboxed panel** so any future panel JS bug physically cannot affect HA's main frontend.
 
 ## Hardware support
 
 | Controller integration | Auto-detected |
 |---|---|
-| Rachio (official) / `rachio_local` (biofects) | ✅ |
+| Rachio (official) / `rachio_local` | ✅ |
 | Hunter Hydrawise | ✅ |
 | RainMachine | ✅ |
 | Orbit B-Hyve | ✅ |
@@ -36,14 +38,10 @@ A Home Assistant custom integration for complete, sensor-driven irrigation contr
 
 ## Sensor support
 
-- COOLO CS-201Z (entities auto-detected)
+- COOLO CS-201Z (auto-detected)
 - THIRDREALITY Smart Soil Moisture Sensor Gen2
 - Any HA-exposed moisture sensor (Aqara, Mi Flora, Xiaomi, ESPHome, etc.)
-
-## Weather
-
-- WeatherFlow Tempest (recommended)
-- Any HA weather/sensor entity providing rainfall or temperature
+- WeatherFlow Tempest (or any HA weather/sensor entity)
 
 ## Installation (HACS)
 
@@ -54,73 +52,53 @@ A Home Assistant custom integration for complete, sensor-driven irrigation contr
 5. Walk the wizard:
    - Step 1: Pick your irrigation controller (auto-detected list, or "Manual" to pick switches yourself)
    - Step 2: Confirm which switches are irrigation zones
-6. Look at the HA sidebar — the **💧 Irrigation** panel is now there
+6. The **💧 Irrigation** panel appears in your HA sidebar.
 
-## Quick start after install
+> **Upgrading?** The panel JS URL is version-stamped (`?v=1.7.0`), so browsers will auto-fetch the new file after a HACS upgrade — no hard refresh needed.
 
-### Set up a daily schedule
-1. Sidebar → **💧 Irrigation** → Schedules → **+ Add Schedule**
-2. Fill in name, zone, start time, duration, weekdays
-3. Save. The schedule fires automatically.
+## Quick start
 
-### Connect weather (Tempest)
-Developer Tools → Services → `complete_irrigation.set_weather_config`:
-- `rain_sensor`: e.g., `sensor.tempest_rain_today` (must be in inches)
-- `temperature_sensor`: e.g., `sensor.tempest_temperature` (must be in °F)
-- `hot_threshold_f`: defaults to 100°F
-- `boost_percent`: defaults to 25
+Almost everything is configurable from the panel — no Developer Tools required.
 
-### Bind a moisture sensor to a zone
-Developer Tools → Services → `complete_irrigation.set_zone_moisture`:
-- `zone_entity_id`: e.g., `switch.front_lawn`
-- `moisture_entities`: list, e.g., `["sensor.garden_east_1_soil_moisture"]`
-- `min_pct`, `target_pct`, `max_pct`: defaults are lawn (21/31/40)
-- `combine_mode`: `average` (default), `lowest`, `highest`, `primary`
-- `category`: optional label
+### Schedules (Schedules tab)
+**+ Add Schedule** → name, zone, start time, hours + minutes duration, recurrence (weekdays OR every-N-days), enable. Save fires it on the configured cadence.
 
-### Set up notifications
-Developer Tools → Services → `complete_irrigation.set_notification_config`:
-- `notify_target`: e.g., `notify.mobile_app_your_phone`
-- `quiet_hours_start` / `quiet_hours_end`: defaults `22:00` / `07:00`
+### Moisture sensors per zone (Sensors tab)
+Click **Configure** on a zone card to bind moisture sensors. If you pick more than one, the modal requires a combine mode (Average / Lowest / Highest / Primary — no silent default). The card shows each sensor's live reading and the combined value used for irrigation decisions; min-violations show red.
 
-Then `complete_irrigation.test_notification` to verify.
+### Climate (temp + humidity) sensors per zone (Sensors tab)
+Same Configure modal has an optional **Climate sensors** section. Bind one or more temperature and humidity sensors — they show as live chips in the Zones tab (averaged when multiple).
 
-### Start "New grass" establishment mode
-Developer Tools → Services → `complete_irrigation.start_establishment`:
-- `zone_entity_id`: which zone
-- `cycles_per_day`, `minutes_per_cycle`, `days`: defaults `3`, `10`, `12`
-- `start_hour`: defaults `6`
+### Weather + rain lockout (Weather tab)
+Multi-pick rainfall sensors (first checked = primary for the lockout calc; all bound sensors show on the Today banner). Pick a temperature sensor; set hot-weather threshold and boost %. The Today banner gets a customizable ⚙️ gear to show/hide and reorder cells.
 
-The integration creates daily-recurring schedules that auto-disable after `days`.
+### Notifications (Notifications tab)
+Set notify target, master enable, quiet hours window, and toggle the daily low-moisture summary. **Send test** button verifies routing.
 
-### Subscribe your phone's calendar to upcoming runs
-Add this as an iCal subscription URL in iOS Calendar or Google Calendar:
-```
-http://<your-ha>:8123/api/complete_irrigation/calendar.ics
-```
-(Or via Nabu Casa: your remote URL with the same path.)
+### "New grass" establishment mode (Zones tab)
+Click **🌱 New Grass** on the zone you reseeded. Modal sets cycles per day, minutes per cycle, total days, start hour. The integration creates an auto-expiring schedule.
+
+### Schedule conflict policy (Settings tab)
+When two schedules' run windows overlap, pick one of: defer new (safest, default), shift existing earlier, or split the difference.
+
+### Calendar feed (Settings tab → Copy)
+Subscribe to `/api/complete_irrigation/calendar.ics` from your phone calendar app for the next 30 days of planned runs.
 
 ## All services
+
+Most users won't need these — the panel covers it. Available for advanced automations.
 
 | Service | Purpose |
 |---|---|
 | `run_zone` / `stop_zone` | Manual control with auto-stop |
 | `add_schedule` / `update_schedule` / `delete_schedule` / `set_schedule_enabled` | Schedule CRUD |
-| `set_weather_config` | Rain sensor, temperature, hot boost |
-| `set_zone_moisture` | Per-zone sensors + thresholds |
+| `set_weather_config` | Rain sensor(s), temperature, hot boost |
+| `set_zone_moisture` | Per-zone moisture/temp/humidity sensors + thresholds |
 | `clear_rain_lockout` | Manually end rain lockout |
-| `set_notification_config` | Where to send push, quiet hours |
+| `set_notification_config` | Where to send push, quiet hours, low-moisture toggle |
 | `test_notification` | Send a sample notification |
 | `start_establishment` | "New grass" multi-cycle schedule with auto-expiry |
-
-## Known limitations (v1.0.0 — addressed in v1.1+)
-
-- Panel UI for weather/sensor/moisture/notification config is service-driven; visual editor lands in v1.1
-- Conflict popup with three live options is service-driven (the resolver applies the default policy automatically); UI in v1.1
-- Calendar entity is read-only (can't drag-edit events from HA's Calendar dashboard yet)
-- Help tooltips on every setting (planned for v1.1)
-- Per-zone hot-weather boost configuration (currently integration-wide)
-- Brand assets in home-assistant/brands repo (CI skips this check until submitted)
+| `set_conflict_policy` | Global conflict resolution policy |
 
 ## Pi 4 compatible
 
@@ -129,10 +107,16 @@ Verified on HA Container in Docker. ~50 MB RAM, <1% CPU steady state on a Pi 4 4
 ## Architecture
 
 Two layers:
-- **Pure-logic deep modules** (zero HA dependency, ~120 unit tests): `Schedule`, `ScheduleStore`, `RunPlanner`, `ConflictResolver`, `MoistureGate`, `WeatherGate`, `ManualRun`, `NotificationDispatcher`
+- **Pure-logic deep modules** (zero HA dependency, ~140 unit tests): `Schedule`, `ScheduleStore`, `RunPlanner`, `ConflictResolver`, `MoistureGate`, `WeatherGate`, `ManualRun`, `NotificationDispatcher`, `compute_low_moisture_offenders`
 - **HA-coupled adapters**: `coordinator.py`, `config_flow.py`, `services.py`, `calendar.py`, `binary_sensor.py`, `ws_api.py`, `ical_view.py`, `__init__.py`
 
-See [`docs/PRD.md`](docs/PRD.md) for the full spec, [`docs/ADRs/`](docs/ADRs/) for design decisions, and [`CONTRIBUTING.md`](CONTRIBUTING.md) for the 3-check pre-push protocol every release must pass.
+Every release runs:
+1. `scripts/check.sh` — ruff lint + format + pytest + manifest sanity
+2. `scripts/smoke-test.sh` — disposable HA in Docker, verifies no integration errors
+3. Puppeteer click-tests in `dev/ui-test/` — actually exercise the panel UI in a real browser
+4. `scripts/release.sh` — tags, pushes, creates the GitHub Release (HACS reads Releases, not tags)
+
+See [`docs/PRD.md`](docs/PRD.md) for the original v1.0 spec, [`docs/ADRs/`](docs/ADRs/) for design decisions, and [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full pre-push protocol.
 
 ## License
 

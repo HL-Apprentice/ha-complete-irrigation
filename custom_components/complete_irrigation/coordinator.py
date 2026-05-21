@@ -18,7 +18,12 @@ from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
-from .conflict_resolver import POLICY_DEFER_NEW, resolve_conflicts
+from .conflict_resolver import (
+    POLICY_DEFER_NEW,
+    POLICY_SHIFT_EXISTING_EARLIER,
+    POLICY_SPLIT_DIFFERENCE,
+    resolve_conflicts,
+)
 from .const import DOMAIN
 from .moisture_gate import COMBINE_AVERAGE, combine_moisture, evaluate_moisture
 from .notifications import (
@@ -34,8 +39,49 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
+_VALID_CONFLICT_POLICIES = {
+    POLICY_DEFER_NEW,
+    POLICY_SHIFT_EXISTING_EARLIER,
+    POLICY_SPLIT_DIFFERENCE,
+}
+
 STORAGE_VERSION = 1
 TICK_SECONDS = 60
+
+
+def compute_low_moisture_offenders(zones: dict, get_state) -> list[str]:
+    """Pure-logic for the daily low-moisture summary.
+
+    Given a per-zone config map and a state-getter callable (entity_id →
+    state object with .state and .attributes, or None), return a list
+    of human-readable offender strings for any zone whose first below-
+    minimum moisture sensor is below the configured min%.
+
+    Pulled out as a top-level function so it's unit-testable without
+    standing up a real HA coordinator. The coordinator just wraps it
+    with hass.states.get + the notifier.
+    """
+    offenders: list[str] = []
+    for zone_id, zone_cfg in zones.items():
+        sensors = zone_cfg.get("moisture_entities") or []
+        min_pct = zone_cfg.get("min_pct")
+        if not sensors or min_pct is None:
+            continue
+        for eid in sensors:
+            state = get_state(eid)
+            if state is None:
+                continue
+            if state.state in ("unknown", "unavailable"):
+                continue
+            try:
+                val = float(state.state)
+            except (TypeError, ValueError):
+                continue
+            if val < float(min_pct):
+                friendly = state.attributes.get("friendly_name") or eid
+                offenders.append(f"• {zone_id}: {friendly} = {val:.1f}% (min {min_pct}%)")
+                break  # one alert per zone is enough
+    return offenders
 
 
 def _storage_key(entry_id: str, suffix: str = "schedules") -> str:
@@ -179,27 +225,10 @@ class ScheduleCoordinator:
         """Walk zones; notify if any bound moisture sensor is below min%."""
         if not self.notifier:
             return
-        zones = self._config.get("zones", {})
-        offenders: list[str] = []
-        for zone_id, zone_cfg in zones.items():
-            sensors = zone_cfg.get("moisture_entities") or []
-            min_pct = zone_cfg.get("min_pct")
-            if not sensors or min_pct is None:
-                continue
-            for eid in sensors:
-                state = self._hass.states.get(eid)
-                if state is None:
-                    continue
-                if state.state in ("unknown", "unavailable"):
-                    continue
-                try:
-                    val = float(state.state)
-                except (TypeError, ValueError):
-                    continue
-                if val < float(min_pct):
-                    friendly = state.attributes.get("friendly_name") or eid
-                    offenders.append(f"• {zone_id}: {friendly} = {val:.1f}% (min {min_pct}%)")
-                    break  # one alert per zone is enough
+        offenders = compute_low_moisture_offenders(
+            self._config.get("zones", {}),
+            lambda eid: self._hass.states.get(eid),
+        )
         if not offenders:
             return
         msg = "Moisture below minimum:\n" + "\n".join(offenders)
@@ -266,7 +295,11 @@ class ScheduleCoordinator:
             from_dt=last - timedelta(hours=2),
             until_dt=now + timedelta(hours=2),
         )
-        resolved = resolve_conflicts(upcoming, POLICY_DEFER_NEW)
+        # Honor a user-selected global conflict policy (Settings tab).
+        # Unknown / missing → keep safe default of POLICY_DEFER_NEW.
+        configured = self._config.get("conflict_policy", POLICY_DEFER_NEW)
+        policy = configured if configured in _VALID_CONFLICT_POLICIES else POLICY_DEFER_NEW
+        resolved = resolve_conflicts(upcoming, policy)
         due = due_runs_since(resolved, last, now)
 
         for run in due:
