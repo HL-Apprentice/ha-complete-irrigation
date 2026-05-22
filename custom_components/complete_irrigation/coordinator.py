@@ -372,9 +372,9 @@ class ScheduleCoordinator:
         self._offline_sensors = (self._offline_sensors | newly_off) - newly_back
 
     async def _fire_establishment_end_prompts(self) -> None:
-        """PRD #76 — when a 'New Grass' schedule's end_date passes, prompt
-        the user to continue / extend / switch to a normal schedule.
-        Only fires once per schedule id.
+        """PRD #76 — when a 'New Planting' schedule's end_date passes,
+        prompt the user to continue / extend / switch to a normal
+        schedule. Only fires once per schedule id.
         """
         if not self.notifier:
             return
@@ -389,7 +389,7 @@ class ScheduleCoordinator:
                 f"Establishment schedule '{s.name}' for {s.zone_entity_id} "
                 "has reached its end date. Continue, extend, or switch back "
                 "to a normal schedule from the Irrigation panel.",
-                title="New Grass establishment finished",
+                title="New planting establishment finished",
                 category=CATEGORY_IMPORTANT,
                 event_type="establishment_finished",
             )

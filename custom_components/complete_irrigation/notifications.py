@@ -53,6 +53,30 @@ def in_quiet_hours(now: datetime, start_str: str, end_str: str) -> bool:
     return t >= start or t < end
 
 
+def _coerce_target_list(value: Any) -> list[str]:
+    """Accept a list, comma- or newline-separated string, or None and
+    return a clean list of non-empty notify.* service paths."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        items = value
+    elif isinstance(value, str):
+        items = [p.strip() for p in value.replace("\n", ",").split(",")]
+    else:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        if not isinstance(item, str):
+            continue
+        s = item.strip()
+        if not s or s in seen:
+            continue
+        seen.add(s)
+        out.append(s)
+    return out
+
+
 class NotificationDispatcher:
     """Per-coordinator dispatcher. Owns the morning-summary queue."""
 
@@ -60,7 +84,11 @@ class NotificationDispatcher:
         self._hass = hass
         self._queue: list[dict[str, Any]] = []
         # Config (set via service):
-        self.notify_target: str | None = None  # e.g. "notify.mobile_app_pete"
+        # Legacy single target (still accepted; mirrored into _targets).
+        self.notify_target: str | None = None
+        # Multiple notify services to fan out to. Each entry looks like
+        # "notify.mobile_app_pete". Empty → fall back to notify_target.
+        self.notify_targets: list[str] = []
         self.quiet_hours_start: str = "22:00"
         self.quiet_hours_end: str = "07:00"
         self.enabled: bool = True
@@ -69,8 +97,23 @@ class NotificationDispatcher:
 
     def update_config(self, **kwargs) -> None:
         for k, v in kwargs.items():
-            if hasattr(self, k):
+            if k == "notify_targets":
+                # Normalize: accept list, comma-separated string, or None
+                self.notify_targets = _coerce_target_list(v)
+            elif hasattr(self, k):
                 setattr(self, k, v)
+
+    def _resolved_targets(self) -> list[str]:
+        """Return the list of notify.* services to fan out to.
+
+        Prefers `notify_targets` when non-empty; otherwise falls back to
+        the single `notify_target` for backward compat.
+        """
+        if self.notify_targets:
+            return list(self.notify_targets)
+        if self.notify_target:
+            return [self.notify_target]
+        return []
 
     async def notify(
         self,
@@ -116,30 +159,32 @@ class NotificationDispatcher:
             self._queue.append(payload)
 
     async def _push_now(self, payload: dict[str, Any]) -> None:
-        if not self.notify_target:
+        targets = self._resolved_targets()
+        if not targets:
             return
-        # notify_target like "notify.mobile_app_pete" → service domain "notify"
-        # service "mobile_app_pete"
-        try:
-            domain, service = self.notify_target.split(".", 1)
-        except ValueError:
-            _LOGGER.warning("notify_target must be 'notify.<service>', got %r", self.notify_target)
-            return
-        try:
-            await self._hass.services.async_call(
-                domain,
-                service,
-                {"title": payload["title"], "message": payload["message"]},
-                blocking=False,
-            )
-        except Exception:
-            _LOGGER.exception("Failed to push notification via %s", self.notify_target)
+        for target in targets:
+            # Each target like "notify.mobile_app_pete" → domain "notify",
+            # service "mobile_app_pete". One bad entry doesn't stop the rest.
+            try:
+                domain, service = target.split(".", 1)
+            except ValueError:
+                _LOGGER.warning("notify target must be 'notify.<service>', got %r", target)
+                continue
+            try:
+                await self._hass.services.async_call(
+                    domain,
+                    service,
+                    {"title": payload["title"], "message": payload["message"]},
+                    blocking=False,
+                )
+            except Exception:
+                _LOGGER.exception("Failed to push notification via %s", target)
 
     async def flush_morning_summary(self) -> None:
         """Combine queued items into one notification and send."""
         if not self._queue:
             return
-        if not self.notify_target:
+        if not self._resolved_targets():
             self._queue.clear()
             return
 
