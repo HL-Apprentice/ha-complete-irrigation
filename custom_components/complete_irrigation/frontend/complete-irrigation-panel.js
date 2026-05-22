@@ -162,13 +162,13 @@
       this._localRunDurations = {};
       this._countdownTimer = null;
 
-      // Hidden zones (per-browser, persisted)
+      // Hidden zones (per-browser, persisted). Toggled from the Zones
+      // tab only; Today simply filters them out of view.
       this._hiddenZones = new Set();
       try {
         const stored = localStorage.getItem(HIDDEN_ZONES_STORAGE_KEY);
         if (stored) this._hiddenZones = new Set(JSON.parse(stored));
       } catch (_) {}
-      this._showHidden = false;
 
       this._renderScheduled = false;
       this._onClick = this._onClick.bind(this);
@@ -287,7 +287,6 @@
           );
         if (action === "hide-zone") return this._toggleZoneHidden(node.dataset.entityId);
         if (action === "show-zone") return this._toggleZoneHidden(node.dataset.entityId);
-        if (action === "show-hidden") return this._toggleShowHidden();
         if (action === "configure-sensor")
           return this._openConfigureSensor(node.dataset.entityId);
         if (action === "clear-rain-lockout") return this._clearRainLockout();
@@ -634,11 +633,6 @@
       this._renderNow();
     }
 
-    _toggleShowHidden() {
-      this._showHidden = !this._showHidden;
-      this._renderNow();
-    }
-
     _startLocalCountdown(entityId, minutes) {
       this._localRuns[entityId] = Date.now() + minutes * 60 * 1000;
       this._localRunDurations[entityId] = minutes;
@@ -805,7 +799,7 @@
         }
         this._scheduleRender();
       } catch (err) {
-        // Pre-v1.9.0 backends don't have this command — no-op, fall
+        // Pre-v1.9.1 backends don't have this command — no-op, fall
         // back to the local-only countdown behavior.
         console.warn("[complete-irrigation] get_active_runs not available:", err);
       }
@@ -1061,7 +1055,13 @@
 
     _renderNotifications() {
       const n = (this._config && this._config.notifications) || {};
-      const target = n.notify_target || "";
+      // Merge legacy single target into the multi-list for display.
+      const targetsList = Array.isArray(n.notify_targets)
+        ? n.notify_targets
+        : n.notify_target
+        ? [n.notify_target]
+        : [];
+      const targetsText = targetsList.join("\n");
       const qStart = n.quiet_hours_start || "22:00";
       const qEnd = n.quiet_hours_end || "07:00";
       const enabled = n.enabled !== false; // default true
@@ -1071,13 +1071,14 @@
 
       return (
         `<header class="page-header"><h2>Notifications</h2>` +
-        `<span class="version-pill">v1.9.0</span></header>` +
+        `<span class="version-pill">v1.9.1</span></header>` +
         `<form class="weather-form" data-form="notifications">` +
         `<label class="enabled-check"><input type="checkbox" name="enabled"${
           enabled ? " checked" : ""
         } /> Notifications enabled ${tip("Master switch. Turn off to silence all push notifications without losing your config.")}</label>` +
-        `<label>Notify target ${tip("HA notify service like notify.mobile_app_pete_iphone. Leave blank to disable push.")}</label>` +
-        `<input name="notify_target" type="text" placeholder="notify.mobile_app_your_phone" value="${escapeAttr(target)}" />` +
+        `<label>Notify targets ${tip("One HA notify service per line (e.g. notify.mobile_app_pete_iphone). Add as many as you want — every notification fans out to all of them.")}</label>` +
+        `<textarea name="notify_targets" rows="3" placeholder="notify.mobile_app_pete_iphone\nnotify.mobile_app_pat_iphone">${escapeHtml(targetsText)}</textarea>` +
+        `<p class="section-hint" style="margin:6px 0 12px">Find your phone's notify service at <code>Developer Tools → Services</code> and search for <code>notify.mobile_app</code>.</p>` +
         `<h3 class="section-title">Quiet hours</h3>` +
         `<p class="section-hint">Non-urgent notifications received in this window are bundled into a single morning summary.</p>` +
         `<div class="row-2">` +
@@ -1098,8 +1099,18 @@
 
     async _saveNotificationConfig(form) {
       const data = new FormData(form);
+      // Parse the textarea: split on newlines + commas, trim, drop empties.
+      const raw = data.get("notify_targets") || "";
+      const targets = String(raw)
+        .split(/[\n,]+/)
+        .map((s) => s.trim())
+        .filter(Boolean);
       const payload = {
-        notify_target: data.get("notify_target") || "",
+        // Send both for compat: notify_target = first entry (legacy
+        // consumers), notify_targets = the full list (the dispatcher's
+        // preferred path).
+        notify_target: targets[0] || "",
+        notify_targets: targets,
         quiet_hours_start: data.get("quiet_hours_start") || "22:00",
         quiet_hours_end: data.get("quiet_hours_end") || "07:00",
         enabled: form.querySelector('input[name="enabled"]').checked,
@@ -1157,7 +1168,7 @@
 
       return (
         `<header class="page-header"><h2>Settings</h2>` +
-        `<span class="version-pill">v1.9.0</span></header>` +
+        `<span class="version-pill">v1.9.1</span></header>` +
         `<section class="settings-card">` +
         `<h3 class="section-title">Theme ${tip("Cycle Light/Dark/Auto with the ☀️/🌙 button on Today, or pick one of your HA-installed themes below.")}</h3>` +
         `<p class="section-hint">Light/Dark/Auto: <strong>${escapeHtml(themeLabel)}</strong>.</p>` +
@@ -1207,7 +1218,7 @@
         `<section class="settings-card">` +
         `<h3 class="section-title">About</h3>` +
         `<table class="settings-table">` +
-        `<tr><td>Version</td><td><strong>v1.9.0</strong></td></tr>` +
+        `<tr><td>Version</td><td><strong>v1.9.1</strong></td></tr>` +
         `<tr><td>Repository</td><td><a href="${repoUrl}" target="_blank">${escapeHtml(repoUrl)}</a></td></tr>` +
         `<tr><td>Zones configured</td><td>${(this._panel?.config?.zones || []).length}</td></tr>` +
         `<tr><td>Schedules</td><td>${(this._schedules || []).length}</td></tr>` +
@@ -1272,18 +1283,12 @@
 
     _renderToday() {
       const allZones = this._zones();
-      const hiddenZones = allZones.filter((z) => this._hiddenZones.has(z.entityId));
+      // Hidden zones are toggled from the Zones tab only — Today simply
+      // filters them out of view. (PRD #4 — remove the hide/show
+      // controls from Today entirely; this section title hints at the
+      // workflow so users know where to find them.)
       const visibleZones = allZones.filter((z) => !this._hiddenZones.has(z.entityId));
-      const zonesToShow = this._showHidden ? allZones : visibleZones;
-
-      let hiddenToggle = "";
-      if (hiddenZones.length > 0) {
-        hiddenToggle = `<button class="btn-link" data-action="show-hidden">${
-          this._showHidden
-            ? `Hide hidden zones (${hiddenZones.length})`
-            : `Show hidden zones (${hiddenZones.length})`
-        }</button>`;
-      }
+      const hiddenCount = allZones.length - visibleZones.length;
 
       const themeBtn =
         `<button class="btn-icon theme-toggle" data-action="toggle-theme" title="Toggle light / dark">${
@@ -1292,19 +1297,19 @@
       return (
         `<header class="page-header"><h2>Today</h2>` +
         `<div class="page-header-right">${themeBtn}` +
-        `<span class="version-pill">v1.9.0</span></div></header>` +
+        `<span class="version-pill">v1.9.1</span></div></header>` +
         this._renderRainLockoutBanner() +
         this._renderWeatherBanner() +
         `<section>` +
         `<div class="section-title-row">` +
-        `<h3 class="section-title">Zones (${visibleZones.length}${
-          hiddenZones.length ? ` + ${hiddenZones.length} hidden` : ""
-        })</h3>` +
-        hiddenToggle +
+        `<h3 class="section-title">Zones (${visibleZones.length})</h3>` +
+        (hiddenCount > 0
+          ? `<span class="section-hint" style="margin:0">${hiddenCount} zone(s) hidden — manage in the Zones tab.</span>`
+          : "") +
         `</div>` +
-        (zonesToShow.length === 0
+        (visibleZones.length === 0
           ? this._renderEmpty()
-          : `<div class="zone-grid">${zonesToShow
+          : `<div class="zone-grid">${visibleZones
               .map((z) => this._renderZoneTile(z))
               .join("")}</div>`) +
         `</section>`
@@ -1778,16 +1783,12 @@
             zone.available ? "" : " disabled"
           }>▶ Run Now</button>`;
 
-      const hideAction = isHidden
-        ? `<button class="btn-icon" data-action="show-zone" data-entity-id="${escapeAttr(zone.entityId)}" title="Show this zone">👁️</button>`
-        : `<button class="btn-icon" data-action="hide-zone" data-entity-id="${escapeAttr(zone.entityId)}" title="Hide this zone">🚫</button>`;
-
+      // PRD #4 — hide/show is managed in the Zones tab only.
       return (
         `<article class="zone-tile${isHidden ? " zone-hidden" : ""}">` +
         `<header>` +
         `<span class="status-dot ${statusClass}"></span>` +
         `<h4>${escapeHtml(zone.name)}</h4>` +
-        hideAction +
         `</header>` +
         `<div class="status-text">${statusLabel}</div>` +
         `<div class="zone-actions">${action}</div>` +
@@ -1801,14 +1802,14 @@
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Zones</h2>` +
-          `<span class="version-pill">v1.9.0</span></header>` +
+          `<span class="version-pill">v1.9.1</span></header>` +
           `<div class="empty"><p>No zones configured. Add them via Settings → Devices &amp; Services.</p></div>`
         );
       }
       const rows = zones.map((z) => this._renderZoneRow(z)).join("");
       return (
         `<header class="page-header"><h2>Zones</h2>` +
-        `<span class="version-pill">v1.9.0</span></header>` +
+        `<span class="version-pill">v1.9.1</span></header>` +
         `<p class="section-hint">Hidden zones still run on schedule — they're just hidden from the Today view.</p>` +
         `<div class="zones-list">${rows}</div>`
       );
@@ -1831,7 +1832,7 @@
         ? `<button class="btn btn-small" data-action="show-zone" data-entity-id="${escapeAttr(zone.entityId)}">👁️ Show in Today</button>`
         : `<button class="btn btn-small" data-action="hide-zone" data-entity-id="${escapeAttr(zone.entityId)}">🚫 Hide from Today</button>`;
       const grassBtn =
-        `<button class="btn btn-small" data-action="open-establishment" data-entity-id="${escapeAttr(zone.entityId)}" data-zone-name="${escapeAttr(zone.name)}">🌱 New Grass</button>`;
+        `<button class="btn btn-small" data-action="open-establishment" data-entity-id="${escapeAttr(zone.entityId)}" data-zone-name="${escapeAttr(zone.name)}">🌱 New Planting</button>`;
 
       // Climate chips (temp / humidity / moisture) — show whatever the
       // user has bound to this zone. Each chip shows the averaged value
@@ -1978,7 +1979,7 @@
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Sensors</h2>` +
-          `<span class="version-pill">v1.9.0</span></header>` +
+          `<span class="version-pill">v1.9.1</span></header>` +
           `<div class="empty"><p>No zones configured.</p></div>`
         );
       }
@@ -1987,7 +1988,7 @@
         .join("");
       return (
         `<header class="page-header"><h2>Sensors</h2>` +
-        `<span class="version-pill">v1.9.0</span></header>` +
+        `<span class="version-pill">v1.9.1</span></header>` +
         `<p class="section-hint">Bind soil-moisture sensors to a zone so runtimes auto-adjust based on actual moisture. You can attach one sensor or several (combined as average, lowest, highest, or just the primary).</p>` +
         `<div class="sensor-zone-list">${cards}</div>`
       );
@@ -2287,8 +2288,8 @@
         `<div class="modal-backdrop"></div>` +
         `<div class="modal modal-wide" role="dialog" aria-modal="true">` +
         `<form class="modal-form establishment-form">` +
-        `<h3>🌱 New grass establishment for ${escapeHtml(e.zone_name)}</h3>` +
-        `<p class="section-hint">Runs multiple short cycles per day for N days to keep seed beds wet without overwatering. The zone's normal schedule is paused while establishment is active; moisture min/max thresholds are bypassed (seed beds are naturally wet).</p>` +
+        `<h3>🌱 New planting establishment for ${escapeHtml(e.zone_name)}</h3>` +
+        `<p class="section-hint">Runs multiple short cycles per day for N days to keep newly-planted grass seed, shrubs, trees, or other plantings consistently moist. The zone's normal schedule is paused while establishment is active; moisture min/max thresholds are bypassed (the soil is intentionally kept wet).</p>` +
         `<div class="row-2">` +
         `<div><label>Cycles per day ${tip("How many short waterings each day. 3 is a good default for cool-season grass.")}</label><input name="cycles_per_day" type="number" min="1" max="8" step="1" value="${e.cycles_per_day}" required /></div>` +
         `<div><label>Minutes per cycle ${tip("Length of each cycle. Keep short to avoid runoff on bare soil.")}</label><input name="minutes_per_cycle" type="number" min="1" max="60" step="1" value="${e.minutes_per_cycle}" required /></div>` +
@@ -2398,7 +2399,7 @@
 
       return (
         `<header class="page-header"><h2>Weather</h2>` +
-        `<span class="version-pill">v1.9.0</span></header>` +
+        `<span class="version-pill">v1.9.1</span></header>` +
         lockoutHtml +
         forecastHtml +
         `<form class="weather-form" data-form="weather">` +
@@ -2653,7 +2654,7 @@
         `<select name="zone_entity_id" required>${
           zoneOpts || `<option value="">No zones configured</option>`
         }</select>` +
-        `<div class="row-2">` +
+        `<div class="row-2 schedule-time-row">` +
         `<div>` +
         `<label>Start time ${tip("Time of day (24h, local) to start the run. Defaults to 06:00.")}</label>` +
         `<input name="start_time" type="time" value="${escapeAttr(
@@ -2827,12 +2828,19 @@
         `.modal-wide{min-width:420px;max-width:480px}` +
         `.modal h3{margin:0 0 16px;font-size:16px}` +
         `.modal label{display:block;font-size:12px;color:var(--ci-text-2);margin:10px 0 4px}` +
-        `.modal input[type=number],.modal input[type=text],.modal input[type=time],.modal input[type=date],.modal select{width:100%;min-width:0;padding:8px 10px;border:1px solid var(--ci-border);border-radius:6px;font-size:14px;background:var(--ci-input-bg);color:inherit;font-family:inherit;box-sizing:border-box}` +
+        `.modal input[type=number],.modal input[type=text],.modal input[type=time],.modal input[type=date],.modal select,.modal textarea{width:100%;min-width:0;padding:8px 10px;border:1px solid var(--ci-border);border-radius:6px;font-size:14px;background:var(--ci-input-bg);color:inherit;font-family:inherit;box-sizing:border-box}` +
+        // Same shape for textareas anywhere in the panel (Notifications uses one)
+        `.weather-form textarea{width:100%;min-width:0;padding:8px 10px;border:1px solid var(--ci-border);border-radius:6px;font-size:14px;background:var(--ci-input-bg);color:inherit;font-family:inherit;box-sizing:border-box;resize:vertical}` +
         `.modal .hint{margin:6px 0 16px;font-size:11px;color:var(--ci-text-2)}` +
         `.modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:18px}` +
         // Two-column row: min-width:0 on each cell lets <input type=time/date> shrink
         // so the right cell doesn't overflow into the left.
         `.row-2{display:grid;grid-template-columns:1fr 1fr;gap:10px}` +
+        // Schedule modal time + duration row — give Start time a wider
+        // cell so the native time picker isn't cramped, since Duration
+        // is just two compact number inputs.
+        `.schedule-time-row{grid-template-columns:1.5fr 1fr}` +
+        `.schedule-time-row input[type=time]{font-size:15px;text-align:center}` +
         `.row-2 > *{min-width:0}` +
         // Duration row (hours + minutes side by side inside one cell)
         `.duration-row{display:flex;align-items:center;gap:6px}` +
@@ -3007,5 +3015,5 @@
   }
 
   customElements.define(ELEMENT_NAME, CompleteIrrigationPanel);
-  console.info("[complete-irrigation] panel registered, version v1.9.0");
+  console.info("[complete-irrigation] panel registered, version v1.9.1");
 })();

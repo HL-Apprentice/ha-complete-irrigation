@@ -396,11 +396,18 @@ set_notification_config:
   description: Configure where to push notifications + quiet hours window.
   fields:
     notify_target:
-      name: Notify target service
-      description: "Format: notify.<service> (e.g., notify.mobile_app_pete_iphone)."
+      name: Notify target service (single, legacy)
+      description: "Format: notify.<service> (e.g., notify.mobile_app_pete_iphone). Prefer `notify_targets` to send to multiple devices."
       required: false
       selector:
         text:
+    notify_targets:
+      name: Notify target services (multi)
+      description: "List of notify.<service> entries (or a comma-separated string). Each notification fans out to every entry."
+      required: false
+      example: "['notify.mobile_app_pete_iphone', 'notify.mobile_app_pat_iphone']"
+      selector:
+        object:
     quiet_hours_start:
       name: Quiet hours start
       description: "Format HH:MM (24h). Default 22:00."
