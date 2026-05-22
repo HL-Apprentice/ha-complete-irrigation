@@ -299,6 +299,8 @@
         if (action === "banner-down") return this._bannerReorder(node.dataset.key, 1);
         if (action === "test-notification") return this._testNotification();
         if (action === "copy-ical") return this._copyICalUrl();
+        if (action === "weekly-snooze-30") return this._weeklySnooze(30);
+        if (action === "weekly-unsnooze") return this._weeklySnooze(0);
         if (action === "open-establishment")
           return this._openEstablishmentModal(node.dataset.entityId, node.dataset.zoneName);
         if (action === "add-extra-step") {
@@ -359,6 +361,11 @@
       if (e.target?.dataset?.form === "manual-default") {
         e.preventDefault();
         this._saveManualDefault(e.target);
+        return;
+      }
+      if (e.target?.dataset?.form === "zone-buffer") {
+        e.preventDefault();
+        this._saveZoneBuffer(e.target);
         return;
       }
       if (e.target?.classList.contains("schedule-form")) {
@@ -799,7 +806,7 @@
         }
         this._scheduleRender();
       } catch (err) {
-        // Pre-v1.9.3 backends don't have this command — no-op, fall
+        // Pre-v1.10.0 backends don't have this command — no-op, fall
         // back to the local-only countdown behavior.
         console.warn("[complete-irrigation] get_active_runs not available:", err);
       }
@@ -1071,7 +1078,7 @@
 
       return (
         `<header class="page-header"><h2>Notifications</h2>` +
-        `<span class="version-pill">v1.9.3</span></header>` +
+        `<span class="version-pill">v1.10.0</span></header>` +
         `<form class="weather-form" data-form="notifications">` +
         `<label class="enabled-check"><input type="checkbox" name="enabled"${
           enabled ? " checked" : ""
@@ -1163,12 +1170,14 @@
       const repoUrl = "https://github.com/HL-Apprentice/ha-complete-irrigation";
 
       const policy = c.conflict_policy || "defer_new";
+      const zoneBuffer = c.zone_buffer_seconds != null ? c.zone_buffer_seconds : 30;
+      const snoozedUntil = c.weekly_reminder_snoozed_until || "";
       const policyOpt = (val, label) =>
         `<option value="${val}"${policy === val ? " selected" : ""}>${label}</option>`;
 
       return (
         `<header class="page-header"><h2>Settings</h2>` +
-        `<span class="version-pill">v1.9.3</span></header>` +
+        `<span class="version-pill">v1.10.0</span></header>` +
         `<section class="settings-card">` +
         `<h3 class="section-title">Theme ${tip("Cycle Light/Dark/Auto with the ☀️/🌙 button on Today, or pick one of your HA-installed themes below.")}</h3>` +
         `<p class="section-hint">Light/Dark/Auto: <strong>${escapeHtml(themeLabel)}</strong>.</p>` +
@@ -1202,6 +1211,25 @@
         `<div class="modal-actions"><button type="submit" class="btn btn-primary">Save policy</button></div>` +
         `</form>` +
         `</section>` +
+        // PRD #38 — configurable inter-zone buffer for multi-zone schedules
+        `<section class="settings-card">` +
+        `<h3 class="section-title">Schedule timing ${tip("Inter-zone valve-settle buffer for multi-zone schedules. Default 30s lets the previous valve close fully before the next opens.")}</h3>` +
+        `<form class="weather-form" data-form="zone-buffer" style="background:transparent;border:none;padding:0;max-width:none">` +
+        `<label>Inter-zone buffer (seconds)</label>` +
+        `<input name="zone_buffer_seconds" type="number" min="0" max="600" step="1" value="${zoneBuffer}" />` +
+        `<div class="modal-actions"><button type="submit" class="btn btn-primary">Save buffer</button></div>` +
+        `</form>` +
+        `</section>` +
+        // PRD #81 — snooze the Sunday weekly reminder
+        `<section class="settings-card">` +
+        `<h3 class="section-title">Weekly reminder ${tip("Fires every Sunday at 8 AM with a per-zone summary. Snooze for 30 days if you're on vacation.")}</h3>` +
+        (snoozedUntil
+          ? `<p class="section-hint">Snoozed until <strong>${escapeHtml(snoozedUntil)}</strong>. <button class="btn btn-small" data-action="weekly-unsnooze" type="button">Resume now</button></p>`
+          : `<p class="section-hint">Currently active.</p>`) +
+        `<div class="modal-actions">` +
+        `<button class="btn btn-secondary" type="button" data-action="weekly-snooze-30">Snooze 30 days</button>` +
+        `</div>` +
+        `</section>` +
         `<section class="settings-card">` +
         `<h3 class="section-title">Manual run default ${tip("How many minutes the Run Now popup prefills with. You can always override per-run.")}</h3>` +
         `<form class="weather-form" data-form="manual-default" style="background:transparent;border:none;padding:0;max-width:none">` +
@@ -1218,7 +1246,7 @@
         `<section class="settings-card">` +
         `<h3 class="section-title">About</h3>` +
         `<table class="settings-table">` +
-        `<tr><td>Version</td><td><strong>v1.9.3</strong></td></tr>` +
+        `<tr><td>Version</td><td><strong>v1.10.0</strong></td></tr>` +
         `<tr><td>Repository</td><td><a href="${repoUrl}" target="_blank">${escapeHtml(repoUrl)}</a></td></tr>` +
         `<tr><td>Zones configured</td><td>${(this._panel?.config?.zones || []).length}</td></tr>` +
         `<tr><td>Schedules</td><td>${(this._schedules || []).length}</td></tr>` +
@@ -1239,6 +1267,56 @@
         alert("Conflict policy saved.");
       } catch (err) {
         alert("Failed to save policy: " + (err?.message || err));
+      }
+    }
+
+    async _saveZoneBuffer(form) {
+      const seconds = parseInt(
+        form.querySelector('input[name="zone_buffer_seconds"]')?.value,
+        10
+      );
+      if (!Number.isFinite(seconds) || seconds < 0 || seconds > 600) {
+        return alert("Buffer must be 0–600 seconds.");
+      }
+      try {
+        await this._hass.callService(
+          "complete_irrigation",
+          "set_general_config",
+          { zone_buffer_seconds: seconds }
+        );
+        await this._fetchConfig();
+        alert(`Inter-zone buffer saved: ${seconds}s.`);
+      } catch (err) {
+        alert("Failed to save: " + (err?.message || err));
+      }
+    }
+
+    async _weeklySnooze(days) {
+      // 0 days = resume (clear the snooze). Otherwise snooze N days from today.
+      let payload;
+      if (days <= 0) {
+        payload = { weekly_reminder_snoozed_until: null };
+      } else {
+        const target = new Date();
+        target.setDate(target.getDate() + days);
+        // Format as YYYY-MM-DD without timezone shenanigans
+        const iso =
+          target.getFullYear() +
+          "-" +
+          String(target.getMonth() + 1).padStart(2, "0") +
+          "-" +
+          String(target.getDate()).padStart(2, "0");
+        payload = { weekly_reminder_snoozed_until: iso };
+      }
+      try {
+        await this._hass.callService(
+          "complete_irrigation",
+          "set_general_config",
+          payload
+        );
+        await this._fetchConfig();
+      } catch (err) {
+        alert("Failed: " + (err?.message || err));
       }
     }
 
@@ -1297,7 +1375,7 @@
       return (
         `<header class="page-header"><h2>Today</h2>` +
         `<div class="page-header-right">${themeBtn}` +
-        `<span class="version-pill">v1.9.3</span></div></header>` +
+        `<span class="version-pill">v1.10.0</span></div></header>` +
         this._renderRainLockoutBanner() +
         this._renderWeatherBanner() +
         `<section>` +
@@ -1810,14 +1888,14 @@
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Zones</h2>` +
-          `<span class="version-pill">v1.9.3</span></header>` +
+          `<span class="version-pill">v1.10.0</span></header>` +
           `<div class="empty"><p>No zones configured. Add them via Settings → Devices &amp; Services.</p></div>`
         );
       }
       const rows = zones.map((z) => this._renderZoneRow(z)).join("");
       return (
         `<header class="page-header"><h2>Zones</h2>` +
-        `<span class="version-pill">v1.9.3</span></header>` +
+        `<span class="version-pill">v1.10.0</span></header>` +
         `<p class="section-hint">Hidden zones still run on schedule — they're just hidden from the Today view.</p>` +
         `<div class="zones-list">${rows}</div>`
       );
@@ -2107,7 +2185,7 @@
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Sensors</h2>` +
-          `<span class="version-pill">v1.9.3</span></header>` +
+          `<span class="version-pill">v1.10.0</span></header>` +
           `<div class="empty"><p>No zones configured.</p></div>`
         );
       }
@@ -2116,7 +2194,7 @@
         .join("");
       return (
         `<header class="page-header"><h2>Sensors</h2>` +
-        `<span class="version-pill">v1.9.3</span></header>` +
+        `<span class="version-pill">v1.10.0</span></header>` +
         `<p class="section-hint">Bind soil-moisture sensors to a zone so runtimes auto-adjust based on actual moisture. You can attach one sensor or several (combined as average, lowest, highest, or just the primary).</p>` +
         `<div class="sensor-zone-list">${cards}</div>`
       );
@@ -2187,9 +2265,15 @@
               r != null
                 ? `<span class="sensor-reading${minPct != null && r.value < minPct ? " sensor-low" : ""}">${r.value.toFixed(1)}%</span>`
                 : `<span class="sensor-reading sensor-unavailable">—</span>`;
+            // PRD #23/#85 — deep-link to HA's developer-state page so
+            // users can open the entity's full details + recalibrate
+            // without leaving the panel context. target="_top" navigates
+            // the parent window out of the iframe sandbox.
+            const deepLink =
+              `/developer-tools/state?entity_id=${encodeURIComponent(eid)}`;
             return (
               `<div class="sensor-bound-row sensor-reading-row">` +
-              `<span class="sensor-label" title="${escapeAttr(eid)}">${escapeHtml(friendly)}</span>` +
+              `<a class="sensor-label sensor-link" target="_top" href="${deepLink}" title="${escapeAttr("Open " + eid + " in HA")}">${escapeHtml(friendly)}</a>` +
               valHtml +
               `</div>`
             );
@@ -2527,7 +2611,7 @@
 
       return (
         `<header class="page-header"><h2>Weather</h2>` +
-        `<span class="version-pill">v1.9.3</span></header>` +
+        `<span class="version-pill">v1.10.0</span></header>` +
         lockoutHtml +
         forecastHtml +
         `<form class="weather-form" data-form="weather">` +
@@ -3064,6 +3148,8 @@
         `.sensor-low{color:#db4437 !important}` +
         `.sensor-reading{font-variant-numeric:tabular-nums;font-weight:500}` +
         `.sensor-reading-row .sensor-label{flex:1}` +
+        `.sensor-link{color:inherit;text-decoration:none;border-bottom:1px dotted var(--ci-border)}` +
+        `.sensor-link:hover{color:var(--ci-accent);border-bottom-color:var(--ci-accent)}` +
         `.sensor-reading-row{justify-content:space-between}` +
         `.sensor-combined-row{margin-top:4px;padding-top:6px;border-top:1px dashed var(--ci-border,rgba(0,0,0,0.12))}` +
         `.sensor-reading-combined{color:var(--ci-accent);font-weight:700}` +
@@ -3162,5 +3248,5 @@
   }
 
   customElements.define(ELEMENT_NAME, CompleteIrrigationPanel);
-  console.info("[complete-irrigation] panel registered, version v1.9.3");
+  console.info("[complete-irrigation] panel registered, version v1.10.0");
 })();

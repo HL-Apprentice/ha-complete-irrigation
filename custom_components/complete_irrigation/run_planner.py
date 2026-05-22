@@ -34,8 +34,15 @@ def next_runs(
     schedules: Iterable[Schedule],
     from_dt: datetime,
     until_dt: datetime,
+    *,
+    zone_buffer_seconds: int | None = None,
 ) -> list[PlannedRun]:
-    """Return all runs in [from_dt, until_dt) sorted by start_at."""
+    """Return all runs in [from_dt, until_dt) sorted by start_at.
+
+    `zone_buffer_seconds` controls the inter-zone valve-settle gap for
+    multi-zone schedules (PRD #38). Defaults to schedule.DEFAULT_ZONE_BUFFER_SECONDS
+    when None.
+    """
     if until_dt <= from_dt:
         return []
 
@@ -43,7 +50,7 @@ def next_runs(
     for sched in schedules:
         if not sched.enabled:
             continue
-        runs.extend(_runs_for_schedule(sched, from_dt, until_dt))
+        runs.extend(_runs_for_schedule(sched, from_dt, until_dt, zone_buffer_seconds))
 
     return sorted(runs, key=lambda r: r.start_at)
 
@@ -52,6 +59,7 @@ def _runs_for_schedule(
     sched: Schedule,
     from_dt: datetime,
     until_dt: datetime,
+    zone_buffer_seconds: int | None = None,
 ) -> Iterable[PlannedRun]:
     """All firings of one Schedule in the window.
 
@@ -64,20 +72,23 @@ def _runs_for_schedule(
     from .schedule import MODE_INTERVAL
 
     if sched.mode == MODE_INTERVAL:
-        yield from _runs_for_interval(sched, from_dt, until_dt)
+        yield from _runs_for_interval(sched, from_dt, until_dt, zone_buffer_seconds)
     else:
-        yield from _runs_for_weekdays(sched, from_dt, until_dt)
+        yield from _runs_for_weekdays(sched, from_dt, until_dt, zone_buffer_seconds)
 
 
-def _expand_steps(sched: Schedule, base_start: datetime) -> Iterable[PlannedRun]:
+def _expand_steps(
+    sched: Schedule, base_start: datetime, buffer_seconds: int | None = None
+) -> Iterable[PlannedRun]:
     """For a single firing at `base_start`, emit one PlannedRun per zone-step.
 
     Single-zone schedules (the common case) emit exactly one PlannedRun.
     Multi-zone schedules emit one per step, each starting after the
-    previous one's duration + DEFAULT_ZONE_BUFFER_SECONDS (valve buffer).
+    previous one's duration + buffer (defaults to DEFAULT_ZONE_BUFFER_SECONDS).
     """
     from .schedule import DEFAULT_ZONE_BUFFER_SECONDS
 
+    buf = DEFAULT_ZONE_BUFFER_SECONDS if buffer_seconds is None else int(buffer_seconds)
     cursor = base_start
     for step in sched.all_steps():
         yield PlannedRun(
@@ -89,11 +100,11 @@ def _expand_steps(sched: Schedule, base_start: datetime) -> Iterable[PlannedRun]
         )
         cursor = cursor + timedelta(
             minutes=step.duration_minutes,
-            seconds=DEFAULT_ZONE_BUFFER_SECONDS,
+            seconds=buf,
         )
 
 
-def _runs_for_weekdays(sched, from_dt, until_dt):
+def _runs_for_weekdays(sched, from_dt, until_dt, buffer_seconds=None):
     tz = from_dt.tzinfo
     weekday_set = set(sched.weekdays)
     current = from_dt.date()
@@ -104,7 +115,7 @@ def _runs_for_weekdays(sched, from_dt, until_dt):
     while current <= end:
         if current.weekday() in weekday_set:
             base_start = datetime.combine(current, sched.start_time, tzinfo=tz)
-            for run in _expand_steps(sched, base_start):
+            for run in _expand_steps(sched, base_start, buffer_seconds):
                 # Window check on each step individually so a multi-zone
                 # firing that begins inside the window but spills past
                 # until_dt still includes its early steps.
@@ -113,7 +124,7 @@ def _runs_for_weekdays(sched, from_dt, until_dt):
         current += timedelta(days=1)
 
 
-def _runs_for_interval(sched, from_dt, until_dt):
+def _runs_for_interval(sched, from_dt, until_dt, buffer_seconds=None):
     """Generate dates every `interval_days` days starting at `interval_anchor`.
     Skip past dates before the window, stop at end_date / window end."""
     tz = from_dt.tzinfo
@@ -134,7 +145,7 @@ def _runs_for_interval(sched, from_dt, until_dt):
 
     while current <= end:
         base_start = datetime.combine(current, sched.start_time, tzinfo=tz)
-        for run in _expand_steps(sched, base_start):
+        for run in _expand_steps(sched, base_start, buffer_seconds):
             if from_dt <= run.start_at < until_dt:
                 yield run
         current += timedelta(days=step)

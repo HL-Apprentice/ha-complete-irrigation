@@ -137,6 +137,7 @@ class IrrigationCalendar(CalendarEntity):
             weekdays=(dtstart.weekday(),),
             enabled=True,
             end_date=dtstart.date(),
+            created_via="calendar",
         )
         self._coordinator.schedule_store.add(sched)
         await self._coordinator.async_save()

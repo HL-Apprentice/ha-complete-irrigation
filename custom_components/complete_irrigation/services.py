@@ -195,6 +195,15 @@ _SET_NOTIFICATION_CONFIG_SCHEMA = vol.Schema(
 
 _TEST_NOTIFICATION_SCHEMA = vol.Schema({vol.Optional("message", default="Test"): cv.string})
 
+_SET_GENERAL_CONFIG_SCHEMA = vol.Schema(
+    {
+        # PRD #38 — inter-zone valve-settle buffer for multi-zone schedules.
+        vol.Optional("zone_buffer_seconds"): vol.All(vol.Coerce(int), vol.Range(min=0, max=600)),
+        # PRD #81 — snooze the Sunday weekly reminder until this date.
+        vol.Optional("weekly_reminder_snoozed_until"): vol.Any(None, cv.date),
+    }
+)
+
 _SET_CONFLICT_POLICY_SCHEMA = vol.Schema(
     {
         vol.Required("policy"): vol.In(["defer_new", "shift_existing", "split_difference"]),
@@ -435,6 +444,11 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             interval_days=data.get("interval_days"),
             interval_anchor=data.get("interval_anchor"),
             zone_steps=zone_steps,
+            # PRD #60 — provenance marker so calendar.py / establishment
+            # can identify their own entries when #59 two-way calendar
+            # edit lands. Anything coming through the service (panel,
+            # automations, dev tools) gets "service".
+            created_via="service",
         )
         coord.schedule_store.add(schedule)
         await coord.async_save()
@@ -473,6 +487,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             interval_anchor=data.get("interval_anchor", existing.interval_anchor),
             end_date=existing.end_date,
             zone_steps=new_steps,
+            created_via=existing.created_via,
         )
         coord.schedule_store.upsert(merged)
         await coord.async_save()
@@ -508,6 +523,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             interval_days=existing.interval_days,
             interval_anchor=existing.interval_anchor,
             zone_steps=existing.zone_steps,
+            created_via=existing.created_via,
         )
         coord.schedule_store.upsert(new)
         await coord.async_save()
@@ -657,6 +673,27 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         schema=_SET_CONFLICT_POLICY_SCHEMA,
     )
 
+    async def handle_set_general_config(call: ServiceCall) -> None:
+        """PRD #38 + #81 — generic bucket for one-off global settings."""
+        data = _SET_GENERAL_CONFIG_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None:
+            return
+        if "zone_buffer_seconds" in data:
+            coord.config["zone_buffer_seconds"] = data["zone_buffer_seconds"]
+        if "weekly_reminder_snoozed_until" in data:
+            v = data["weekly_reminder_snoozed_until"]
+            coord.config["weekly_reminder_snoozed_until"] = v.isoformat() if v else None
+        await coord.async_save_config()
+        _LOGGER.info("General config updated: %s", data)
+
+    hass.services.async_register(
+        DOMAIN,
+        "set_general_config",
+        handle_set_general_config,
+        schema=_SET_GENERAL_CONFIG_SCHEMA,
+    )
+
     async def handle_start_establishment(call: ServiceCall) -> None:
         from datetime import date, time, timedelta
 
@@ -678,13 +715,14 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             hour = (start_hour + i * cycle_spacing) % 24
             sched = Schedule(
                 id=uuid.uuid4().hex[:12],
-                name=f"New grass {zone_id.split('.', 1)[-1]} cycle {i + 1}",
+                name=f"New planting {zone_id.split('.', 1)[-1]} cycle {i + 1}",
                 zone_entity_id=zone_id,
                 start_time=time(hour, 0),
                 duration_minutes=minutes,
                 weekdays=(0, 1, 2, 3, 4, 5, 6),  # daily
                 enabled=True,
                 end_date=end_date_val,
+                created_via="establishment",
             )
             coord.schedule_store.add(sched)
 

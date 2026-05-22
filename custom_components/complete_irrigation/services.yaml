@@ -372,6 +372,32 @@ clear_rain_lockout:
   name: Clear rain lockout
   description: Manually end the current rain lockout (schedules resume immediately).
 
+set_general_config:
+  name: Set general integration config
+  description: >
+    Bucket for one-off global settings. All fields optional — only the ones
+    you pass are updated.
+  fields:
+    zone_buffer_seconds:
+      name: Inter-zone buffer (seconds)
+      description: Valve-settle gap between back-to-back zones in a multi-zone schedule. Default 30.
+      required: false
+      default: 30
+      selector:
+        number:
+          min: 0
+          max: 600
+          step: 1
+          mode: box
+    weekly_reminder_snoozed_until:
+      name: Snooze weekly reminder until (date)
+      description: >
+        Suppress the Sunday weekly reminder until this date. Set to null
+        (or omit) to resume.
+      required: false
+      selector:
+        date:
+
 set_conflict_policy:
   name: Set schedule-conflict policy
   description: >
