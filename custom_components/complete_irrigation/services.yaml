@@ -397,6 +397,16 @@ set_general_config:
       required: false
       selector:
         date:
+    zone_order:
+      name: Zone display order
+      description: >
+        Ordered list of zone entity_ids. Controls the order zones appear
+        on the Today and Zones tabs. Zones added later via the config
+        flow but not yet listed here are appended at the bottom.
+      required: false
+      example: "['switch.front_lawn', 'switch.back_yard', 'switch.garden']"
+      selector:
+        object:
 
 set_conflict_policy:
   name: Set schedule-conflict policy
