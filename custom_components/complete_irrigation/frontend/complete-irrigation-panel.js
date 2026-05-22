@@ -806,7 +806,7 @@
         }
         this._scheduleRender();
       } catch (err) {
-        // Pre-v1.10.0 backends don't have this command — no-op, fall
+        // Pre-v1.10.1 backends don't have this command — no-op, fall
         // back to the local-only countdown behavior.
         console.warn("[complete-irrigation] get_active_runs not available:", err);
       }
@@ -1078,7 +1078,7 @@
 
       return (
         `<header class="page-header"><h2>Notifications</h2>` +
-        `<span class="version-pill">v1.10.0</span></header>` +
+        `<span class="version-pill">v1.10.1</span></header>` +
         `<form class="weather-form" data-form="notifications">` +
         `<label class="enabled-check"><input type="checkbox" name="enabled"${
           enabled ? " checked" : ""
@@ -1177,7 +1177,7 @@
 
       return (
         `<header class="page-header"><h2>Settings</h2>` +
-        `<span class="version-pill">v1.10.0</span></header>` +
+        `<span class="version-pill">v1.10.1</span></header>` +
         `<section class="settings-card">` +
         `<h3 class="section-title">Theme ${tip("Cycle Light/Dark/Auto with the ☀️/🌙 button on Today, or pick one of your HA-installed themes below.")}</h3>` +
         `<p class="section-hint">Light/Dark/Auto: <strong>${escapeHtml(themeLabel)}</strong>.</p>` +
@@ -1246,7 +1246,7 @@
         `<section class="settings-card">` +
         `<h3 class="section-title">About</h3>` +
         `<table class="settings-table">` +
-        `<tr><td>Version</td><td><strong>v1.10.0</strong></td></tr>` +
+        `<tr><td>Version</td><td><strong>v1.10.1</strong></td></tr>` +
         `<tr><td>Repository</td><td><a href="${repoUrl}" target="_blank">${escapeHtml(repoUrl)}</a></td></tr>` +
         `<tr><td>Zones configured</td><td>${(this._panel?.config?.zones || []).length}</td></tr>` +
         `<tr><td>Schedules</td><td>${(this._schedules || []).length}</td></tr>` +
@@ -1375,7 +1375,7 @@
       return (
         `<header class="page-header"><h2>Today</h2>` +
         `<div class="page-header-right">${themeBtn}` +
-        `<span class="version-pill">v1.10.0</span></div></header>` +
+        `<span class="version-pill">v1.10.1</span></div></header>` +
         this._renderRainLockoutBanner() +
         this._renderWeatherBanner() +
         `<section>` +
@@ -1888,14 +1888,14 @@
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Zones</h2>` +
-          `<span class="version-pill">v1.10.0</span></header>` +
+          `<span class="version-pill">v1.10.1</span></header>` +
           `<div class="empty"><p>No zones configured. Add them via Settings → Devices &amp; Services.</p></div>`
         );
       }
       const rows = zones.map((z) => this._renderZoneRow(z)).join("");
       return (
         `<header class="page-header"><h2>Zones</h2>` +
-        `<span class="version-pill">v1.10.0</span></header>` +
+        `<span class="version-pill">v1.10.1</span></header>` +
         `<p class="section-hint">Hidden zones still run on schedule — they're just hidden from the Today view.</p>` +
         `<div class="zones-list">${rows}</div>`
       );
@@ -2185,7 +2185,7 @@
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Sensors</h2>` +
-          `<span class="version-pill">v1.10.0</span></header>` +
+          `<span class="version-pill">v1.10.1</span></header>` +
           `<div class="empty"><p>No zones configured.</p></div>`
         );
       }
@@ -2194,7 +2194,7 @@
         .join("");
       return (
         `<header class="page-header"><h2>Sensors</h2>` +
-        `<span class="version-pill">v1.10.0</span></header>` +
+        `<span class="version-pill">v1.10.1</span></header>` +
         `<p class="section-hint">Bind soil-moisture sensors to a zone so runtimes auto-adjust based on actual moisture. You can attach one sensor or several (combined as average, lowest, highest, or just the primary).</p>` +
         `<div class="sensor-zone-list">${cards}</div>`
       );
@@ -2611,7 +2611,7 @@
 
       return (
         `<header class="page-header"><h2>Weather</h2>` +
-        `<span class="version-pill">v1.10.0</span></header>` +
+        `<span class="version-pill">v1.10.1</span></header>` +
         lockoutHtml +
         forecastHtml +
         `<form class="weather-form" data-form="weather">` +
@@ -3070,8 +3070,11 @@
         // Schedule modal time + duration row — give Start time a wider
         // cell so the native time picker isn't cramped, since Duration
         // is just two compact number inputs.
-        `.schedule-time-row{grid-template-columns:1.5fr 1fr}` +
-        `.schedule-time-row input[type=time]{font-size:15px;text-align:center}` +
+        // Start time gets just enough width for "6:00 AM" + padding; the
+        // wider Duration cell holds the two number inputs. The bumped
+        // gap keeps the cells visually distinct on narrow viewports.
+        `.schedule-time-row{grid-template-columns:1fr 1.4fr;gap:16px}` +
+        `.schedule-time-row input[type=time]{font-size:15px;text-align:center;max-width:170px}` +
         `.row-2 > *{min-width:0}` +
         // Duration row (hours + minutes side by side inside one cell)
         `.duration-row{display:flex;align-items:center;gap:6px}` +
@@ -3248,5 +3251,5 @@
   }
 
   customElements.define(ELEMENT_NAME, CompleteIrrigationPanel);
-  console.info("[complete-irrigation] panel registered, version v1.10.0");
+  console.info("[complete-irrigation] panel registered, version v1.10.1");
 })();
