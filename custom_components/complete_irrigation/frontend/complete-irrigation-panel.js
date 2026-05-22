@@ -303,6 +303,8 @@
         if (action === "weekly-unsnooze") return this._weeklySnooze(0);
         if (action === "open-establishment")
           return this._openEstablishmentModal(node.dataset.entityId, node.dataset.zoneName);
+        if (action === "zone-move-up") return this._reorderZone(node.dataset.entityId, -1);
+        if (action === "zone-move-down") return this._reorderZone(node.dataset.entityId, 1);
         if (action === "add-extra-step") {
           // Append a default step (use the primary zone if non-hidden,
           // else the first non-hidden zone, 10 min).
@@ -654,6 +656,35 @@
       this._renderNow();
     }
 
+    async _reorderZone(entityId, direction) {
+      // Move a zone up (-1) or down (+1) in the user-set order. Renders
+      // optimistically (no waiting on the WS round-trip), then persists.
+      const order = this._orderedZoneIds();
+      const idx = order.indexOf(entityId);
+      if (idx === -1) return;
+      const target = idx + direction;
+      if (target < 0 || target >= order.length) return;
+      // Swap idx ↔ target
+      const newOrder = order.slice();
+      [newOrder[idx], newOrder[target]] = [newOrder[target], newOrder[idx]];
+      // Optimistic local update: write into our cached config and
+      // re-render before the WS call returns.
+      this._config = { ...(this._config || {}), zone_order: newOrder };
+      this._renderNow();
+      try {
+        await this._hass.callService("complete_irrigation", "set_general_config", {
+          zone_order: newOrder,
+        });
+        // Re-pull canonical state. The server returns the same order
+        // so this is just defense against an out-of-band edit.
+        await this._fetchConfig();
+      } catch (err) {
+        alert("Failed to save zone order: " + (err?.message || err));
+        // Reload server state to undo the optimistic change on failure.
+        await this._fetchConfig();
+      }
+    }
+
     _startLocalCountdown(entityId, minutes) {
       this._localRuns[entityId] = Date.now() + minutes * 60 * 1000;
       this._localRunDurations[entityId] = minutes;
@@ -820,7 +851,7 @@
         }
         this._scheduleRender();
       } catch (err) {
-        // Pre-v1.10.3 backends don't have this command — no-op, fall
+        // Pre-v1.10.4 backends don't have this command — no-op, fall
         // back to the local-only countdown behavior.
         console.warn("[complete-irrigation] get_active_runs not available:", err);
       }
@@ -948,8 +979,33 @@
     }
 
     // ── Data helpers ───────────────────────────────────────────────
+    _orderedZoneIds() {
+      // Resolve the rendering order for zones. config.zone_order (if set)
+      // wins; any zone present in entry.data.zones but not yet in the
+      // order list is appended at the end. Any stale entries in the
+      // saved order that no longer exist as configured zones are dropped.
+      const configured = this._panel?.config?.zones || [];
+      const configuredSet = new Set(configured);
+      const saved = (this._config && this._config.zone_order) || [];
+      const out = [];
+      const seen = new Set();
+      for (const eid of saved) {
+        if (configuredSet.has(eid) && !seen.has(eid)) {
+          out.push(eid);
+          seen.add(eid);
+        }
+      }
+      for (const eid of configured) {
+        if (!seen.has(eid)) {
+          out.push(eid);
+          seen.add(eid);
+        }
+      }
+      return out;
+    }
+
     _zones() {
-      const ids = this._panel?.config?.zones || [];
+      const ids = this._orderedZoneIds();
       return ids.map((entityId) => {
         const state = this._hass?.states?.[entityId];
         const friendly =
@@ -1092,7 +1148,7 @@
 
       return (
         `<header class="page-header"><h2>Notifications</h2>` +
-        `<span class="version-pill">v1.10.3</span></header>` +
+        `<span class="version-pill">v1.10.4</span></header>` +
         `<form class="weather-form" data-form="notifications">` +
         `<label class="enabled-check"><input type="checkbox" name="enabled"${
           enabled ? " checked" : ""
@@ -1191,7 +1247,7 @@
 
       return (
         `<header class="page-header"><h2>Settings</h2>` +
-        `<span class="version-pill">v1.10.3</span></header>` +
+        `<span class="version-pill">v1.10.4</span></header>` +
         `<section class="settings-card">` +
         `<h3 class="section-title">Theme ${tip("Cycle Light/Dark/Auto with the ☀️/🌙 button on Today, or pick one of your HA-installed themes below.")}</h3>` +
         `<p class="section-hint">Light/Dark/Auto: <strong>${escapeHtml(themeLabel)}</strong>.</p>` +
@@ -1260,7 +1316,7 @@
         `<section class="settings-card">` +
         `<h3 class="section-title">About</h3>` +
         `<table class="settings-table">` +
-        `<tr><td>Version</td><td><strong>v1.10.3</strong></td></tr>` +
+        `<tr><td>Version</td><td><strong>v1.10.4</strong></td></tr>` +
         `<tr><td>Repository</td><td><a href="${repoUrl}" target="_blank">${escapeHtml(repoUrl)}</a></td></tr>` +
         `<tr><td>Zones configured</td><td>${(this._panel?.config?.zones || []).length}</td></tr>` +
         `<tr><td>Schedules</td><td>${(this._schedules || []).length}</td></tr>` +
@@ -1389,7 +1445,7 @@
       return (
         `<header class="page-header"><h2>Today</h2>` +
         `<div class="page-header-right">${themeBtn}` +
-        `<span class="version-pill">v1.10.3</span></div></header>` +
+        `<span class="version-pill">v1.10.4</span></div></header>` +
         this._renderRainLockoutBanner() +
         this._renderWeatherBanner() +
         `<section>` +
@@ -1902,20 +1958,22 @@
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Zones</h2>` +
-          `<span class="version-pill">v1.10.3</span></header>` +
+          `<span class="version-pill">v1.10.4</span></header>` +
           `<div class="empty"><p>No zones configured. Add them via Settings → Devices &amp; Services.</p></div>`
         );
       }
-      const rows = zones.map((z) => this._renderZoneRow(z)).join("");
+      const rows = zones
+        .map((z, i) => this._renderZoneRow(z, i, zones.length))
+        .join("");
       return (
         `<header class="page-header"><h2>Zones</h2>` +
-        `<span class="version-pill">v1.10.3</span></header>` +
+        `<span class="version-pill">v1.10.4</span></header>` +
         `<p class="section-hint">Hidden zones still run on schedule — they're just hidden from the Today view.</p>` +
         `<div class="zones-list">${rows}</div>`
       );
     }
 
-    _renderZoneRow(zone) {
+    _renderZoneRow(zone, index = 0, total = 1) {
       const isHidden = this._hiddenZones.has(zone.entityId);
       const dayStrip = this._renderZone7DayStrip(zone.entityId);
       const statusClass = !zone.available
@@ -1933,6 +1991,12 @@
         : `<button class="btn btn-small" data-action="hide-zone" data-entity-id="${escapeAttr(zone.entityId)}">🚫 Hide from Today</button>`;
       const grassBtn =
         `<button class="btn btn-small" data-action="open-establishment" data-entity-id="${escapeAttr(zone.entityId)}" data-zone-name="${escapeAttr(zone.name)}">🌱 New Planting</button>`;
+      // Reorder controls. ↑ disabled on first row, ↓ disabled on last.
+      // They apply to both Today and Zones (shared zone_order config).
+      const upBtn =
+        `<button class="btn-icon zone-reorder" data-action="zone-move-up" data-entity-id="${escapeAttr(zone.entityId)}" title="Move up"${index === 0 ? " disabled" : ""}>▲</button>`;
+      const downBtn =
+        `<button class="btn-icon zone-reorder" data-action="zone-move-down" data-entity-id="${escapeAttr(zone.entityId)}" title="Move down"${index >= total - 1 ? " disabled" : ""}>▼</button>`;
 
       // Climate chips (temp / humidity / moisture) — show whatever the
       // user has bound to this zone. Each chip shows the averaged value
@@ -1950,7 +2014,11 @@
         (climateChips ? `<div class="zone-row-climate">${climateChips}</div>` : "") +
         `</div></div>` +
         `<div class="zone-row-strip">${dayStrip}</div>` +
-        `<div class="zone-row-actions">${grassBtn}${hideBtn}</div>` +
+        `<div class="zone-row-actions">` +
+        `<div class="zone-reorder-group">${upBtn}${downBtn}</div>` +
+        grassBtn +
+        hideBtn +
+        `</div>` +
         `</article>`
       );
     }
@@ -2199,7 +2267,7 @@
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Sensors</h2>` +
-          `<span class="version-pill">v1.10.3</span></header>` +
+          `<span class="version-pill">v1.10.4</span></header>` +
           `<div class="empty"><p>No zones configured.</p></div>`
         );
       }
@@ -2208,7 +2276,7 @@
         .join("");
       return (
         `<header class="page-header"><h2>Sensors</h2>` +
-        `<span class="version-pill">v1.10.3</span></header>` +
+        `<span class="version-pill">v1.10.4</span></header>` +
         `<p class="section-hint">Bind soil-moisture sensors to a zone so runtimes auto-adjust based on actual moisture. You can attach one sensor or several (combined as average, lowest, highest, or just the primary).</p>` +
         `<div class="sensor-zone-list">${cards}</div>`
       );
@@ -2625,7 +2693,7 @@
 
       return (
         `<header class="page-header"><h2>Weather</h2>` +
-        `<span class="version-pill">v1.10.3</span></header>` +
+        `<span class="version-pill">v1.10.4</span></header>` +
         lockoutHtml +
         forecastHtml +
         `<form class="weather-form" data-form="weather">` +
@@ -3167,7 +3235,11 @@
         `.zone-day-dot{width:5px;height:5px;border-radius:50%;background:var(--ci-accent)}` +
         `.zone-day-empty{color:var(--ci-text-2)}` +
         `.zone-day-more{font-size:9px;color:var(--ci-text-2);margin-left:2px}` +
-        `.zone-row-actions{display:flex;gap:6px}` +
+        `.zone-row-actions{display:flex;gap:6px;align-items:center}` +
+        `.zone-reorder-group{display:flex;flex-direction:column;gap:2px;margin-right:4px}` +
+        `.zone-reorder{font-size:10px;line-height:1;padding:2px 6px;border:1px solid var(--ci-border);border-radius:4px;background:transparent;color:var(--ci-text-2);cursor:pointer}` +
+        `.zone-reorder:hover:not([disabled]){background:var(--ci-hover);color:var(--ci-text)}` +
+        `.zone-reorder[disabled]{opacity:0.3;cursor:not-allowed}` +
         // ── Sensors tab ───────────────────────────────────────────
         `.sensor-zone-list{display:flex;flex-direction:column;gap:10px}` +
         `.sensor-zone-card{background:var(--ci-card);border:1px solid var(--ci-border);border-radius:12px;padding:14px 16px}` +
@@ -3279,5 +3351,5 @@
   }
 
   customElements.define(ELEMENT_NAME, CompleteIrrigationPanel);
-  console.info("[complete-irrigation] panel registered, version v1.10.3");
+  console.info("[complete-irrigation] panel registered, version v1.10.4");
 })();
