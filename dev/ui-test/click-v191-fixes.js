@@ -121,12 +121,14 @@ async function main() {
       // Start time should be wider than Duration
       return { ok: true, timeW: a.width, durW: b.width };
     });
+    // v1.10.1 update: ratio flipped — Duration cell is now wider than
+    // Start time so the h+m inputs have room and the cells don't bump.
     if (!rowGeom.ok) fail("schedule-time-row missing or malformed");
-    else if (rowGeom.timeW <= rowGeom.durW)
-      fail(`Start time (${rowGeom.timeW}px) not wider than Duration (${rowGeom.durW}px)`);
+    else if (rowGeom.timeW >= rowGeom.durW)
+      fail(`Start time (${rowGeom.timeW}px) should be narrower than Duration (${rowGeom.durW}px)`);
     else
       pass(
-        `Start time cell wider than Duration (${Math.round(rowGeom.timeW)}px vs ${Math.round(rowGeom.durW)}px)`
+        `Duration cell wider than Start time (${Math.round(rowGeom.timeW)}px vs ${Math.round(rowGeom.durW)}px)`
       );
     await frame.evaluate(() =>
       document.querySelector("complete-irrigation-panel").shadowRoot.querySelector(".modal-cancel").click()
