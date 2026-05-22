@@ -107,6 +107,7 @@ def test_schedule_to_dict_has_expected_shape():
         "interval_days": None,
         "interval_anchor": None,
         "zone_steps": [],
+        "created_via": "panel",
     }
 
 

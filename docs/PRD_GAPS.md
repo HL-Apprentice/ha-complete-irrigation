@@ -25,14 +25,14 @@ Update this file whenever a gap closes (move it to the changelog at the bottom) 
 
 ### Plant categories (#22-27)
 - **#25 — Category explanatory popup.** ✅ **Shipped in v1.8.0** — sensor modal now shows the matching info text from `PLANT_CATEGORIES` under the category select.
-- **#23, #85 — "Calibrate sensor" shortcut from panel to HA device page.** No deep-link to the device page anywhere. *Effort:* small — link in the sensor card to `/config/devices/device/<id>` if we store device_id.
+- **#23, #85 — "Calibrate sensor" shortcut from panel to HA device page.** ✅ **Shipped in v1.10.0** — each bound moisture sensor's friendly name in the Sensors-tab card is now a deep link to `/developer-tools/state?entity_id=<eid>` with `target="_top"`, opening the entity's full state + calibration in the parent HA window.
 
 ### Schedules
 - (#28-31 all shipped — weekday + interval, multi-zone added in v1.8.0)
 
 ### Conflict resolution
 - **#34, #36 — Visual conflict popup with timeline previews + "cancel & pick different time".** v1.7.0 ships a global policy picker (#37 satisfied) but no create-time conflict modal. *Effort:* large — needs a WS endpoint to compute conflicts pre-save + a timeline UI.
-- **#38 — 2-min auto-buffer between back-to-back zone runs.** Single-zone schedules: present in conflict resolver. Multi-zone schedules: hardcoded 30s in `DEFAULT_ZONE_BUFFER_SECONDS`. *Effort:* tiny — make per-user configurable.
+- **#38 — 2-min auto-buffer between back-to-back zone runs.** ✅ **Shipped in v1.10.0** — `next_runs()` and `_expand_steps()` accept a `zone_buffer_seconds` parameter; coordinator threads `config["zone_buffer_seconds"]` through. New `set_general_config` service + Settings tab "Schedule timing" card lets users adjust 0-600 seconds.
 
 ### Runtime conflicts (sleep)
 - **#39 — Small-shift (<15 min) silent absorption.** Constant `DEFAULT_SMALL_SHIFT_TOLERANCE_MIN` exists; no notification path currently notifies on shifts, so behavior is implicitly silent. Marker not yet wired into resolver `reason` field. *Effort:* tiny — once shift notifications are added, gate them by the tolerance.
@@ -47,7 +47,7 @@ Update this file whenever a gap closes (move it to the changelog at the bottom) 
 
 ### Calendar
 - **#59 (partial) — Two-way calendar edit.** `async_create_event` works; delete + drag-update are out. *Effort:* medium — implement `async_delete_event` + `async_update_event` against `ScheduleStore`.
-- **#60 — Panel-as-source-of-truth guardrail.** One-off calendar adds create real Schedules with no marker distinguishing them from panel-created. *Effort:* tiny — add `created_via` field to Schedule.
+- **#60 — Panel-as-source-of-truth guardrail.** ✅ **Shipped in v1.10.0** — `Schedule.created_via` field tracks origin: `panel` (default, back-compat), `service`, `calendar`, or `establishment`. Round-trip-safe in storage; calendar.py + start_establishment mark accordingly. Unblocks #59 two-way calendar edit when it lands.
 
 ### Custom UI panel
 - **#65 — Heat index (computed).** ✅ **Shipped in v1.8.0** — banner shows the NWS Rothfusz heat index when temp ≥ 80°F and humidity ≥ 40%.
@@ -60,8 +60,8 @@ Update this file whenever a gap closes (move it to the changelog at the bottom) 
 
 ### Verification reminders
 - **#78 — One-shot 7-day post-install reminder.** ✅ **Shipped in v1.9.0** — coordinator stores `first_run_at` + `post_install_reminder_fired` in config; `async_call_later` schedules the notification 7 days after first setup.
-- **#80 — Per-zone weekly stats in the reminder** (runs / avg moisture / target). Current weekly reminder is one-line aggregate. *Effort:* small — extend `_fire_weekly_reminder` to summarize per-zone.
-- **#81 — "Snooze 30 days" on the reminder.** No snooze state. *Effort:* small — add a config key + check before firing.
+- **#80 — Per-zone weekly stats in the reminder.** ✅ **Shipped in v1.10.0** — new pure helper `build_weekly_zone_summary()` (6 unit tests) builds a per-zone digest: schedule count, current combined moisture (avg of bound sensors), target%, "sensors offline" badge if all sensors unavailable. Replaces the old single-line aggregate.
+- **#81 — "Snooze 30 days" on the reminder.** ✅ **Shipped in v1.10.0** — coordinator checks `weekly_reminder_snoozed_until` before firing. Settings tab card has a "Snooze 30 days" button + "Resume now" link when snoozed. Persisted in coordinator config via `set_general_config`.
 
 ### Manual run control
 - **#84 — Customize manual-run default.** ✅ **Shipped in v1.8.0** — Settings → "Manual run default" persists a per-browser default via localStorage.
@@ -70,6 +70,8 @@ Update this file whenever a gap closes (move it to the changelog at the bottom) 
 
 ## Changelog
 
+- **2026-05-22** v1.10.0: closed #23/#85 (sensor deep-link), #38 (configurable inter-zone buffer + Settings UI), #60 (created_via marker), #80 (per-zone weekly stats), #81 (snooze weekly reminder). 12 new unit tests. Total now 198.
+- **2026-05-22** v1.9.1-v1.9.3: UX polish — start time width, "New Planting" rename, multi-notify targets, hide-controls removed from Today, wind to 1 decimal, today's runs timeline, sticky left sidebar.
 - **2026-05-21** v1.9.0: closed #13 (rename zones), #14 (replaces-controller warning), #20 (name-based category defaults), #43 (hard-failure push), #52 (wind defer), #57 (sensor-offline push), #76 (establishment end prompt), #78 (7-day post-install reminder). 34 new unit tests added.
 - **2026-05-21** v1.8.0: closed #25 (category info popup), #65 (heat index), #84 (manual-run default). Multi-zone schedules added (new feature — not in original PRD).
 - **2026-05-21** v1.7.0: closed #37 (always-use-this-option = global conflict policy), #73-77 (establishment mode UI).
