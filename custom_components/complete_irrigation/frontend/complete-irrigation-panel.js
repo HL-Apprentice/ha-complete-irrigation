@@ -799,7 +799,7 @@
         }
         this._scheduleRender();
       } catch (err) {
-        // Pre-v1.9.2 backends don't have this command — no-op, fall
+        // Pre-v1.9.3 backends don't have this command — no-op, fall
         // back to the local-only countdown behavior.
         console.warn("[complete-irrigation] get_active_runs not available:", err);
       }
@@ -1071,7 +1071,7 @@
 
       return (
         `<header class="page-header"><h2>Notifications</h2>` +
-        `<span class="version-pill">v1.9.2</span></header>` +
+        `<span class="version-pill">v1.9.3</span></header>` +
         `<form class="weather-form" data-form="notifications">` +
         `<label class="enabled-check"><input type="checkbox" name="enabled"${
           enabled ? " checked" : ""
@@ -1168,7 +1168,7 @@
 
       return (
         `<header class="page-header"><h2>Settings</h2>` +
-        `<span class="version-pill">v1.9.2</span></header>` +
+        `<span class="version-pill">v1.9.3</span></header>` +
         `<section class="settings-card">` +
         `<h3 class="section-title">Theme ${tip("Cycle Light/Dark/Auto with the ☀️/🌙 button on Today, or pick one of your HA-installed themes below.")}</h3>` +
         `<p class="section-hint">Light/Dark/Auto: <strong>${escapeHtml(themeLabel)}</strong>.</p>` +
@@ -1218,7 +1218,7 @@
         `<section class="settings-card">` +
         `<h3 class="section-title">About</h3>` +
         `<table class="settings-table">` +
-        `<tr><td>Version</td><td><strong>v1.9.2</strong></td></tr>` +
+        `<tr><td>Version</td><td><strong>v1.9.3</strong></td></tr>` +
         `<tr><td>Repository</td><td><a href="${repoUrl}" target="_blank">${escapeHtml(repoUrl)}</a></td></tr>` +
         `<tr><td>Zones configured</td><td>${(this._panel?.config?.zones || []).length}</td></tr>` +
         `<tr><td>Schedules</td><td>${(this._schedules || []).length}</td></tr>` +
@@ -1297,7 +1297,7 @@
       return (
         `<header class="page-header"><h2>Today</h2>` +
         `<div class="page-header-right">${themeBtn}` +
-        `<span class="version-pill">v1.9.2</span></div></header>` +
+        `<span class="version-pill">v1.9.3</span></div></header>` +
         this._renderRainLockoutBanner() +
         this._renderWeatherBanner() +
         `<section>` +
@@ -1810,14 +1810,14 @@
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Zones</h2>` +
-          `<span class="version-pill">v1.9.2</span></header>` +
+          `<span class="version-pill">v1.9.3</span></header>` +
           `<div class="empty"><p>No zones configured. Add them via Settings → Devices &amp; Services.</p></div>`
         );
       }
       const rows = zones.map((z) => this._renderZoneRow(z)).join("");
       return (
         `<header class="page-header"><h2>Zones</h2>` +
-        `<span class="version-pill">v1.9.2</span></header>` +
+        `<span class="version-pill">v1.9.3</span></header>` +
         `<p class="section-hint">Hidden zones still run on schedule — they're just hidden from the Today view.</p>` +
         `<div class="zones-list">${rows}</div>`
       );
@@ -2107,7 +2107,7 @@
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Sensors</h2>` +
-          `<span class="version-pill">v1.9.2</span></header>` +
+          `<span class="version-pill">v1.9.3</span></header>` +
           `<div class="empty"><p>No zones configured.</p></div>`
         );
       }
@@ -2116,7 +2116,7 @@
         .join("");
       return (
         `<header class="page-header"><h2>Sensors</h2>` +
-        `<span class="version-pill">v1.9.2</span></header>` +
+        `<span class="version-pill">v1.9.3</span></header>` +
         `<p class="section-hint">Bind soil-moisture sensors to a zone so runtimes auto-adjust based on actual moisture. You can attach one sensor or several (combined as average, lowest, highest, or just the primary).</p>` +
         `<div class="sensor-zone-list">${cards}</div>`
       );
@@ -2527,7 +2527,7 @@
 
       return (
         `<header class="page-header"><h2>Weather</h2>` +
-        `<span class="version-pill">v1.9.2</span></header>` +
+        `<span class="version-pill">v1.9.3</span></header>` +
         lockoutHtml +
         forecastHtml +
         `<form class="weather-form" data-form="weather">` +
@@ -2896,8 +2896,12 @@
         `.banner-row-arrows .btn-icon{font-size:12px;padding:4px 8px}` +
         `.banner-row-arrows .btn-icon[disabled]{opacity:0.3;cursor:not-allowed}` +
         `*{box-sizing:border-box}` +
-        `.root{display:grid;grid-template-columns:auto 1fr;height:100%;min-height:100vh}` +
-        `.sidebar{width:220px;background:var(--ci-card);border-right:1px solid var(--ci-border);display:flex;flex-direction:column;transition:width 0.18s ease}` +
+        // Fixed-height grid: viewport is 100vh, sidebar stays put while
+        // <main> scrolls within its own grid cell. min-height:0 on grid
+        // children unlocks shrink-to-fit so the cell can be exactly
+        // viewport-tall and let overflow:auto take over inside.
+        `.root{display:grid;grid-template-columns:auto 1fr;height:100vh}` +
+        `.sidebar{width:220px;background:var(--ci-card);border-right:1px solid var(--ci-border);display:flex;flex-direction:column;transition:width 0.18s ease;height:100vh;overflow-y:auto}` +
         `.sidebar.collapsed{width:60px}` +
         `.sidebar-header{display:flex;align-items:center;padding:12px;border-bottom:1px solid var(--ci-border);gap:8px}` +
         `.collapse-btn{background:transparent;border:1px solid var(--ci-border);border-radius:6px;width:28px;height:28px;cursor:pointer;color:inherit;font-size:16px;line-height:1;display:flex;align-items:center;justify-content:center;flex-shrink:0}` +
@@ -2908,7 +2912,7 @@
         `.sidebar-item:hover{background:var(--ci-hover);color:var(--ci-text)}` +
         `.sidebar-item.active{color:var(--ci-accent);background:var(--ci-hover);border-left-color:var(--ci-accent);font-weight:500}` +
         `.sidebar-icon{width:24px;text-align:center;font-size:16px;flex-shrink:0}` +
-        `main{padding:24px;overflow:auto}` +
+        `main{padding:24px;overflow:auto;min-width:0;min-height:0}` +
         `.page-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;gap:12px}` +
         `.page-header h2{margin:0;font-size:22px;font-weight:600}` +
         `.version-pill{background:var(--ci-card);border:1px solid var(--ci-border);padding:4px 10px;border-radius:999px;font-size:11px;color:var(--ci-text-2)}` +
@@ -3158,5 +3162,5 @@
   }
 
   customElements.define(ELEMENT_NAME, CompleteIrrigationPanel);
-  console.info("[complete-irrigation] panel registered, version v1.9.2");
+  console.info("[complete-irrigation] panel registered, version v1.9.3");
 })();
