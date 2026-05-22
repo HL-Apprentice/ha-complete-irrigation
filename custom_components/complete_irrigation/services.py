@@ -179,7 +179,11 @@ _CLEAR_RAIN_LOCKOUT_SCHEMA = vol.Schema({})
 
 _SET_NOTIFICATION_CONFIG_SCHEMA = vol.Schema(
     {
+        # Single legacy target — still accepted for back-compat.
         vol.Optional("notify_target"): cv.string,
+        # Multi-target list. Accepted as list-of-strings OR a
+        # comma/newline-separated string (the dispatcher normalizes).
+        vol.Optional("notify_targets"): vol.Any(cv.string, [cv.string]),
         vol.Optional("quiet_hours_start"): cv.string,
         vol.Optional("quiet_hours_end"): cv.string,
         vol.Optional("enabled"): cv.boolean,
