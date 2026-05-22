@@ -799,7 +799,7 @@
         }
         this._scheduleRender();
       } catch (err) {
-        // Pre-v1.9.1 backends don't have this command — no-op, fall
+        // Pre-v1.9.2 backends don't have this command — no-op, fall
         // back to the local-only countdown behavior.
         console.warn("[complete-irrigation] get_active_runs not available:", err);
       }
@@ -1071,7 +1071,7 @@
 
       return (
         `<header class="page-header"><h2>Notifications</h2>` +
-        `<span class="version-pill">v1.9.1</span></header>` +
+        `<span class="version-pill">v1.9.2</span></header>` +
         `<form class="weather-form" data-form="notifications">` +
         `<label class="enabled-check"><input type="checkbox" name="enabled"${
           enabled ? " checked" : ""
@@ -1168,7 +1168,7 @@
 
       return (
         `<header class="page-header"><h2>Settings</h2>` +
-        `<span class="version-pill">v1.9.1</span></header>` +
+        `<span class="version-pill">v1.9.2</span></header>` +
         `<section class="settings-card">` +
         `<h3 class="section-title">Theme ${tip("Cycle Light/Dark/Auto with the ☀️/🌙 button on Today, or pick one of your HA-installed themes below.")}</h3>` +
         `<p class="section-hint">Light/Dark/Auto: <strong>${escapeHtml(themeLabel)}</strong>.</p>` +
@@ -1218,7 +1218,7 @@
         `<section class="settings-card">` +
         `<h3 class="section-title">About</h3>` +
         `<table class="settings-table">` +
-        `<tr><td>Version</td><td><strong>v1.9.1</strong></td></tr>` +
+        `<tr><td>Version</td><td><strong>v1.9.2</strong></td></tr>` +
         `<tr><td>Repository</td><td><a href="${repoUrl}" target="_blank">${escapeHtml(repoUrl)}</a></td></tr>` +
         `<tr><td>Zones configured</td><td>${(this._panel?.config?.zones || []).length}</td></tr>` +
         `<tr><td>Schedules</td><td>${(this._schedules || []).length}</td></tr>` +
@@ -1297,7 +1297,7 @@
       return (
         `<header class="page-header"><h2>Today</h2>` +
         `<div class="page-header-right">${themeBtn}` +
-        `<span class="version-pill">v1.9.1</span></div></header>` +
+        `<span class="version-pill">v1.9.2</span></div></header>` +
         this._renderRainLockoutBanner() +
         this._renderWeatherBanner() +
         `<section>` +
@@ -1312,7 +1312,8 @@
           : `<div class="zone-grid">${visibleZones
               .map((z) => this._renderZoneTile(z))
               .join("")}</div>`) +
-        `</section>`
+        `</section>` +
+        this._renderTodaysTimeline()
       );
     }
 
@@ -1457,8 +1458,15 @@
 
       if (detected.wind_speed) {
         const unit = detected.wind_speed.attributes?.unit_of_measurement || "mph";
-        let val = `${detected.wind_speed.state} ${unit}`;
-        if (detected.wind_gust) val += ` (gust ${detected.wind_gust.state})`;
+        // Round to 1 decimal — Tempest etc. report 8-significant-digit
+        // floats which are visually noisy on the banner.
+        const fmt = (s) => {
+          const n = parseFloat(s);
+          return Number.isFinite(n) ? n.toFixed(1) : s;
+        };
+        let val = `${fmt(detected.wind_speed.state)} ${unit}`;
+        if (detected.wind_gust)
+          val += ` (gust ${fmt(detected.wind_gust.state)})`;
         out.wind = { icon: "💨", label: "Wind", value: val };
       }
       if (detected.uv) out.uv = { icon: "🔆", label: "UV index", value: detected.uv.state };
@@ -1802,14 +1810,14 @@
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Zones</h2>` +
-          `<span class="version-pill">v1.9.1</span></header>` +
+          `<span class="version-pill">v1.9.2</span></header>` +
           `<div class="empty"><p>No zones configured. Add them via Settings → Devices &amp; Services.</p></div>`
         );
       }
       const rows = zones.map((z) => this._renderZoneRow(z)).join("");
       return (
         `<header class="page-header"><h2>Zones</h2>` +
-        `<span class="version-pill">v1.9.1</span></header>` +
+        `<span class="version-pill">v1.9.2</span></header>` +
         `<p class="section-hint">Hidden zones still run on schedule — they're just hidden from the Today view.</p>` +
         `<div class="zones-list">${rows}</div>`
       );
@@ -1973,13 +1981,133 @@
       return result.sort((a, b) => a.start_time.localeCompare(b.start_time));
     }
 
+    _todaysRuns() {
+      // All scheduled runs firing today, expanded into one entry per
+      // zone-step (so a multi-zone schedule yields multiple markers).
+      // Each entry is {start_minutes, zone_entity_id, zone_name,
+      // duration_minutes, schedule_name}. Used by the Today timeline.
+      if (!this._schedules) return [];
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const isoDow = (today.getDay() + 6) % 7; // JS Sun=0 → ISO Mon=0
+      const out = [];
+      // Inter-zone valve buffer, matches the server-side run_planner.
+      const ZONE_BUFFER_SECONDS = 30;
+
+      for (const s of this._schedules) {
+        if (!s.enabled) continue;
+        // Does it fire today?
+        let firesToday = false;
+        if (s.mode === "interval") {
+          if (!s.interval_anchor || !s.interval_days) continue;
+          const anchor = new Date(s.interval_anchor + "T00:00:00");
+          if (Number.isNaN(anchor.getTime())) continue;
+          const diffDays = Math.floor((today - anchor) / 86400000);
+          firesToday = diffDays >= 0 && diffDays % s.interval_days === 0;
+          if (s.end_date) {
+            const end = new Date(s.end_date + "T00:00:00");
+            if (today > end) firesToday = false;
+          }
+        } else {
+          firesToday = (s.weekdays || []).includes(isoDow);
+        }
+        if (!firesToday) continue;
+
+        // Parse start_time "HH:MM" → minutes from midnight
+        const [hh, mm] = (s.start_time || "00:00").split(":").map((n) => parseInt(n, 10));
+        let cursorMin = (hh || 0) * 60 + (mm || 0);
+        // Expand zone_steps (or fall back to the single zone)
+        const steps =
+          Array.isArray(s.zone_steps) && s.zone_steps.length > 0
+            ? s.zone_steps
+            : [{ zone_entity_id: s.zone_entity_id, duration_minutes: s.duration_minutes }];
+        let cursorSec = cursorMin * 60;
+        for (const step of steps) {
+          const startMin = Math.floor(cursorSec / 60);
+          out.push({
+            start_minutes: startMin,
+            zone_entity_id: step.zone_entity_id,
+            zone_name: this._zoneName(step.zone_entity_id),
+            duration_minutes: step.duration_minutes,
+            schedule_name: s.name,
+          });
+          cursorSec += step.duration_minutes * 60 + ZONE_BUFFER_SECONDS;
+        }
+      }
+      return out.sort((a, b) => a.start_minutes - b.start_minutes);
+    }
+
+    _renderTodaysTimeline() {
+      const runs = this._todaysRuns();
+      const now = new Date();
+      const nowMin = now.getHours() * 60 + now.getMinutes();
+      const pct = (m) => (m / 1440) * 100;
+      const fmtTime = (m) => {
+        const h = Math.floor(m / 60);
+        const mm = String(m % 60).padStart(2, "0");
+        const ampm = h >= 12 ? "PM" : "AM";
+        const h12 = h % 12 || 12;
+        return `${h12}:${mm} ${ampm}`;
+      };
+
+      if (runs.length === 0) {
+        return (
+          `<section class="today-timeline">` +
+          `<h3 class="section-title">Today's runs</h3>` +
+          `<div class="empty"><p>No runs scheduled for today.</p></div>` +
+          `</section>`
+        );
+      }
+
+      // Hour ticks every 6h — keeps the axis readable
+      const ticks = [0, 360, 720, 1080, 1440]
+        .map((m) => {
+          const label = m === 1440 ? "12 AM" : fmtTime(m);
+          return `<span class="timeline-tick" style="left:${pct(m)}%">${label}</span>`;
+        })
+        .join("");
+
+      // One pill per run, anchored at the start time
+      const pills = runs
+        .map((r) => {
+          const widthPct = Math.max(2, pct(r.duration_minutes));
+          const past = r.start_minutes + r.duration_minutes < nowMin;
+          const live =
+            r.start_minutes <= nowMin && nowMin < r.start_minutes + r.duration_minutes;
+          const cls =
+            "timeline-pill" +
+            (past ? " timeline-pill-past" : "") +
+            (live ? " timeline-pill-live" : "");
+          const title = `${r.schedule_name} → ${r.zone_name}\n${fmtTime(r.start_minutes)} for ${r.duration_minutes} min`;
+          return (
+            `<div class="${cls}" style="left:${pct(r.start_minutes)}%;width:${widthPct}%" title="${escapeAttr(title)}">` +
+            `<span class="timeline-pill-time">${fmtTime(r.start_minutes)}</span>` +
+            `<span class="timeline-pill-zone">${escapeHtml(r.zone_name)} · ${r.duration_minutes}m</span>` +
+            `</div>`
+          );
+        })
+        .join("");
+
+      const nowMarker = `<div class="timeline-now" style="left:${pct(nowMin)}%" title="Now: ${fmtTime(nowMin)}"></div>`;
+
+      return (
+        `<section class="today-timeline">` +
+        `<h3 class="section-title">Today's runs (${runs.length})</h3>` +
+        `<div class="timeline-track">` +
+        `<div class="timeline-axis">${ticks}</div>` +
+        `<div class="timeline-bar">${nowMarker}${pills}</div>` +
+        `</div>` +
+        `</section>`
+      );
+    }
+
     // ── Sensors tab ────────────────────────────────────────────────
     _renderSensors() {
       const zones = this._zones();
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Sensors</h2>` +
-          `<span class="version-pill">v1.9.1</span></header>` +
+          `<span class="version-pill">v1.9.2</span></header>` +
           `<div class="empty"><p>No zones configured.</p></div>`
         );
       }
@@ -1988,7 +2116,7 @@
         .join("");
       return (
         `<header class="page-header"><h2>Sensors</h2>` +
-        `<span class="version-pill">v1.9.1</span></header>` +
+        `<span class="version-pill">v1.9.2</span></header>` +
         `<p class="section-hint">Bind soil-moisture sensors to a zone so runtimes auto-adjust based on actual moisture. You can attach one sensor or several (combined as average, lowest, highest, or just the primary).</p>` +
         `<div class="sensor-zone-list">${cards}</div>`
       );
@@ -2399,7 +2527,7 @@
 
       return (
         `<header class="page-header"><h2>Weather</h2>` +
-        `<span class="version-pill">v1.9.1</span></header>` +
+        `<span class="version-pill">v1.9.2</span></header>` +
         lockoutHtml +
         forecastHtml +
         `<form class="weather-form" data-form="weather">` +
@@ -2836,6 +2964,21 @@
         // Two-column row: min-width:0 on each cell lets <input type=time/date> shrink
         // so the right cell doesn't overflow into the left.
         `.row-2{display:grid;grid-template-columns:1fr 1fr;gap:10px}` +
+        // ── Today's runs timeline (horizontal time strip below Zones)
+        `.today-timeline{margin-top:24px}` +
+        `.timeline-track{position:relative;padding-top:18px;padding-bottom:46px;background:var(--ci-card);border:1px solid var(--ci-border);border-radius:12px;padding-left:8px;padding-right:8px}` +
+        `.timeline-axis{position:relative;height:14px;border-bottom:1px solid var(--ci-border);margin-bottom:8px}` +
+        `.timeline-tick{position:absolute;top:0;transform:translateX(-50%);font-size:10px;color:var(--ci-text-2);white-space:nowrap}` +
+        `.timeline-tick:first-child{transform:translateX(0)}` +
+        `.timeline-tick:last-child{transform:translateX(-100%)}` +
+        `.timeline-bar{position:relative;height:42px}` +
+        `.timeline-pill{position:absolute;top:0;height:36px;background:var(--ci-accent);color:#fff;border-radius:6px;padding:4px 6px;font-size:11px;line-height:1.15;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;box-sizing:border-box;cursor:default;display:flex;flex-direction:column;justify-content:center;box-shadow:0 1px 2px rgba(0,0,0,0.15)}` +
+        `.timeline-pill-time{font-weight:700;font-size:10px;opacity:0.9}` +
+        `.timeline-pill-zone{font-weight:600;overflow:hidden;text-overflow:ellipsis}` +
+        `.timeline-pill-past{background:var(--ci-text-2);opacity:0.6}` +
+        `.timeline-pill-live{box-shadow:0 0 0 3px rgba(67,160,71,0.35);background:#43a047}` +
+        `.timeline-now{position:absolute;top:-4px;bottom:-4px;width:2px;background:#db4437;z-index:2}` +
+        `.timeline-now::after{content:"now";position:absolute;top:-14px;left:4px;font-size:9px;color:#db4437;font-weight:700;letter-spacing:0.5px}` +
         // Schedule modal time + duration row — give Start time a wider
         // cell so the native time picker isn't cramped, since Duration
         // is just two compact number inputs.
@@ -3015,5 +3158,5 @@
   }
 
   customElements.define(ELEMENT_NAME, CompleteIrrigationPanel);
-  console.info("[complete-irrigation] panel registered, version v1.9.1");
+  console.info("[complete-irrigation] panel registered, version v1.9.2");
 })();
