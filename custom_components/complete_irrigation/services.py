@@ -201,6 +201,10 @@ _SET_GENERAL_CONFIG_SCHEMA = vol.Schema(
         vol.Optional("zone_buffer_seconds"): vol.All(vol.Coerce(int), vol.Range(min=0, max=600)),
         # PRD #81 — snooze the Sunday weekly reminder until this date.
         vol.Optional("weekly_reminder_snoozed_until"): vol.Any(None, cv.date),
+        # User-defined zone ordering for the panel (Today + Zones tabs).
+        # When set, the panel renders zones in this order; zones added
+        # later via the config flow are appended below this list.
+        vol.Optional("zone_order"): vol.All(cv.ensure_list, [cv.entity_id]),
     }
 )
 
@@ -684,6 +688,10 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         if "weekly_reminder_snoozed_until" in data:
             v = data["weekly_reminder_snoozed_until"]
             coord.config["weekly_reminder_snoozed_until"] = v.isoformat() if v else None
+        if "zone_order" in data:
+            # Store the full ordered list as-is; the panel handles
+            # appending any zones not in the list (newly-added ones).
+            coord.config["zone_order"] = list(data["zone_order"])
         await coord.async_save_config()
         _LOGGER.info("General config updated: %s", data)
 
