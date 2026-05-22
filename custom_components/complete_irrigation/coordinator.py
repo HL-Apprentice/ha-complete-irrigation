@@ -49,6 +49,71 @@ STORAGE_VERSION = 1
 TICK_SECONDS = 60
 
 
+def build_weekly_zone_summary(
+    zones_iter,
+    schedules,
+    zones_config: dict,
+    get_state,
+) -> list[str]:
+    """PRD #80 — pure-logic for the per-zone weekly digest.
+
+    Returns a list of human-readable bullet lines, one per configured
+    zone. Each line shows: zone name, schedule count, current moisture
+    (if any sensor is bound), and the configured target.
+
+    `zones_iter` is the iterable of zone entity_ids (from the entry).
+    `schedules` is the enabled-schedule list.
+    `zones_config` is `coord.config["zones"]` — keyed by entity_id.
+    `get_state(eid)` returns a HA state-like object (or None) — same
+    contract used by detect_sensor_offline_transitions().
+    """
+    out: list[str] = []
+    for entity_id in zones_iter:
+        # Count schedules that include this zone (top-level OR a step).
+        n_scheds = 0
+        for s in schedules:
+            if s.zone_entity_id == entity_id:
+                n_scheds += 1
+                continue
+            steps = getattr(s, "zone_steps", None) or ()
+            if any(st.zone_entity_id == entity_id for st in steps):
+                n_scheds += 1
+
+        # Resolve friendly name (state attrs > entity_id fallback)
+        zone_state = get_state(entity_id)
+        friendly = (
+            zone_state.attributes.get("friendly_name")
+            if zone_state and hasattr(zone_state, "attributes")
+            else None
+        ) or entity_id
+
+        # Moisture: average the bound sensors (if any).
+        zcfg = zones_config.get(entity_id, {})
+        sensors = zcfg.get("moisture_entities") or []
+        target = zcfg.get("target_pct")
+        moistures: list[float] = []
+        for eid in sensors:
+            s = get_state(eid)
+            if s is None or s.state in ("unknown", "unavailable"):
+                continue
+            try:
+                moistures.append(float(s.state))
+            except (TypeError, ValueError):
+                continue
+
+        bits = [f"• {friendly}: {n_scheds} schedule(s)"]
+        if moistures:
+            avg = sum(moistures) / len(moistures)
+            if target is not None:
+                bits.append(f"moisture {avg:.0f}% (target {int(target)}%)")
+            else:
+                bits.append(f"moisture {avg:.0f}%")
+        elif sensors:
+            bits.append("moisture sensors offline")
+        out.append(", ".join(bits))
+    return out
+
+
 def compute_expired_establishment_schedules(
     schedules: list, today, already_prompted: set[str]
 ) -> list:
@@ -414,6 +479,8 @@ class ScheduleCoordinator:
         )
 
     async def _fire_weekly_reminder(self, now=None) -> None:
+        from datetime import date as _date
+
         from homeassistant.util import dt as dt_util
 
         n = now or dt_util.now()
@@ -421,12 +488,41 @@ class ScheduleCoordinator:
             return
         if not self.notifier:
             return
-        zone_count = len(self._config.get("zones", {}))
-        sched_count = len(self._store.all())
-        msg = (
-            f"Weekly check: {sched_count} schedule(s) across {zone_count} configured "
-            f"zone(s). Confirm everything looks right in the Irrigation panel."
+
+        # PRD #81 — snooze check.
+        snooze_str = self._config.get("weekly_reminder_snoozed_until")
+        if snooze_str:
+            try:
+                snoozed_until = _date.fromisoformat(snooze_str)
+                if n.date() < snoozed_until:
+                    _LOGGER.info("Weekly reminder snoozed until %s — skipping", snoozed_until)
+                    return
+            except (TypeError, ValueError):
+                pass  # bad value → ignore, fire as normal
+
+        # PRD #80 — per-zone summary instead of a single aggregate line.
+        # Pulls zones from the integration entry (not coord.config) so
+        # we list zones even before they've had a moisture binding.
+        zone_ids: list[str] = []
+        for data in self._hass.data.get(DOMAIN, {}).values():
+            if isinstance(data, dict):
+                zone_ids.extend(data.get("zones") or [])
+        # De-duplicate but preserve order
+        seen: set[str] = set()
+        zone_ids = [z for z in zone_ids if not (z in seen or seen.add(z))]
+
+        per_zone = build_weekly_zone_summary(
+            zone_ids,
+            self._store.enabled_schedules(),
+            self._config.get("zones", {}),
+            lambda eid: self._hass.states.get(eid),
         )
+        header = (
+            f"Weekly check ({len(self._store.all())} schedule(s) across {len(zone_ids)} zone(s)):"
+        )
+        body = "\n".join(per_zone) if per_zone else "No zones configured yet."
+        msg = f"{header}\n{body}"
+
         await self.notifier.notify(
             msg,
             title="Weekly irrigation check",
@@ -468,10 +564,13 @@ class ScheduleCoordinator:
         if self.is_locked_out_now():
             return
 
+        # PRD #38 — honor a user-configured inter-zone valve buffer.
+        zone_buffer = self._config.get("zone_buffer_seconds")
         upcoming = next_runs(
             self._store.enabled_schedules(),
             from_dt=last - timedelta(hours=2),
             until_dt=now + timedelta(hours=2),
+            zone_buffer_seconds=int(zone_buffer) if zone_buffer is not None else None,
         )
         # Honor a user-selected global conflict policy (Settings tab).
         # Unknown / missing → keep safe default of POLICY_DEFER_NEW.
