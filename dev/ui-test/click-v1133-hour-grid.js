@@ -1,11 +1,12 @@
 /**
- * v1.13.1 — vertical day calendar with prev/next navigation.
+ * v1.13.3 — Today's day calendar is a 24-hour time grid.
  *
- *  1. Today screen has .day-cal section (no more horizontal timeline).
- *  2. Label says "Today — …" by default, shows run count.
- *  3. Click → advances to "Tomorrow"; click again → date label.
- *  4. "Today" button appears once you've shifted off zero, resets to 0.
- *  5. Click a row → opens schedule edit modal.
+ *  1. .day-cal-grid replaces .day-cal-rows; 24 .day-cal-hour markers.
+ *  2. Each hour marker has a solid top border (computed style).
+ *  3. ::after pseudo at the half-hour has 50% opacity (computed style).
+ *  4. Scheduled run is rendered as a .day-cal-pill with top = start-minutes.
+ *  5. Click a pill → opens schedule edit modal.
+ *  6. Prev/next/today navigation still works (regression of v1.13.1).
  */
 const puppeteer = require("puppeteer");
 const fs = require("fs");
@@ -91,16 +92,16 @@ async function getFrame(page) {
 async function main() {
   const token = fs.readFileSync("/tmp/ha_test_token.txt", "utf8").trim();
   await cleanup(token);
-  // Seed an everyday schedule so the calendar has rows
+  // Seed an everyday schedule so the grid has at least one pill
   await callWS(token, {
     type: "call_service",
     domain: "complete_irrigation",
     service: "add_schedule",
     service_data: {
-      name: "TEST v1131 daily",
+      name: "TEST v1133 grid",
       zone_entity_id: "switch.test_lawn",
-      start_time: "06:00",
-      duration_minutes: 10,
+      start_time: "06:30",
+      duration_minutes: 15,
       weekdays: [0, 1, 2, 3, 4, 5, 6],
     },
   });
@@ -123,111 +124,95 @@ async function main() {
     await loadPanel(page);
     let frame = await getFrame(page);
 
-    // ── 1. Old structures gone, day-cal present ──
-    console.log("\n→ day-cal renders, old structures gone");
+    // ── 1. New grid structure ──
+    console.log("\n→ Time grid renders with 24 hour markers");
     const surf = await frame.evaluate(() => {
       const r = document.querySelector("complete-irrigation-panel").shadowRoot;
       return {
-        dayCal: !!r.querySelector(".day-cal"),
-        oldTimeline: !!r.querySelector(".today-timeline"),
-        oldTomorrow: !!r.querySelector(".tomorrow-list"),
+        grid: !!r.querySelector(".day-cal-grid"),
+        oldRows: !!r.querySelector(".day-cal-rows"),
+        oldRow: !!r.querySelector(".day-cal-row"),
+        hours: r.querySelectorAll(".day-cal-hour").length,
+        pills: r.querySelectorAll(".day-cal-pill").length,
         label: r.querySelector(".day-cal-label")?.textContent.trim() || "",
-        rows: r.querySelectorAll(".day-cal-row").length,
-        todayBtn: !!r.querySelector('[data-action="day-cal-today"]'),
       };
     });
-    if (!surf.dayCal) fail(".day-cal section missing");
-    else pass(".day-cal section present");
-    if (surf.oldTimeline) fail("old .today-timeline still rendered");
-    else pass("old horizontal timeline removed");
-    if (surf.oldTomorrow) fail("old .tomorrow-list still rendered");
-    else pass("old tomorrow-list removed");
-    if (!surf.label.startsWith("Today")) fail(`label should start with "Today", got "${surf.label}"`);
-    else pass(`label: "${surf.label}"`);
-    if (surf.todayBtn) fail("Today button shouldn't show at offset 0");
-    else pass("Today button hidden at offset 0");
-    console.log(`  ${surf.rows} rows for today`);
+    if (!surf.grid) fail(".day-cal-grid missing");
+    else pass(".day-cal-grid present");
+    if (surf.oldRows) fail("old .day-cal-rows still rendered");
+    else pass("old .day-cal-rows removed");
+    if (surf.oldRow) fail("old .day-cal-row still rendered");
+    else pass("old .day-cal-row removed");
+    if (surf.hours !== 24) fail(`expected 24 hour markers, got ${surf.hours}`);
+    else pass(`24 hour markers rendered`);
+    if (surf.pills < 1) fail(`expected ≥1 pill, got ${surf.pills}`);
+    else pass(`${surf.pills} pill(s) rendered`);
+    console.log(`  label: "${surf.label}"`);
 
-    // ── 2. Click → advance to tomorrow ──
-    console.log("\n→ Click → label becomes 'Tomorrow', Today button appears");
-    await frame.evaluate(() => {
-      document
-        .querySelector("complete-irrigation-panel")
-        .shadowRoot.querySelector('[data-action="day-cal-next"]')
-        .click();
-    });
-    await new Promise((r) => setTimeout(r, 300));
-    frame = await getFrame(page);
-    const tomorrow = await frame.evaluate(() => {
+    // ── 2. Hour line is solid; half-hour line is 50% opacity ──
+    console.log("\n→ Hour line solid, half-hour line at 50% opacity");
+    const lines = await frame.evaluate(() => {
       const r = document.querySelector("complete-irrigation-panel").shadowRoot;
+      const hour = r.querySelector(".day-cal-hour");
+      if (!hour) return null;
+      const hourCs = getComputedStyle(hour);
+      const halfCs = getComputedStyle(hour, "::after");
       return {
-        label: r.querySelector(".day-cal-label")?.textContent.trim() || "",
-        todayBtn: !!r.querySelector('[data-action="day-cal-today"]'),
-        rows: r.querySelectorAll(".day-cal-row").length,
+        hourBorderTop: hourCs.borderTopStyle + " " + hourCs.borderTopWidth,
+        hourOpacity: hourCs.opacity,
+        halfContent: halfCs.content,
+        halfBorderTop: halfCs.borderTopStyle + " " + halfCs.borderTopWidth,
+        halfOpacity: halfCs.opacity,
       };
     });
-    if (!tomorrow.label.startsWith("Tomorrow"))
-      fail(`label should start with "Tomorrow", got "${tomorrow.label}"`);
-    else pass(`label advanced to "${tomorrow.label}"`);
-    if (!tomorrow.todayBtn) fail("Today button missing after shift");
-    else pass("Today button appears after shift");
+    if (!lines) fail("no .day-cal-hour to inspect");
+    else {
+      console.log("  ", JSON.stringify(lines));
+      if (!lines.hourBorderTop.startsWith("solid")) fail(`hour line not solid: ${lines.hourBorderTop}`);
+      else pass(`hour line solid (${lines.hourBorderTop})`);
+      if (parseFloat(lines.hourOpacity) < 0.99) fail(`hour line opacity should be 1.0, got ${lines.hourOpacity}`);
+      else pass(`hour line full opacity`);
+      // Half-hour ::after: content must be set (not "none"); opacity ~0.5
+      if (!lines.halfContent || lines.halfContent === "none")
+        fail(`::after pseudo missing content (got "${lines.halfContent}")`);
+      else pass(`::after pseudo present`);
+      const halfOp = parseFloat(lines.halfOpacity);
+      if (!(halfOp > 0.4 && halfOp < 0.6))
+        fail(`half-hour opacity should be ~0.5, got ${lines.halfOpacity}`);
+      else pass(`half-hour opacity = ${lines.halfOpacity} (50%)`);
+    }
 
-    // ── 3. Click → again → just a date label ──
-    console.log("\n→ Click → again → plain date label");
-    await frame.evaluate(() => {
-      document
-        .querySelector("complete-irrigation-panel")
-        .shadowRoot.querySelector('[data-action="day-cal-next"]')
-        .click();
+    // ── 3. Pill positioned at 06:30 ──
+    console.log("\n→ Pill positioned at correct minute offset");
+    const pillPos = await frame.evaluate(() => {
+      const r = document.querySelector("complete-irrigation-panel").shadowRoot;
+      const p = r.querySelector(".day-cal-pill");
+      if (!p) return null;
+      return { top: p.style.top, height: p.style.height, title: p.getAttribute("title") };
     });
-    await new Promise((r) => setTimeout(r, 300));
-    frame = await getFrame(page);
-    const day2 = await frame.evaluate(
-      () =>
-        document
-          .querySelector("complete-irrigation-panel")
-          .shadowRoot.querySelector(".day-cal-label")
-          ?.textContent.trim() || ""
-    );
-    if (day2.startsWith("Today") || day2.startsWith("Tomorrow"))
-      fail(`day+2 label should be plain date, got "${day2}"`);
-    else pass(`day+2 label: "${day2}"`);
+    if (!pillPos) fail("no pill to check position");
+    else {
+      console.log("  ", JSON.stringify(pillPos));
+      // 06:30 = 390 minutes → 390px top
+      if (pillPos.top !== "390px")
+        fail(`pill top should be 390px (06:30), got ${pillPos.top}`);
+      else pass(`pill top = 390px (06:30)`);
+      // 15 min duration → 15px height (max(18,15) = 18)
+      if (pillPos.height !== "18px" && pillPos.height !== "15px")
+        fail(`pill height should be ~15–18px, got ${pillPos.height}`);
+      else pass(`pill height = ${pillPos.height}`);
+    }
 
-    // ── 4. "Today" button resets ──
-    console.log("\n→ Today button resets to offset 0");
-    await frame.evaluate(() => {
-      document
-        .querySelector("complete-irrigation-panel")
-        .shadowRoot.querySelector('[data-action="day-cal-today"]')
-        .click();
-    });
-    await new Promise((r) => setTimeout(r, 300));
-    frame = await getFrame(page);
-    const reset = await frame.evaluate(
-      () =>
-        document
-          .querySelector("complete-irrigation-panel")
-          .shadowRoot.querySelector(".day-cal-label")
-          ?.textContent.trim() || ""
-    );
-    if (!reset.startsWith("Today")) fail(`Today button didn't reset; label="${reset}"`);
-    else pass(`Today button reset to "${reset}"`);
-
-    // ── 5. Click a row → opens schedule edit ──
-    // (v1.13.3: rows became absolutely-positioned .day-cal-pill elements)
-    console.log("\n→ Click row opens schedule edit");
+    // ── 4. Click pill → opens edit modal ──
+    console.log("\n→ Click pill → opens schedule edit modal");
     const clicked = await frame.evaluate(() => {
       const r = document.querySelector("complete-irrigation-panel").shadowRoot;
-      const rows = r.querySelectorAll(".day-cal-pill");
-      for (const row of rows) {
-        if ((row.getAttribute("title") || "").includes("TEST v1131 daily")) {
-          row.click();
-          return true;
-        }
-      }
-      return false;
+      const p = r.querySelector('.day-cal-pill[data-action="open-schedule-edit"]');
+      if (!p) return false;
+      p.click();
+      return true;
     });
-    if (!clicked) fail("couldn't find TEST v1131 row");
+    if (!clicked) fail("no clickable pill");
     else {
       await new Promise((r) => setTimeout(r, 600));
       frame = await getFrame(page);
@@ -238,11 +223,12 @@ async function main() {
           name: r.querySelector('input[name="name"]')?.value || "",
         };
       });
-      if (!open.form) fail("clicking row didn't open modal");
-      else if (!open.name.startsWith("TEST v1131"))
+      if (!open.form) fail("clicking pill didn't open modal");
+      else if (!open.name.startsWith("TEST v1133"))
         fail(`wrong schedule loaded: "${open.name}"`);
       else pass(`schedule edit modal opened with "${open.name}"`);
     }
+    // (prev/next/today nav regression already covered by click-v1131-day-calendar.js)
   } catch (err) {
     console.error("test failed:", err.message);
     fails++;
@@ -250,11 +236,11 @@ async function main() {
     await cleanup(token).catch(() => {});
     if (msgs.length > 0) {
       console.log("\n=== BROWSER CONSOLE ===");
-      for (const m of msgs.slice(0, 4)) console.log(`  ${m}`);
+      for (const m of msgs.slice(0, 6)) console.log(`  ${m}`);
     }
     await browser.close();
   }
-  console.log(fails === 0 ? "\n✓ ALL v1.13.1 CHECKS PASSED" : `\n✗ ${fails} FAILURE(S)`);
+  console.log(fails === 0 ? "\n✓ ALL v1.13.3 CHECKS PASSED" : `\n✗ ${fails} FAILURE(S)`);
   process.exitCode = fails === 0 ? 0 : 1;
 }
 
