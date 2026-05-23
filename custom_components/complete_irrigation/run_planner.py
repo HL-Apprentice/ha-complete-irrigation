@@ -167,9 +167,16 @@ def _runs_for_interval(sched, from_dt, until_dt, buffer_seconds=None):
 def _runs_for_interval_hours(sched, from_dt, until_dt, buffer_seconds=None):
     """Generate runs every `interval_hours` from interval_anchor + start_time.
 
-    Unlike interval-days mode, this crosses day boundaries: an "every 6h
-    starting at 06:00" schedule fires at 06:00, 12:00, 18:00, 00:00,
-    06:00 the next day, ... continuing until end_date or window end.
+    Two sub-modes:
+      • Without `interval_end_time` (legacy): continuous across day
+        boundaries — "every 6h starting 06:00" fires 06, 12, 18, 00,
+        06, 12, ... until end_date / window end.
+      • With `interval_end_time` (v1.14.1): daily window — re-anchors at
+        `start_time` each day, stops when the next firing would exceed
+        `interval_end_time` (inclusive), then resumes next day. So
+        "every 2h from 06:00 to 20:00" fires 06, 08, 10, 12, 14, 16,
+        18, 20 each day; nothing between 20:00 and 06:00.
+
     Skips runs before interval_anchor; stops at end_date if set.
     """
     from .schedule import is_within_active_window
@@ -178,17 +185,6 @@ def _runs_for_interval_hours(sched, from_dt, until_dt, buffer_seconds=None):
     step_hours = sched.interval_hours
     anchor_dt = datetime.combine(sched.interval_anchor, sched.start_time, tzinfo=tz)
     step = timedelta(hours=step_hours)
-
-    # Advance to the first firing >= from_dt
-    current = anchor_dt
-    if current < from_dt:
-        # Calculate how many steps to skip to land at or after from_dt
-        elapsed = from_dt - anchor_dt
-        n_steps = elapsed // step  # integer floor division on timedelta
-        current = anchor_dt + n_steps * step
-        # If still before from_dt, advance one more step
-        if current < from_dt:
-            current += step
 
     end_dt = until_dt
     # Only narrow window for non-repeating end_date; annual repeat is
@@ -201,12 +197,46 @@ def _runs_for_interval_hours(sched, from_dt, until_dt, buffer_seconds=None):
         if end_of_end < end_dt:
             end_dt = end_of_end
 
-    while current < end_dt:
-        if is_within_active_window(sched, current.date()):
-            for run in _expand_steps(sched, current, buffer_seconds):
-                if from_dt <= run.start_at < until_dt:
-                    yield run
-        current += step
+    if sched.interval_end_time is None:
+        # ── Continuous mode (legacy) ──
+        current = anchor_dt
+        if current < from_dt:
+            elapsed = from_dt - anchor_dt
+            n_steps = elapsed // step
+            current = anchor_dt + n_steps * step
+            if current < from_dt:
+                current += step
+        while current < end_dt:
+            if is_within_active_window(sched, current.date()):
+                for run in _expand_steps(sched, current, buffer_seconds):
+                    if from_dt <= run.start_at < until_dt:
+                        yield run
+            current += step
+        return
+
+    # ── Daily-window mode ──
+    # Iterate one day at a time over [from_dt.date, end_dt.date]. For each
+    # day inside the active window AND >= interval_anchor, walk firings
+    # from start_time until past interval_end_time.
+    end_minutes = sched.interval_end_time.hour * 60 + sched.interval_end_time.minute
+    start_minutes = sched.start_time.hour * 60 + sched.start_time.minute
+    step_minutes = step_hours * 60
+
+    cur_date = from_dt.date()
+    last_date = end_dt.date()
+    while cur_date <= last_date:
+        if cur_date >= sched.interval_anchor and is_within_active_window(sched, cur_date):
+            fire_minutes = start_minutes
+            while fire_minutes <= end_minutes:
+                fire_dt = datetime.combine(cur_date, sched.start_time, tzinfo=tz) + timedelta(
+                    minutes=(fire_minutes - start_minutes)
+                )
+                if fire_dt >= from_dt and fire_dt < end_dt:
+                    for run in _expand_steps(sched, fire_dt, buffer_seconds):
+                        if from_dt <= run.start_at < until_dt:
+                            yield run
+                fire_minutes += step_minutes
+        cur_date += timedelta(days=1)
 
 
 def due_runs_since(

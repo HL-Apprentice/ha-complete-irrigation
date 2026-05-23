@@ -25,6 +25,13 @@ _VALID_MODES = (MODE_WEEKDAYS, MODE_INTERVAL, MODE_INTERVAL_HOURS)
 DEFAULT_ZONE_BUFFER_SECONDS = 30
 
 
+def _parse_hhmm(s: str) -> time:
+    """Parse 'HH:MM' into a `time`. Mirrors the inline parse used for
+    start_time so interval_end_time uses the same format."""
+    hh, mm = s.split(":")
+    return time(int(hh), int(mm))
+
+
 @dataclass(frozen=True)
 class ZoneStep:
     """One zone in a multi-zone schedule: which zone, how long.
@@ -99,6 +106,13 @@ class Schedule:
     # interval_hours mode: fire every N hours from interval_anchor +
     # start_time, continuing across day boundaries.
     interval_hours: int | None = None
+    # Optional daily-window cap for interval_hours mode. When set:
+    #   • the schedule fires every N hours from `start_time` ON EACH DAY
+    #     (re-anchored daily, not continuous across midnight)
+    #   • the last firing of a day is the latest one whose start ≤
+    #     interval_end_time (inclusive)
+    # When None, the legacy continuous-from-anchor behavior is preserved.
+    interval_end_time: time | None = None
     # Multi-zone: ordered tuple of ZoneStep. When non-empty the schedule
     # fires zones back-to-back at run time (each waits for the previous to
     # finish, plus DEFAULT_ZONE_BUFFER_SECONDS). The first step mirrors
@@ -139,6 +153,17 @@ class Schedule:
                 )
             if self.interval_anchor is None:
                 raise ValueError("interval_hours mode requires interval_anchor (start date)")
+            # Daily-window cap (optional). When provided, must be strictly
+            # after start_time so at least one firing fits in the window.
+            if self.interval_end_time is not None and self.interval_end_time <= self.start_time:
+                raise ValueError(
+                    "interval_end_time must be after start_time "
+                    f"(got {self.start_time} → {self.interval_end_time})"
+                )
+        # interval_end_time is only meaningful for interval_hours mode.
+        # Catch misuse in any other mode regardless of the per-mode block above.
+        if self.mode != MODE_INTERVAL_HOURS and self.interval_end_time is not None:
+            raise ValueError("interval_end_time is only valid in interval_hours mode")
         # Active period (v1.12): when repeat_annually is on, BOTH dates
         # are required and start.month-day must come before end.month-day
         # (we don't support windows that wrap across the year boundary in
@@ -193,6 +218,9 @@ class Schedule:
             "interval_days": self.interval_days,
             "interval_anchor": (self.interval_anchor.isoformat() if self.interval_anchor else None),
             "interval_hours": self.interval_hours,
+            "interval_end_time": (
+                self.interval_end_time.strftime("%H:%M") if self.interval_end_time else None
+            ),
             "start_date": self.start_date.isoformat() if self.start_date else None,
             "repeat_annually": self.repeat_annually,
             "zone_steps": [s.to_dict() for s in self.zone_steps],
@@ -226,6 +254,9 @@ class Schedule:
             interval_days=data.get("interval_days"),
             interval_anchor=anchor_val,
             interval_hours=data.get("interval_hours"),
+            interval_end_time=(
+                _parse_hhmm(data["interval_end_time"]) if data.get("interval_end_time") else None
+            ),
             start_date=(date.fromisoformat(data["start_date"]) if data.get("start_date") else None),
             repeat_annually=bool(data.get("repeat_annually", False)),
             zone_steps=zone_steps,
