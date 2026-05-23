@@ -55,7 +55,12 @@ def in_quiet_hours(now: datetime, start_str: str, end_str: str) -> bool:
 
 def _coerce_target_list(value: Any) -> list[str]:
     """Accept a list, comma- or newline-separated string, or None and
-    return a clean list of non-empty notify.* service paths."""
+    return a clean list of non-empty notify.* service paths.
+
+    v1.15: entries that are NOT in the `notify.*` domain are dropped with
+    a warning. Without this guard, set_notification_config could install
+    arbitrary `domain.service` strings (e.g. shell_command.curl_exfil)
+    that would then be invoked on every notification event."""
     if value is None:
         return []
     if isinstance(value, list):
@@ -71,6 +76,13 @@ def _coerce_target_list(value: Any) -> list[str]:
             continue
         s = item.strip()
         if not s or s in seen:
+            continue
+        parts = s.split(".", 1)
+        if len(parts) != 2 or parts[0] != "notify" or not parts[1]:
+            _LOGGER.warning(
+                "Dropping invalid notify target %r — must be of the form 'notify.<service>'",
+                s,
+            )
             continue
         seen.add(s)
         out.append(s)
@@ -100,6 +112,11 @@ class NotificationDispatcher:
             if k == "notify_targets":
                 # Normalize: accept list, comma-separated string, or None
                 self.notify_targets = _coerce_target_list(v)
+            elif k == "notify_target":
+                # Run the legacy single-target path through the same domain
+                # validator so a bad value can't sneak in via setattr.
+                cleaned = _coerce_target_list([v] if v else [])
+                self.notify_target = cleaned[0] if cleaned else None
             elif hasattr(self, k):
                 setattr(self, k, v)
 

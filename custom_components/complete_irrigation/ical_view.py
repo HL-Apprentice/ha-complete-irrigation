@@ -23,7 +23,14 @@ _LOOKAHEAD_DAYS = 30
 
 
 def _ics_escape(s: str) -> str:
-    return s.replace("\\", "\\\\").replace(",", "\\,").replace(";", "\\;").replace("\n", "\\n")
+    """Escape per RFC 5545 §3.3.11. Strips control characters (other than
+    the escaped newline) so user-controlled strings like schedule_name
+    cannot inject CRLF + new VCALENDAR fields into the feed."""
+    # Drop control chars first — \r, \t, NUL, etc. Keep \n; we encode it next.
+    cleaned = "".join(c for c in s if c == "\n" or c >= " ")
+    return (
+        cleaned.replace("\\", "\\\\").replace(",", "\\,").replace(";", "\\;").replace("\n", "\\n")
+    )
 
 
 def _ics_dt(dt) -> str:
@@ -39,22 +46,22 @@ class IrrigationCalendarICSView(HomeAssistantView):
 
     url = f"/api/{DOMAIN}/calendar.ics"
     name = f"{DOMAIN}:calendar_ics"
-    requires_auth = False  # public read-only — schedule data isn't sensitive
+    # Auth required (v1.15). Schedule names + entity_ids would otherwise be
+    # readable by anyone who can reach the HA HTTP port — including the
+    # public Nabu Casa URL — and they leak occupancy patterns (when
+    # irrigation runs ⇒ house is in landscaping mode). Calendar subscribers
+    # can pass an HA long-lived access token via the ?authSig= query param
+    # or via cookie when subscribed from inside the network.
+    requires_auth = True
 
     async def get(self, request):
         from aiohttp import web
         from homeassistant.util import dt as dt_util
 
-        from . import _SHARED_KEY
+        from . import find_coordinator
 
         hass: HomeAssistant = request.app["hass"]
-        coord = None
-        for key, data in hass.data.get(DOMAIN, {}).items():
-            if key == _SHARED_KEY:
-                continue
-            coord = data.get("coordinator")
-            if coord is not None:
-                break
+        coord = find_coordinator(hass)
 
         if coord is None:
             return web.Response(text="No coordinator configured", status=503)
