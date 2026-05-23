@@ -397,3 +397,101 @@ def test_multi_zone_with_interval_mode_works():
     runs = next_runs([sched], from_dt=MONDAY_MIDNIGHT, until_dt=MONDAY_MIDNIGHT + timedelta(days=4))
     # 2 firings (day 0 and day 2) x 2 steps = 4 runs
     assert len(runs) == 4
+
+
+# ════════════════════════════════════════════════════════════════════
+# Interval-hours mode (v1.11) — fires every N hours from anchor + start_time
+# ════════════════════════════════════════════════════════════════════
+
+
+def _hourly_sched(**kw):
+    from datetime import date
+
+    defaults = {
+        "id": "h1",
+        "name": "Hourly veg",
+        "zone_entity_id": "switch.veg",
+        "start_time": time(6, 0),
+        "duration_minutes": 5,
+        "weekdays": (),
+        "mode": "interval_hours",
+        "interval_hours": 6,
+        "interval_anchor": date(2026, 5, 18),  # Monday
+    }
+    defaults.update(kw)
+    return Schedule(**defaults)
+
+
+def test_interval_hours_4_runs_in_24h_from_anchor():
+    """6-hour cycles starting Mon 06:00 should fire at 06, 12, 18, 00 (Tue)."""
+    runs = next_runs(
+        [_hourly_sched()],
+        from_dt=MONDAY_MIDNIGHT,
+        until_dt=MONDAY_MIDNIGHT + timedelta(days=1),
+    )
+    times = [(r.start_at.hour, r.start_at.minute) for r in runs]
+    # Anchor is 06:00; from_dt is 00:00 same day, so we miss earlier than 06.
+    # 6h cycles: 06, 12, 18 (all on Monday). Next is 00:00 Tuesday → outside window.
+    assert times == [(6, 0), (12, 0), (18, 0)]
+
+
+def test_interval_hours_crosses_day_boundary():
+    """8-hour cycles starting Mon 06:00 → next runs at 14, 22, then 06 Tue."""
+    runs = next_runs(
+        [_hourly_sched(interval_hours=8)],
+        from_dt=MONDAY_MIDNIGHT,
+        until_dt=MONDAY_MIDNIGHT + timedelta(days=2),
+    )
+    times = [(r.start_at.day, r.start_at.hour) for r in runs]
+    # Mon 06, Mon 14, Mon 22, Tue 06, Tue 14, Tue 22
+    assert times == [(18, 6), (18, 14), (18, 22), (19, 6), (19, 14), (19, 22)]
+
+
+def test_interval_hours_skips_runs_before_anchor():
+    """A 6h schedule whose anchor is Tuesday shouldn't fire on Monday."""
+    from datetime import date
+
+    runs = next_runs(
+        [_hourly_sched(interval_anchor=date(2026, 5, 19))],  # Tuesday
+        from_dt=MONDAY_MIDNIGHT,
+        until_dt=MONDAY_MIDNIGHT + timedelta(days=2),
+    )
+    # Should only see Tue runs: 06, 12, 18 (next is 00 Wed, outside window)
+    days = {r.start_at.day for r in runs}
+    assert days == {19}
+
+
+def test_interval_hours_respects_end_date():
+    from datetime import date
+
+    runs = next_runs(
+        [_hourly_sched(interval_hours=12, end_date=date(2026, 5, 18))],
+        from_dt=MONDAY_MIDNIGHT,
+        until_dt=MONDAY_MIDNIGHT + timedelta(days=5),
+    )
+    # 12h cycles from Mon 06:00, capped at end_date Mon:
+    # Mon 06, Mon 18 — and we stop before Tue 06.
+    days = {(r.start_at.day, r.start_at.hour) for r in runs}
+    assert days == {(18, 6), (18, 18)}
+
+
+def test_interval_hours_skipped_when_disabled():
+    runs = next_runs(
+        [_hourly_sched(enabled=False)],
+        from_dt=MONDAY_MIDNIGHT,
+        until_dt=MONDAY_MIDNIGHT + timedelta(days=1),
+    )
+    assert runs == []
+
+
+def test_interval_hours_from_dt_after_anchor_advances_correctly():
+    """When the planner window starts after the anchor, we should fast-
+    forward to the next cycle inside the window."""
+    runs = next_runs(
+        [_hourly_sched(interval_hours=6)],
+        from_dt=MONDAY_6AM + timedelta(hours=7),  # Mon 13:00
+        until_dt=MONDAY_MIDNIGHT + timedelta(days=1),
+    )
+    # First cycle ≥ 13:00 with anchor 06:00 + 6h steps is 18:00.
+    times = [(r.start_at.hour, r.start_at.minute) for r in runs]
+    assert times == [(18, 0)]
