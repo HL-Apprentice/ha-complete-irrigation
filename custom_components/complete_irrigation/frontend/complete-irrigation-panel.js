@@ -469,6 +469,8 @@
         this._renderNow();
       } else if (t.name === "duration_h" || t.name === "duration_m") {
         this._syncDurationFromForm();
+      } else if (t.name === "start_time_h" || t.name === "start_time_m") {
+        this._syncStartTimeFromForm();
       } else if (
         t.name === "extra_zone" ||
         t.name === "extra_dur_h" ||
@@ -487,6 +489,10 @@
       if (!t || !t.name) return;
       if (t.name === "duration_h" || t.name === "duration_m") {
         this._syncDurationFromForm();
+        return;
+      }
+      if (t.name === "start_time_h" || t.name === "start_time_m") {
+        this._syncStartTimeFromForm();
         return;
       }
       if (
@@ -514,6 +520,20 @@
       const h = parseInt(form.querySelector('[name="duration_h"]')?.value, 10) || 0;
       const m = parseInt(form.querySelector('[name="duration_m"]')?.value, 10) || 0;
       this._scheduleEditor.duration_minutes = h * 60 + m;
+    }
+
+    _syncStartTimeFromForm() {
+      // start_time (canonical "HH:MM") composed from two number inputs.
+      // We use number inputs instead of <input type="time"> because the
+      // native time picker crashes WKWebView in the macOS HA app.
+      const form = this.shadowRoot?.querySelector(".schedule-form");
+      if (!form) return;
+      const rawH = parseInt(form.querySelector('[name="start_time_h"]')?.value, 10);
+      const rawM = parseInt(form.querySelector('[name="start_time_m"]')?.value, 10);
+      const h = Number.isFinite(rawH) ? Math.max(0, Math.min(23, rawH)) : 0;
+      const m = Number.isFinite(rawM) ? Math.max(0, Math.min(59, rawM)) : 0;
+      this._scheduleEditor.start_time =
+        String(h).padStart(2, "0") + ":" + String(m).padStart(2, "0");
     }
 
     _syncExtraStepFromForm(idx) {
@@ -862,7 +882,7 @@
         }
         this._scheduleRender();
       } catch (err) {
-        // Pre-v1.12.0 backends don't have this command — no-op, fall
+        // Pre-v1.12.1 backends don't have this command — no-op, fall
         // back to the local-only countdown behavior.
         console.warn("[complete-irrigation] get_active_runs not available:", err);
       }
@@ -894,9 +914,11 @@
     }
 
     async _saveSchedule() {
-      // Make sure duration_minutes reflects the latest h/m inputs (covers
-      // the case where save was clicked before any input event fired).
+      // Make sure duration_minutes + start_time reflect the latest h/m
+      // inputs (covers the case where save was clicked before any input
+      // event fired).
       this._syncDurationFromForm();
+      this._syncStartTimeFromForm();
       const e = this._scheduleEditor;
       const minutes = parseInt(e.duration_minutes, 10);
       const mode =
@@ -1197,7 +1219,7 @@
 
       return (
         `<header class="page-header"><h2>Notifications</h2>` +
-        `<span class="version-pill">v1.12.0</span></header>` +
+        `<span class="version-pill">v1.12.1</span></header>` +
         `<form class="weather-form" data-form="notifications">` +
         `<label class="enabled-check"><input type="checkbox" name="enabled"${
           enabled ? " checked" : ""
@@ -1296,7 +1318,7 @@
 
       return (
         `<header class="page-header"><h2>Settings</h2>` +
-        `<span class="version-pill">v1.12.0</span></header>` +
+        `<span class="version-pill">v1.12.1</span></header>` +
         `<section class="settings-card">` +
         `<h3 class="section-title">Theme ${tip("Cycle Light/Dark/Auto with the ☀️/🌙 button on Today, or pick one of your HA-installed themes below.")}</h3>` +
         `<p class="section-hint">Light/Dark/Auto: <strong>${escapeHtml(themeLabel)}</strong>.</p>` +
@@ -1365,7 +1387,7 @@
         `<section class="settings-card">` +
         `<h3 class="section-title">About</h3>` +
         `<table class="settings-table">` +
-        `<tr><td>Version</td><td><strong>v1.12.0</strong></td></tr>` +
+        `<tr><td>Version</td><td><strong>v1.12.1</strong></td></tr>` +
         `<tr><td>Repository</td><td><a href="${repoUrl}" target="_blank">${escapeHtml(repoUrl)}</a></td></tr>` +
         `<tr><td>Zones configured</td><td>${(this._panel?.config?.zones || []).length}</td></tr>` +
         `<tr><td>Schedules</td><td>${(this._schedules || []).length}</td></tr>` +
@@ -1494,7 +1516,7 @@
       return (
         `<header class="page-header"><h2>Today</h2>` +
         `<div class="page-header-right">${themeBtn}` +
-        `<span class="version-pill">v1.12.0</span></div></header>` +
+        `<span class="version-pill">v1.12.1</span></div></header>` +
         this._renderRainLockoutBanner() +
         this._renderWeatherBanner() +
         `<section>` +
@@ -2007,7 +2029,7 @@
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Zones</h2>` +
-          `<span class="version-pill">v1.12.0</span></header>` +
+          `<span class="version-pill">v1.12.1</span></header>` +
           `<div class="empty"><p>No zones configured. Add them via Settings → Devices &amp; Services.</p></div>`
         );
       }
@@ -2016,7 +2038,7 @@
         .join("");
       return (
         `<header class="page-header"><h2>Zones</h2>` +
-        `<span class="version-pill">v1.12.0</span></header>` +
+        `<span class="version-pill">v1.12.1</span></header>` +
         `<p class="section-hint">Hidden zones still run on schedule — they're just hidden from the Today view.</p>` +
         `<div class="zones-list">${rows}</div>`
       );
@@ -2359,7 +2381,7 @@
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Sensors</h2>` +
-          `<span class="version-pill">v1.12.0</span></header>` +
+          `<span class="version-pill">v1.12.1</span></header>` +
           `<div class="empty"><p>No zones configured.</p></div>`
         );
       }
@@ -2368,7 +2390,7 @@
         .join("");
       return (
         `<header class="page-header"><h2>Sensors</h2>` +
-        `<span class="version-pill">v1.12.0</span></header>` +
+        `<span class="version-pill">v1.12.1</span></header>` +
         `<p class="section-hint">Bind soil-moisture sensors to a zone so runtimes auto-adjust based on actual moisture. You can attach one sensor or several (combined as average, lowest, highest, or just the primary).</p>` +
         `<div class="sensor-zone-list">${cards}</div>`
       );
@@ -2785,7 +2807,7 @@
 
       return (
         `<header class="page-header"><h2>Weather</h2>` +
-        `<span class="version-pill">v1.12.0</span></header>` +
+        `<span class="version-pill">v1.12.1</span></header>` +
         lockoutHtml +
         forecastHtml +
         `<form class="weather-form" data-form="weather">` +
@@ -3088,23 +3110,36 @@
         `<select name="zone_entity_id" required>${
           zoneOpts || `<option value="">No zones configured</option>`
         }</select>` +
-        `<div class="row-2 schedule-time-row">` +
-        `<div>` +
-        `<label>Start time ${tip("Time of day (24h, local) to start the run. Defaults to 06:00.")}</label>` +
-        `<input name="start_time" type="time" value="${escapeAttr(
-          e.start_time
-        )}" required />` +
-        `</div>` +
-        `<div>` +
-        `<label>Duration ${tip("How long to run, up to 8 hours. Moisture sensors can adjust this up or down at runtime.")}</label>` +
-        `<div class="duration-row">` +
-        `<input name="duration_h" type="number" min="0" max="8" step="1" value="${durH}" aria-label="Hours" />` +
-        `<span class="duration-unit">h</span>` +
-        `<input name="duration_m" type="number" min="0" max="59" step="1" value="${durM}" aria-label="Minutes" />` +
-        `<span class="duration-unit">m</span>` +
-        `</div>` +
-        `</div>` +
-        `</div>` +
+        // Split start_time "HH:MM" into hour + minute for the two number
+        // inputs. macOS HA app's WKWebView crashes on the native
+        // <input type="time"> picker, so we render plain number boxes.
+        (() => {
+          const [stH, stM] = (e.start_time || "06:00")
+            .split(":")
+            .map((v) => parseInt(v, 10) || 0);
+          return (
+            `<div class="row-2 schedule-time-row">` +
+            `<div>` +
+            `<label>Start time ${tip("Time of day (24h, local) the run starts. Defaults to 06:00.")}</label>` +
+            `<div class="duration-row">` +
+            `<input name="start_time_h" type="number" min="0" max="23" step="1" value="${stH}" aria-label="Hour (0-23)" required />` +
+            `<span class="duration-unit">h</span>` +
+            `<input name="start_time_m" type="number" min="0" max="59" step="1" value="${stM}" aria-label="Minute (0-59)" required />` +
+            `<span class="duration-unit">m</span>` +
+            `</div>` +
+            `</div>` +
+            `<div>` +
+            `<label>Duration ${tip("How long to run, up to 8 hours. Moisture sensors can adjust this up or down at runtime.")}</label>` +
+            `<div class="duration-row">` +
+            `<input name="duration_h" type="number" min="0" max="8" step="1" value="${durH}" aria-label="Hours" />` +
+            `<span class="duration-unit">h</span>` +
+            `<input name="duration_m" type="number" min="0" max="59" step="1" value="${durM}" aria-label="Minutes" />` +
+            `<span class="duration-unit">m</span>` +
+            `</div>` +
+            `</div>` +
+            `</div>`
+          );
+        })() +
         `<label>Recurrence ${tip("Weekdays = fires on the days you pick. Every N days = fires once per N-day cycle (good for deep watering trees). Every N hours = fires multiple times per day, cycling across day boundaries.")}</label>` +
         `<div class="mode-group">` +
         `<label class="mode-radio"><input type="radio" name="mode" value="weekdays"${
@@ -3498,5 +3533,5 @@
   }
 
   customElements.define(ELEMENT_NAME, CompleteIrrigationPanel);
-  console.info("[complete-irrigation] panel registered, version v1.12.0");
+  console.info("[complete-irrigation] panel registered, version v1.12.1");
 })();
