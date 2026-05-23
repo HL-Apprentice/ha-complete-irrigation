@@ -214,10 +214,11 @@ async function main() {
     else pass(`Today button reset to "${reset}"`);
 
     // ── 5. Click a row → opens schedule edit ──
+    // (v1.13.3: rows became absolutely-positioned .day-cal-pill elements)
     console.log("\n→ Click row opens schedule edit");
     const clicked = await frame.evaluate(() => {
       const r = document.querySelector("complete-irrigation-panel").shadowRoot;
-      const rows = r.querySelectorAll(".day-cal-row");
+      const rows = r.querySelectorAll(".day-cal-pill");
       for (const row of rows) {
         if ((row.getAttribute("title") || "").includes("TEST v1131 daily")) {
           row.click();
