@@ -95,6 +95,7 @@
       enabled: true,
       mode: "weekdays",
       interval_days: 5,
+      interval_hours: 6,
       interval_anchor: _todayIso(),
       // Multi-zone: additional zones after the primary. Each is
       // {zone_entity_id, duration_minutes}. Empty = single-zone schedule.
@@ -620,6 +621,7 @@
         enabled: found.enabled,
         mode: found.mode || "weekdays",
         interval_days: found.interval_days || 5,
+        interval_hours: found.interval_hours || 6,
         interval_anchor: found.interval_anchor || _todayIso(),
         extra_steps: extra.map((s) => ({
           zone_entity_id: s.zone_entity_id,
@@ -851,7 +853,7 @@
         }
         this._scheduleRender();
       } catch (err) {
-        // Pre-v1.10.4 backends don't have this command — no-op, fall
+        // Pre-v1.11.0 backends don't have this command — no-op, fall
         // back to the local-only countdown behavior.
         console.warn("[complete-irrigation] get_active_runs not available:", err);
       }
@@ -888,7 +890,12 @@
       this._syncDurationFromForm();
       const e = this._scheduleEditor;
       const minutes = parseInt(e.duration_minutes, 10);
-      const mode = e.mode === "interval" ? "interval" : "weekdays";
+      const mode =
+        e.mode === "interval"
+          ? "interval"
+          : e.mode === "interval_hours"
+          ? "interval_hours"
+          : "weekdays";
       if (!e.name || !e.name.trim()) return alert("Schedule name is required.");
       if (!e.zone_entity_id) return alert("Pick a zone.");
       if (!minutes || minutes < 1 || minutes > MAX_SCHEDULE_MINUTES) {
@@ -903,6 +910,12 @@
           return alert("Interval must be 1–365 days.");
         if (!e.interval_anchor) return alert("Pick a first-run date.");
       }
+      if (mode === "interval_hours") {
+        const hrs = parseInt(e.interval_hours, 10);
+        if (!hrs || hrs < 1 || hrs > 72)
+          return alert("Interval must be 1–72 hours.");
+        if (!e.interval_anchor) return alert("Pick a first-run date.");
+      }
 
       const payload = {
         name: e.name.trim(),
@@ -914,9 +927,14 @@
       };
       if (mode === "weekdays") {
         payload.weekdays = e.weekdays;
-      } else {
+      } else if (mode === "interval") {
         payload.weekdays = [];
         payload.interval_days = parseInt(e.interval_days, 10);
+        payload.interval_anchor = e.interval_anchor;
+      } else {
+        // interval_hours
+        payload.weekdays = [];
+        payload.interval_hours = parseInt(e.interval_hours, 10);
         payload.interval_anchor = e.interval_anchor;
       }
 
@@ -1148,7 +1166,7 @@
 
       return (
         `<header class="page-header"><h2>Notifications</h2>` +
-        `<span class="version-pill">v1.10.4</span></header>` +
+        `<span class="version-pill">v1.11.0</span></header>` +
         `<form class="weather-form" data-form="notifications">` +
         `<label class="enabled-check"><input type="checkbox" name="enabled"${
           enabled ? " checked" : ""
@@ -1247,7 +1265,7 @@
 
       return (
         `<header class="page-header"><h2>Settings</h2>` +
-        `<span class="version-pill">v1.10.4</span></header>` +
+        `<span class="version-pill">v1.11.0</span></header>` +
         `<section class="settings-card">` +
         `<h3 class="section-title">Theme ${tip("Cycle Light/Dark/Auto with the ☀️/🌙 button on Today, or pick one of your HA-installed themes below.")}</h3>` +
         `<p class="section-hint">Light/Dark/Auto: <strong>${escapeHtml(themeLabel)}</strong>.</p>` +
@@ -1316,7 +1334,7 @@
         `<section class="settings-card">` +
         `<h3 class="section-title">About</h3>` +
         `<table class="settings-table">` +
-        `<tr><td>Version</td><td><strong>v1.10.4</strong></td></tr>` +
+        `<tr><td>Version</td><td><strong>v1.11.0</strong></td></tr>` +
         `<tr><td>Repository</td><td><a href="${repoUrl}" target="_blank">${escapeHtml(repoUrl)}</a></td></tr>` +
         `<tr><td>Zones configured</td><td>${(this._panel?.config?.zones || []).length}</td></tr>` +
         `<tr><td>Schedules</td><td>${(this._schedules || []).length}</td></tr>` +
@@ -1445,7 +1463,7 @@
       return (
         `<header class="page-header"><h2>Today</h2>` +
         `<div class="page-header-right">${themeBtn}` +
-        `<span class="version-pill">v1.10.4</span></div></header>` +
+        `<span class="version-pill">v1.11.0</span></div></header>` +
         this._renderRainLockoutBanner() +
         this._renderWeatherBanner() +
         `<section>` +
@@ -1958,7 +1976,7 @@
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Zones</h2>` +
-          `<span class="version-pill">v1.10.4</span></header>` +
+          `<span class="version-pill">v1.11.0</span></header>` +
           `<div class="empty"><p>No zones configured. Add them via Settings → Devices &amp; Services.</p></div>`
         );
       }
@@ -1967,7 +1985,7 @@
         .join("");
       return (
         `<header class="page-header"><h2>Zones</h2>` +
-        `<span class="version-pill">v1.10.4</span></header>` +
+        `<span class="version-pill">v1.11.0</span></header>` +
         `<p class="section-hint">Hidden zones still run on schedule — they're just hidden from the Today view.</p>` +
         `<div class="zones-list">${rows}</div>`
       );
@@ -2117,6 +2135,11 @@
       for (const s of this._schedules) {
         if (!s.enabled) continue;
         if (s.zone_entity_id !== zoneEntityId) continue;
+        // Common end_date filter
+        if (s.end_date) {
+          const end = new Date(s.end_date + "T00:00:00");
+          if (dayDate > end) continue;
+        }
         if (s.mode === "interval") {
           if (!s.interval_anchor || !s.interval_days) continue;
           const anchor = new Date(s.interval_anchor + "T00:00:00");
@@ -2124,11 +2147,21 @@
           const diffDays = Math.floor((dayDate - anchor) / 86400000);
           if (diffDays < 0) continue;
           if (diffDays % s.interval_days !== 0) continue;
-          if (s.end_date) {
-            const end = new Date(s.end_date + "T00:00:00");
-            if (dayDate > end) continue;
-          }
           result.push({ start_time: s.start_time, name: s.name });
+        } else if (s.mode === "interval_hours") {
+          if (!s.interval_anchor || !s.interval_hours) continue;
+          // Skip if dayDate is before the anchor's calendar date.
+          const anchor = new Date(s.interval_anchor + "T00:00:00");
+          if (Number.isNaN(anchor.getTime())) continue;
+          if (dayDate.getTime() + 86400000 <= anchor.getTime()) continue;
+          // Render one entry showing the first firing of the day's cycle.
+          // The Today timeline shows every individual hourly cycle; the
+          // 7-day strip just needs one marker to indicate "yes, fires
+          // today" — we use the start_time for ordering.
+          result.push({
+            start_time: s.start_time,
+            name: `${s.name} (every ${s.interval_hours}h)`,
+          });
         } else {
           // weekdays mode — convert JS Sun=0 to ISO Mon=0
           const isoDow = (dayDate.getDay() + 6) % 7;
@@ -2154,44 +2187,72 @@
       // Inter-zone valve buffer, matches the server-side run_planner.
       const ZONE_BUFFER_SECONDS = 30;
 
-      for (const s of this._schedules) {
-        if (!s.enabled) continue;
-        // Does it fire today?
-        let firesToday = false;
-        if (s.mode === "interval") {
-          if (!s.interval_anchor || !s.interval_days) continue;
-          const anchor = new Date(s.interval_anchor + "T00:00:00");
-          if (Number.isNaN(anchor.getTime())) continue;
-          const diffDays = Math.floor((today - anchor) / 86400000);
-          firesToday = diffDays >= 0 && diffDays % s.interval_days === 0;
-          if (s.end_date) {
-            const end = new Date(s.end_date + "T00:00:00");
-            if (today > end) firesToday = false;
-          }
-        } else {
-          firesToday = (s.weekdays || []).includes(isoDow);
-        }
-        if (!firesToday) continue;
+      // Pre-compute today bounds + helpers.
+      const todayEnd = new Date(today.getTime() + 86400000);
+      // Parse "HH:MM" → [hours, minutes] tuple.
+      const parseHHMM = (str) => {
+        const parts = (str || "00:00").split(":").map((n) => parseInt(n, 10));
+        return [parts[0] || 0, parts[1] || 0];
+      };
 
-        // Parse start_time "HH:MM" → minutes from midnight
-        const [hh, mm] = (s.start_time || "00:00").split(":").map((n) => parseInt(n, 10));
-        let cursorMin = (hh || 0) * 60 + (mm || 0);
-        // Expand zone_steps (or fall back to the single zone)
+      // For each firing, expand the schedule's zone_steps starting at
+      // the given minute offset from midnight.
+      const pushFiring = (s, startMinutes) => {
         const steps =
           Array.isArray(s.zone_steps) && s.zone_steps.length > 0
             ? s.zone_steps
             : [{ zone_entity_id: s.zone_entity_id, duration_minutes: s.duration_minutes }];
-        let cursorSec = cursorMin * 60;
+        let cursorSec = startMinutes * 60;
         for (const step of steps) {
-          const startMin = Math.floor(cursorSec / 60);
           out.push({
-            start_minutes: startMin,
+            start_minutes: Math.floor(cursorSec / 60),
             zone_entity_id: step.zone_entity_id,
             zone_name: this._zoneName(step.zone_entity_id),
             duration_minutes: step.duration_minutes,
             schedule_name: s.name,
           });
           cursorSec += step.duration_minutes * 60 + ZONE_BUFFER_SECONDS;
+        }
+      };
+
+      for (const s of this._schedules) {
+        if (!s.enabled) continue;
+        // Skip schedules past their end date
+        if (s.end_date) {
+          const end = new Date(s.end_date + "T00:00:00");
+          if (today > end) continue;
+        }
+        const [hh, mm] = parseHHMM(s.start_time);
+
+        if (s.mode === "interval") {
+          if (!s.interval_anchor || !s.interval_days) continue;
+          const anchor = new Date(s.interval_anchor + "T00:00:00");
+          if (Number.isNaN(anchor.getTime())) continue;
+          const diffDays = Math.floor((today - anchor) / 86400000);
+          if (diffDays < 0 || diffDays % s.interval_days !== 0) continue;
+          pushFiring(s, hh * 60 + mm);
+        } else if (s.mode === "interval_hours") {
+          // PRD: every N hours from anchor + start_time, cycling across days.
+          if (!s.interval_anchor || !s.interval_hours) continue;
+          const anchorDt = new Date(s.interval_anchor + "T00:00:00");
+          anchorDt.setHours(hh, mm, 0, 0);
+          if (Number.isNaN(anchorDt.getTime())) continue;
+          const stepMs = s.interval_hours * 3600000;
+          // Walk forward from the anchor until we land in [today, todayEnd).
+          let cursor = anchorDt.getTime();
+          if (cursor < today.getTime()) {
+            const skip = Math.ceil((today.getTime() - cursor) / stepMs);
+            cursor += skip * stepMs;
+          }
+          while (cursor < todayEnd.getTime()) {
+            const dt = new Date(cursor);
+            pushFiring(s, dt.getHours() * 60 + dt.getMinutes());
+            cursor += stepMs;
+          }
+        } else {
+          // weekdays
+          if (!(s.weekdays || []).includes(isoDow)) continue;
+          pushFiring(s, hh * 60 + mm);
         }
       }
       return out.sort((a, b) => a.start_minutes - b.start_minutes);
@@ -2267,7 +2328,7 @@
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Sensors</h2>` +
-          `<span class="version-pill">v1.10.4</span></header>` +
+          `<span class="version-pill">v1.11.0</span></header>` +
           `<div class="empty"><p>No zones configured.</p></div>`
         );
       }
@@ -2276,7 +2337,7 @@
         .join("");
       return (
         `<header class="page-header"><h2>Sensors</h2>` +
-        `<span class="version-pill">v1.10.4</span></header>` +
+        `<span class="version-pill">v1.11.0</span></header>` +
         `<p class="section-hint">Bind soil-moisture sensors to a zone so runtimes auto-adjust based on actual moisture. You can attach one sensor or several (combined as average, lowest, highest, or just the primary).</p>` +
         `<div class="sensor-zone-list">${cards}</div>`
       );
@@ -2693,7 +2754,7 @@
 
       return (
         `<header class="page-header"><h2>Weather</h2>` +
-        `<span class="version-pill">v1.10.4</span></header>` +
+        `<span class="version-pill">v1.11.0</span></header>` +
         lockoutHtml +
         forecastHtml +
         `<form class="weather-form" data-form="weather">` +
@@ -2825,11 +2886,15 @@
     }
 
     _renderScheduleRow(s) {
-      // Recurrence label: weekdays mode lists day codes; interval mode shows "every N days".
-      const recurrence =
-        s.mode === "interval"
-          ? `every ${s.interval_days || "?"} day${s.interval_days === 1 ? "" : "s"}`
-          : (s.weekdays || []).map((d) => WEEKDAY_LABELS[d] || "?").join(" ") || "—";
+      // Recurrence label varies by mode.
+      let recurrence;
+      if (s.mode === "interval") {
+        recurrence = `every ${s.interval_days || "?"} day${s.interval_days === 1 ? "" : "s"}`;
+      } else if (s.mode === "interval_hours") {
+        recurrence = `every ${s.interval_hours || "?"} hour${s.interval_hours === 1 ? "" : "s"}`;
+      } else {
+        recurrence = (s.weekdays || []).map((d) => WEEKDAY_LABELS[d] || "?").join(" ") || "—";
+      }
       // Multi-zone: show "Front Lawn + 2 more" if extra steps exist
       const extraCount =
         Array.isArray(s.zone_steps) && s.zone_steps.length > 1
@@ -2928,25 +2993,50 @@
       const durH = Math.floor(totalMin / 60);
       const durM = totalMin % 60;
 
-      const mode = e.mode === "interval" ? "interval" : "weekdays";
-      const modeFields =
-        mode === "interval"
-          ? `<div class="row-2">` +
-            `<div>` +
-            `<label>Every (days) ${tip("Fires every N days from the first-run date. E.g. 5 = every 5 days.")}</label>` +
-            `<input name="interval_days" type="number" min="1" max="365" step="1" value="${
-              e.interval_days || 5
-            }" required />` +
-            `</div>` +
-            `<div>` +
-            `<label>First run date ${tip("The date of the first run. Subsequent runs step by the interval.")}</label>` +
-            `<input name="interval_anchor" type="date" value="${escapeAttr(
-              e.interval_anchor || _todayIso()
-            )}" required />` +
-            `</div>` +
-            `</div>`
-          : `<label>Weekdays ${tip("Pick the days this schedule fires. Defaults to Mon-Fri.")}</label>` +
-            `<div class="weekday-group">${weekdayChecks}</div>`;
+      const mode =
+        e.mode === "interval"
+          ? "interval"
+          : e.mode === "interval_hours"
+          ? "interval_hours"
+          : "weekdays";
+      let modeFields;
+      if (mode === "interval") {
+        modeFields =
+          `<div class="row-2">` +
+          `<div>` +
+          `<label>Every (days) ${tip("Fires every N days from the first-run date. E.g. 5 = every 5 days.")}</label>` +
+          `<input name="interval_days" type="number" min="1" max="365" step="1" value="${
+            e.interval_days || 5
+          }" required />` +
+          `</div>` +
+          `<div>` +
+          `<label>First run date ${tip("The date of the first run. Subsequent runs step by the interval.")}</label>` +
+          `<input name="interval_anchor" type="date" value="${escapeAttr(
+            e.interval_anchor || _todayIso()
+          )}" required />` +
+          `</div>` +
+          `</div>`;
+      } else if (mode === "interval_hours") {
+        modeFields =
+          `<div class="row-2">` +
+          `<div>` +
+          `<label>Every (hours) ${tip("Fires every N hours starting at the start_time on the first-run date. Continues across day boundaries.")}</label>` +
+          `<input name="interval_hours" type="number" min="1" max="72" step="1" value="${
+            e.interval_hours || 6
+          }" required />` +
+          `</div>` +
+          `<div>` +
+          `<label>First run date ${tip("Date of the first cycle. Subsequent cycles step by the hour interval.")}</label>` +
+          `<input name="interval_anchor" type="date" value="${escapeAttr(
+            e.interval_anchor || _todayIso()
+          )}" required />` +
+          `</div>` +
+          `</div>`;
+      } else {
+        modeFields =
+          `<label>Weekdays ${tip("Pick the days this schedule fires. Defaults to Mon-Fri.")}</label>` +
+          `<div class="weekday-group">${weekdayChecks}</div>`;
+      }
 
       return (
         `<div class="modal-backdrop"></div>` +
@@ -2976,7 +3066,7 @@
         `</div>` +
         `</div>` +
         `</div>` +
-        `<label>Recurrence ${tip("Weekdays = fires on the days you pick. Interval = fires every N days (good for deep watering trees).")}</label>` +
+        `<label>Recurrence ${tip("Weekdays = fires on the days you pick. Every N days = fires once per N-day cycle (good for deep watering trees). Every N hours = fires multiple times per day, cycling across day boundaries.")}</label>` +
         `<div class="mode-group">` +
         `<label class="mode-radio"><input type="radio" name="mode" value="weekdays"${
           mode === "weekdays" ? " checked" : ""
@@ -2984,6 +3074,9 @@
         `<label class="mode-radio"><input type="radio" name="mode" value="interval"${
           mode === "interval" ? " checked" : ""
         } /> Every N days</label>` +
+        `<label class="mode-radio"><input type="radio" name="mode" value="interval_hours"${
+          mode === "interval_hours" ? " checked" : ""
+        } /> Every N hours</label>` +
         `</div>` +
         modeFields +
         // Multi-zone: additional zones to run back-to-back after the primary.
@@ -3351,5 +3444,5 @@
   }
 
   customElements.define(ELEMENT_NAME, CompleteIrrigationPanel);
-  console.info("[complete-irrigation] panel registered, version v1.10.4");
+  console.info("[complete-irrigation] panel registered, version v1.11.0");
 })();

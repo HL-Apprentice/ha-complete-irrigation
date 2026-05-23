@@ -95,12 +95,15 @@ add_schedule:
         boolean:
     mode:
       name: Recurrence mode
-      description: "weekdays = fires on listed days each week; interval = fires every N days from a start date."
+      description: >
+        weekdays = fires on listed days each week;
+        interval = fires every N days from a start date;
+        interval_hours = fires every N hours from anchor date + start_time, across day boundaries.
       required: false
       default: weekdays
       selector:
         select:
-          options: ["weekdays", "interval"]
+          options: ["weekdays", "interval", "interval_hours"]
     interval_days:
       name: Interval (days)
       description: "For interval mode: fire every N days. e.g. 5 = every 5 days."
@@ -112,9 +115,20 @@ add_schedule:
           max: 365
           step: 1
           mode: box
+    interval_hours:
+      name: Interval (hours)
+      description: "For interval_hours mode: fire every N hours. e.g. 6 = every 6 hours."
+      required: false
+      example: 6
+      selector:
+        number:
+          min: 1
+          max: 72
+          step: 1
+          mode: box
     interval_anchor:
       name: First run date
-      description: "For interval mode: the date of the first run. Subsequent runs step by interval_days."
+      description: "For interval / interval_hours mode: date of the first run. Subsequent runs step from there."
       required: false
       selector:
         date:
@@ -176,13 +190,21 @@ update_schedule:
       required: false
       selector:
         select:
-          options: ["weekdays", "interval"]
+          options: ["weekdays", "interval", "interval_hours"]
     interval_days:
       required: false
       selector:
         number:
           min: 1
           max: 365
+          step: 1
+          mode: box
+    interval_hours:
+      required: false
+      selector:
+        number:
+          min: 1
+          max: 72
           step: 1
           mode: box
     interval_anchor:

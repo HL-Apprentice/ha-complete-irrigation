@@ -64,15 +64,19 @@ def _runs_for_schedule(
     """All firings of one Schedule in the window.
 
     Branches on `sched.mode`:
-      • "weekdays" — fires on listed weekdays every week
-      • "interval" — fires every `interval_days` days from `interval_anchor`
+      • "weekdays"       — fires on listed weekdays every week
+      • "interval"       — every `interval_days` days from `interval_anchor`
+      • "interval_hours" — every `interval_hours` hours from
+        interval_anchor + start_time, crossing day boundaries
 
     Preserves `from_dt`'s tzinfo so aware/naive comparisons don't blow up.
     """
-    from .schedule import MODE_INTERVAL
+    from .schedule import MODE_INTERVAL, MODE_INTERVAL_HOURS
 
     if sched.mode == MODE_INTERVAL:
         yield from _runs_for_interval(sched, from_dt, until_dt, zone_buffer_seconds)
+    elif sched.mode == MODE_INTERVAL_HOURS:
+        yield from _runs_for_interval_hours(sched, from_dt, until_dt, zone_buffer_seconds)
     else:
         yield from _runs_for_weekdays(sched, from_dt, until_dt, zone_buffer_seconds)
 
@@ -149,6 +153,46 @@ def _runs_for_interval(sched, from_dt, until_dt, buffer_seconds=None):
             if from_dt <= run.start_at < until_dt:
                 yield run
         current += timedelta(days=step)
+
+
+def _runs_for_interval_hours(sched, from_dt, until_dt, buffer_seconds=None):
+    """Generate runs every `interval_hours` from interval_anchor + start_time.
+
+    Unlike interval-days mode, this crosses day boundaries: an "every 6h
+    starting at 06:00" schedule fires at 06:00, 12:00, 18:00, 00:00,
+    06:00 the next day, ... continuing until end_date or window end.
+    Skips runs before interval_anchor; stops at end_date if set.
+    """
+    tz = from_dt.tzinfo
+    step_hours = sched.interval_hours
+    anchor_dt = datetime.combine(sched.interval_anchor, sched.start_time, tzinfo=tz)
+    step = timedelta(hours=step_hours)
+
+    # Advance to the first firing >= from_dt
+    current = anchor_dt
+    if current < from_dt:
+        # Calculate how many steps to skip to land at or after from_dt
+        elapsed = from_dt - anchor_dt
+        n_steps = elapsed // step  # integer floor division on timedelta
+        current = anchor_dt + n_steps * step
+        # If still before from_dt, advance one more step
+        if current < from_dt:
+            current += step
+
+    end_dt = until_dt
+    if sched.end_date is not None:
+        # Cap at end-of-day on end_date so runs before midnight are kept.
+        end_of_end = datetime.combine(sched.end_date, sched.start_time, tzinfo=tz) + timedelta(
+            days=1
+        )
+        if end_of_end < end_dt:
+            end_dt = end_of_end
+
+    while current < end_dt:
+        for run in _expand_steps(sched, current, buffer_seconds):
+            if from_dt <= run.start_at < until_dt:
+                yield run
+        current += step
 
 
 def due_runs_since(

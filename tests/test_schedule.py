@@ -106,6 +106,7 @@ def test_schedule_to_dict_has_expected_shape():
         "mode": "weekdays",
         "interval_days": None,
         "interval_anchor": None,
+        "interval_hours": None,
         "zone_steps": [],
         "created_via": "panel",
     }
@@ -438,3 +439,74 @@ def test_schedule_pre_v18_dict_without_zone_steps_works():
     s = Schedule.from_dict(old_dict)
     assert s.zone_steps == ()
     assert s.all_steps()[0].zone_entity_id == "switch.lawn"
+
+
+# ════════════════════════════════════════════════════════════════════
+# Interval-hours mode (v1.11)
+# ════════════════════════════════════════════════════════════════════
+
+
+def test_schedule_interval_hours_mode_constructs():
+    from datetime import date
+
+    s = Schedule(
+        id="hourly",
+        name="Hot day cycles",
+        zone_entity_id="switch.veg",
+        start_time=time(6, 0),
+        duration_minutes=10,
+        weekdays=(),
+        mode="interval_hours",
+        interval_hours=6,
+        interval_anchor=date(2026, 5, 22),
+    )
+    assert s.mode == "interval_hours"
+    assert s.interval_hours == 6
+
+
+def test_schedule_interval_hours_requires_hours():
+    from datetime import date
+
+    with pytest.raises(ValueError, match="interval_hours"):
+        Schedule(
+            id="s",
+            name="x",
+            zone_entity_id="switch.x",
+            start_time=time(6, 0),
+            duration_minutes=10,
+            weekdays=(),
+            mode="interval_hours",
+            interval_anchor=date(2026, 5, 22),
+        )
+
+
+def test_schedule_interval_hours_requires_anchor():
+    with pytest.raises(ValueError, match="interval_anchor"):
+        Schedule(
+            id="s",
+            name="x",
+            zone_entity_id="switch.x",
+            start_time=time(6, 0),
+            duration_minutes=10,
+            weekdays=(),
+            mode="interval_hours",
+            interval_hours=6,
+        )
+
+
+def test_schedule_interval_hours_roundtrip():
+    from datetime import date
+
+    original = Schedule(
+        id="hourly",
+        name="Hot day cycles",
+        zone_entity_id="switch.veg",
+        start_time=time(6, 0),
+        duration_minutes=10,
+        weekdays=(),
+        mode="interval_hours",
+        interval_hours=4,
+        interval_anchor=date(2026, 5, 22),
+    )
+    rebuilt = Schedule.from_dict(original.to_dict())
+    assert rebuilt == original
