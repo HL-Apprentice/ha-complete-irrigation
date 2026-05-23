@@ -31,6 +31,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import DEFAULT_MANUAL_RUN_MINUTES, DOMAIN, MAX_MANUAL_RUN_MINUTES
 from .manual_run import ManualRun, validate_run_duration
+from .notifications import CATEGORY_CRITICAL  # v1.16: promoted from inline imports
 from .run_history import SOURCE_MANUAL, SOURCE_SCHEDULED
 from .schedule import Schedule, ZoneStep
 
@@ -52,6 +53,8 @@ SERVICE_CLEAR_RAIN_LOCKOUT = "clear_rain_lockout"
 SERVICE_SET_NOTIFICATION_CONFIG = "set_notification_config"
 SERVICE_TEST_NOTIFICATION = "test_notification"
 SERVICE_START_ESTABLISHMENT = "start_establishment"
+SERVICE_SET_CONFLICT_POLICY = "set_conflict_policy"
+SERVICE_SET_GENERAL_CONFIG = "set_general_config"
 
 MAX_SCHEDULE_DURATION_MIN = 480  # 8 hours — safety cap for scheduled runs
 
@@ -259,6 +262,18 @@ _SET_GENERAL_CONFIG_SCHEMA = vol.Schema(
     }
 )
 
+# v1.16 — table-driven persistence for set_general_config. Each key in
+# the schema above maps to a transform applied before storing into
+# coord.config. Plain pass-through is the default; specialized entries
+# (e.g. date → isoformat) live here. Adding a new general-config field
+# means one schema line + (if non-trivial) one entry here.
+_GENERAL_CONFIG_FIELDS: dict[str, Any] = {
+    "zone_buffer_seconds": lambda v: v,
+    "weekly_reminder_snoozed_until": lambda v: v.isoformat() if v else None,
+    "zone_order": lambda v: list(v),
+}
+
+
 _SET_CONFLICT_POLICY_SCHEMA = vol.Schema(
     {
         vol.Required("policy"): vol.In(["defer_new", "shift_existing", "split_difference"]),
@@ -313,6 +328,48 @@ def _cancel_handles(entry_data: dict[str, Any], entity_id: str) -> None:
         cancel_listener()
 
 
+async def _notify_zone_failed(coord, friendly: str, message: str) -> None:
+    """v1.16 — extracted from handle_run_zone. Sends a critical
+    notification when a zone fails to start. No-op if coord or notifier
+    is unavailable."""
+    if coord is None or coord.notifier is None:
+        return
+    await coord.notifier.notify(
+        message,
+        title="Zone failed to start",
+        category=CATEGORY_CRITICAL,
+        event_type="zone_start_failed",
+    )
+
+
+def _record_run_start_to_history(
+    coord,
+    *,
+    entity_id: str,
+    friendly_name: str,
+    minutes: int,
+    meta: dict[str, Any] | None,
+    source: str,
+    started_at,
+) -> None:
+    """v1.16 — extracted from handle_run_zone. Writes the start record
+    to coord.run_history and kicks off a save. Scheduled-run meta
+    overrides the default zone_name / requested_minutes / triggers so
+    the actual-vs-requested column reflects pre-gate planned duration."""
+    if coord is None:
+        return
+    coord.run_history.start_run(
+        zone_entity_id=entity_id,
+        zone_name=(meta or {}).get("zone_name") or friendly_name,
+        requested_minutes=(meta or {}).get("requested_minutes", minutes),
+        source=source,
+        started_at=started_at,
+        schedule_id=(meta or {}).get("schedule_id"),
+        schedule_name=(meta or {}).get("schedule_name", ""),
+        triggers=(meta or {}).get("triggers") or {},
+    )
+
+
 async def _async_register_services(hass: HomeAssistant) -> None:
     """Register both services. Idempotent — safe to call from multiple entries."""
 
@@ -343,23 +400,19 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         # immediately instead of silently logging.
         state = hass.states.get(entity_id)
         coord = entry_data.get("coordinator")
+        friendly = (state.attributes.get("friendly_name") if state else None) or entity_id
         if state is None or state.state == "unavailable":
             _LOGGER.warning(
                 "run_zone: entity %s is %s — refusing to start",
                 entity_id,
                 "missing" if state is None else "unavailable",
             )
-            if coord is not None and coord.notifier is not None:
-                from .notifications import CATEGORY_CRITICAL
-
-                friendly = (state.attributes.get("friendly_name") if state else None) or entity_id
-                await coord.notifier.notify(
-                    f"Cannot start {friendly} — the zone switch is "
-                    f"{'missing from HA' if state is None else 'unavailable'}.",
-                    title="Zone failed to start",
-                    category=CATEGORY_CRITICAL,
-                    event_type="zone_start_failed",
-                )
+            await _notify_zone_failed(
+                coord,
+                friendly,
+                f"Cannot start {friendly} — the zone switch is "
+                f"{'missing from HA' if state is None else 'unavailable'}.",
+            )
             return
 
         # Record the run + turn the switch on.
@@ -388,35 +441,23 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             # even though we recorded a run.
             entry_data["manual_runs"].stop(entity_id)
             _LOGGER.exception("switch.turn_on failed for %s", entity_id)
-            if coord is not None and coord.notifier is not None:
-                from .notifications import CATEGORY_CRITICAL
-
-                friendly = state.attributes.get("friendly_name") or entity_id
-                await coord.notifier.notify(
-                    f"Zone {friendly} failed to start: {err}",
-                    title="Zone failed to start",
-                    category=CATEGORY_CRITICAL,
-                    event_type="zone_start_failed",
-                )
+            await _notify_zone_failed(coord, friendly, f"Zone {friendly} failed to start: {err}")
             return
 
         # ── Run history: record the start ──
-        # `requested_minutes` for scheduled runs uses the ORIGINAL planned
-        # duration (before boost), so the actual_minutes vs requested
-        # comparison reflects gate adjustments. Manual runs just use the
-        # service call's minutes.
+        # requested_minutes for scheduled runs uses the ORIGINAL planned
+        # duration (before boost), so actual_minutes vs requested reflects
+        # gate adjustments. Manual runs just use the service call's minutes.
+        _record_run_start_to_history(
+            coord,
+            entity_id=entity_id,
+            friendly_name=friendly,
+            minutes=minutes,
+            meta=meta,
+            source=source,
+            started_at=now,
+        )
         if coord is not None:
-            zone_name_attr = (state.attributes.get("friendly_name") if state else None) or entity_id
-            coord.run_history.start_run(
-                zone_entity_id=entity_id,
-                zone_name=(meta or {}).get("zone_name") or zone_name_attr,
-                requested_minutes=(meta or {}).get("requested_minutes", minutes),
-                source=source,
-                started_at=now,
-                schedule_id=(meta or {}).get("schedule_id"),
-                schedule_name=(meta or {}).get("schedule_name", ""),
-                triggers=(meta or {}).get("triggers") or {},
-            )
             hass.async_create_task(coord.async_save_run_history())
 
         # ── auto-stop timer ──
@@ -761,32 +802,30 @@ async def _async_register_services(hass: HomeAssistant) -> None:
 
     hass.services.async_register(
         DOMAIN,
-        "set_conflict_policy",
+        SERVICE_SET_CONFLICT_POLICY,
         handle_set_conflict_policy,
         schema=_SET_CONFLICT_POLICY_SCHEMA,
     )
 
     async def handle_set_general_config(call: ServiceCall) -> None:
-        """PRD #38 + #81 — generic bucket for one-off global settings."""
+        """PRD #38 + #81 — generic bucket for one-off global settings.
+
+        Each entry in _GENERAL_CONFIG_FIELDS describes how to persist
+        one accepted key. v1.16: loop-driven so a new field is a 2-line
+        table edit instead of another `if` arm."""
         data = _SET_GENERAL_CONFIG_SCHEMA(dict(call.data))
         coord = _find_coordinator(hass)
         if coord is None:
             return
-        if "zone_buffer_seconds" in data:
-            coord.config["zone_buffer_seconds"] = data["zone_buffer_seconds"]
-        if "weekly_reminder_snoozed_until" in data:
-            v = data["weekly_reminder_snoozed_until"]
-            coord.config["weekly_reminder_snoozed_until"] = v.isoformat() if v else None
-        if "zone_order" in data:
-            # Store the full ordered list as-is; the panel handles
-            # appending any zones not in the list (newly-added ones).
-            coord.config["zone_order"] = list(data["zone_order"])
+        for key, transform in _GENERAL_CONFIG_FIELDS.items():
+            if key in data:
+                coord.config[key] = transform(data[key])
         await coord.async_save_config()
         _LOGGER.info("General config updated: %s", data)
 
     hass.services.async_register(
         DOMAIN,
-        "set_general_config",
+        SERVICE_SET_GENERAL_CONFIG,
         handle_set_general_config,
         schema=_SET_GENERAL_CONFIG_SCHEMA,
     )
@@ -872,6 +911,8 @@ def _async_unregister_services(hass: HomeAssistant) -> None:
         SERVICE_SET_NOTIFICATION_CONFIG,
         SERVICE_TEST_NOTIFICATION,
         SERVICE_START_ESTABLISHMENT,
+        SERVICE_SET_CONFLICT_POLICY,
+        SERVICE_SET_GENERAL_CONFIG,
     ):
         if hass.services.has_service(DOMAIN, svc):
             hass.services.async_remove(DOMAIN, svc)

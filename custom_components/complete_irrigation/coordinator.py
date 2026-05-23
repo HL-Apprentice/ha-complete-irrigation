@@ -24,7 +24,22 @@ from .conflict_resolver import (
     POLICY_SPLIT_DIFFERENCE,
     resolve_conflicts,
 )
-from .const import DOMAIN
+from .const import (
+    DEFAULT_ZONE_MAX_PCT,
+    DEFAULT_ZONE_MIN_PCT,
+    DEFAULT_ZONE_TARGET_PCT,
+    DOMAIN,
+)
+
+# v1.16 — pure-logic helpers live in coordinator_logic.py now; re-exported
+# here so every existing `from .coordinator import build_weekly_zone_summary`
+# (and friends) keeps resolving.
+from .coordinator_logic import (
+    build_weekly_zone_summary,
+    compute_expired_establishment_schedules,
+    compute_low_moisture_offenders,
+    detect_sensor_offline_transitions,
+)
 from .moisture_gate import COMBINE_AVERAGE, combine_moisture, evaluate_moisture
 from .notifications import (
     CATEGORY_IMPORTANT,
@@ -51,153 +66,6 @@ _VALID_CONFLICT_POLICIES = {
 
 STORAGE_VERSION = 1
 TICK_SECONDS = 60
-
-
-def build_weekly_zone_summary(
-    zones_iter,
-    schedules,
-    zones_config: dict,
-    get_state,
-) -> list[str]:
-    """PRD #80 — pure-logic for the per-zone weekly digest.
-
-    Returns a list of human-readable bullet lines, one per configured
-    zone. Each line shows: zone name, schedule count, current moisture
-    (if any sensor is bound), and the configured target.
-
-    `zones_iter` is the iterable of zone entity_ids (from the entry).
-    `schedules` is the enabled-schedule list.
-    `zones_config` is `coord.config["zones"]` — keyed by entity_id.
-    `get_state(eid)` returns a HA state-like object (or None) — same
-    contract used by detect_sensor_offline_transitions().
-    """
-    out: list[str] = []
-    for entity_id in zones_iter:
-        # Count schedules that include this zone (top-level OR a step).
-        n_scheds = 0
-        for s in schedules:
-            if s.zone_entity_id == entity_id:
-                n_scheds += 1
-                continue
-            steps = getattr(s, "zone_steps", None) or ()
-            if any(st.zone_entity_id == entity_id for st in steps):
-                n_scheds += 1
-
-        # Resolve friendly name (state attrs > entity_id fallback)
-        zone_state = get_state(entity_id)
-        friendly = (
-            zone_state.attributes.get("friendly_name")
-            if zone_state and hasattr(zone_state, "attributes")
-            else None
-        ) or entity_id
-
-        # Moisture: average the bound sensors (if any).
-        zcfg = zones_config.get(entity_id, {})
-        sensors = zcfg.get("moisture_entities") or []
-        target = zcfg.get("target_pct")
-        moistures: list[float] = []
-        for eid in sensors:
-            s = get_state(eid)
-            if s is None or s.state in ("unknown", "unavailable"):
-                continue
-            try:
-                moistures.append(float(s.state))
-            except (TypeError, ValueError):
-                continue
-
-        bits = [f"• {friendly}: {n_scheds} schedule(s)"]
-        if moistures:
-            avg = sum(moistures) / len(moistures)
-            if target is not None:
-                bits.append(f"moisture {avg:.0f}% (target {int(target)}%)")
-            else:
-                bits.append(f"moisture {avg:.0f}%")
-        elif sensors:
-            bits.append("moisture sensors offline")
-        out.append(", ".join(bits))
-    return out
-
-
-def compute_expired_establishment_schedules(
-    schedules: list, today, already_prompted: set[str]
-) -> list:
-    """Pure-logic for PRD #76.
-
-    Returns the list of schedules whose `end_date` is on or before `today`
-    AND whose id is not in `already_prompted`. Used by the coordinator's
-    daily check to fire a "what's next?" prompt exactly once per
-    establishment window completion.
-    """
-    out = []
-    for s in schedules:
-        end_date = getattr(s, "end_date", None)
-        if end_date is None:
-            continue
-        if end_date > today:
-            continue
-        if s.id in already_prompted:
-            continue
-        out.append(s)
-    return out
-
-
-def detect_sensor_offline_transitions(
-    zones: dict, get_state, previously_offline: set[str]
-) -> tuple[set[str], set[str]]:
-    """Pure-logic for PRD #57.
-
-    Returns (newly_offline, newly_back_online) — the set of bound moisture
-    sensor entity_ids whose availability flipped since the last tick.
-    Caller is expected to merge `newly_offline` into and remove
-    `newly_back_online` from its tracked set after dispatching alerts.
-
-    A sensor is "offline" when its state is None (missing from HA) or
-    in {"unknown", "unavailable"}.
-    """
-    currently_offline: set[str] = set()
-    for zone_cfg in zones.values():
-        for eid in zone_cfg.get("moisture_entities") or []:
-            state = get_state(eid)
-            if state is None or state.state in ("unknown", "unavailable"):
-                currently_offline.add(eid)
-    newly_offline = currently_offline - previously_offline
-    newly_back_online = previously_offline - currently_offline
-    return newly_offline, newly_back_online
-
-
-def compute_low_moisture_offenders(zones: dict, get_state) -> list[str]:
-    """Pure-logic for the daily low-moisture summary.
-
-    Given a per-zone config map and a state-getter callable (entity_id →
-    state object with .state and .attributes, or None), return a list
-    of human-readable offender strings for any zone whose first below-
-    minimum moisture sensor is below the configured min%.
-
-    Pulled out as a top-level function so it's unit-testable without
-    standing up a real HA coordinator. The coordinator just wraps it
-    with hass.states.get + the notifier.
-    """
-    offenders: list[str] = []
-    for zone_id, zone_cfg in zones.items():
-        sensors = zone_cfg.get("moisture_entities") or []
-        min_pct = zone_cfg.get("min_pct")
-        if not sensors or min_pct is None:
-            continue
-        for eid in sensors:
-            state = get_state(eid)
-            if state is None:
-                continue
-            if state.state in ("unknown", "unavailable"):
-                continue
-            try:
-                val = float(state.state)
-            except (TypeError, ValueError):
-                continue
-            if val < float(min_pct):
-                friendly = state.attributes.get("friendly_name") or eid
-                offenders.append(f"• {zone_id}: {friendly} = {val:.1f}% (min {min_pct}%)")
-                break  # one alert per zone is enough
-    return offenders
 
 
 def _storage_key(entry_id: str, suffix: str = "schedules") -> str:
@@ -631,7 +499,7 @@ class ScheduleCoordinator:
             await self._fire_run(run)
 
     async def _fire_run(self, run) -> None:
-        """Evaluate moisture + hot-weather modifiers for `run`, then fire it.
+        """Evaluate moisture + wind + hot-weather modifiers for `run`, then fire it.
 
         Builds a `triggers` snapshot dict along the way so the run history
         can show what gates were evaluated and how they decided. If any
@@ -649,87 +517,21 @@ class ScheduleCoordinator:
         boost_reasons: list[str] = []
         triggers: dict[str, Any] = {}
 
-        # ── Moisture (if sensor configured for this zone) ──
-        moisture_entities = zone_cfg.get("moisture_entities") or []
-        if moisture_entities:
-            readings: list[float] = []
-            for ent in moisture_entities:
-                state = self._hass.states.get(ent)
-                if state is None or state.state in ("unknown", "unavailable"):
-                    continue
-                try:
-                    readings.append(float(state.state))
-                except (TypeError, ValueError):
-                    continue
-            combine_mode = zone_cfg.get("combine_mode", COMBINE_AVERAGE)
-            current = combine_moisture(readings, combine_mode)
-            triggers["moisture"] = {
-                "entities": list(moisture_entities),
-                "readings": readings,
-                "combined_pct": current,
-                "combine_mode": combine_mode,
-                "min_pct": float(zone_cfg.get("min_pct", 21)),
-                "target_pct": float(zone_cfg.get("target_pct", 31)),
-                "max_pct": float(zone_cfg.get("max_pct", 40)),
-                "decision": "no_reading" if current is None else "ok",
-            }
-            if current is not None:
-                decision = evaluate_moisture(
-                    current=current,
-                    min_pct=float(zone_cfg.get("min_pct", 21)),
-                    target=float(zone_cfg.get("target_pct", 31)),
-                    max_pct=float(zone_cfg.get("max_pct", 40)),
-                    base_minutes=adjusted_minutes,
-                )
-                _LOGGER.info("Moisture decision for %s: %s", zone_id, decision.reason)
-                if decision.skip:
-                    triggers["moisture"]["decision"] = "skip"
-                    skip_reasons.append(decision.reason)
-                else:
-                    adjusted_minutes = decision.runtime_minutes
-                    triggers["moisture"]["decision"] = "ok"
-                    triggers["moisture"]["adjusted_minutes"] = decision.runtime_minutes
-
-        # ── Wind defer (PRD #52) ──
-        # Conservative: skip the run if current wind speed meets/exceeds
-        # the user-configured threshold. Threshold of 0 / missing → off.
+        adjusted_minutes, m_skip = self._evaluate_moisture_gate(
+            zone_cfg, zone_id, adjusted_minutes, triggers
+        )
+        if m_skip:
+            skip_reasons.append(m_skip)
         if not skip_reasons:
-            wind_threshold = self._config.get("wind_defer_mph", 0)
-            if wind_threshold and float(wind_threshold) > 0:
-                wind = self._read_current_wind_mph()
-                deferred = evaluate_wind_defer(wind, float(wind_threshold))
-                triggers["wind"] = {
-                    "mph": wind,
-                    "threshold_mph": float(wind_threshold),
-                    "deferred": deferred,
-                }
-                if deferred:
-                    skip_reasons.append(f"wind defer (current {wind} mph >= {wind_threshold} mph)")
-
-        # ── Hot weather boost (single, integration-wide for now) ──
+            w_skip = self._evaluate_wind_gate(triggers)
+            if w_skip:
+                skip_reasons.append(w_skip)
         if not skip_reasons:
-            forecast_high = self._read_forecast_high()
-            threshold = self._config.get("hot_threshold_f")
-            boost_pct = self._config.get("boost_percent", 0)
-            if forecast_high is not None and threshold is not None:
-                hw = evaluate_hot_weather(
-                    daily_high_f=forecast_high,
-                    threshold_f=float(threshold),
-                    boost_percent=int(boost_pct),
-                )
-                triggers["hot_weather"] = {
-                    "forecast_high_f": forecast_high,
-                    "threshold_f": float(threshold),
-                    "boost_percent": int(boost_pct),
-                    "applied_multiplier": hw.multiplier,
-                    "boost_applied": bool(hw.boost),
-                }
-                if hw.boost:
-                    adjusted_minutes = max(1, round(adjusted_minutes * hw.multiplier))
-                    boost_reasons.append(
-                        f"hot-weather boost (high {forecast_high}F >= {threshold}F)"
-                        f" x{hw.multiplier:.2f}"
-                    )
+            adjusted_minutes, boost_note = self._evaluate_hot_weather_gate(
+                adjusted_minutes, triggers
+            )
+            if boost_note:
+                boost_reasons.append(boost_note)
 
         # Resolve a friendly zone name (state attribute → entity_id fallback).
         zone_state = self._hass.states.get(zone_id)
@@ -789,6 +591,111 @@ class ScheduleCoordinator:
             # inherit the scheduled metadata.
             if entry_data is not None:
                 entry_data.get("pending_run_meta", {}).pop(zone_id, None)
+
+    # ── Per-gate evaluators (extracted from _fire_run in v1.16) ──
+
+    def _evaluate_moisture_gate(
+        self,
+        zone_cfg: dict,
+        zone_id: str,
+        adjusted_minutes: int,
+        triggers: dict,
+    ) -> tuple[int, str | None]:
+        """Read moisture sensors, populate triggers["moisture"], return
+        (possibly-adjusted minutes, skip reason or None).
+
+        No moisture binding → no-op. Multiple sensors → combined via
+        the zone's `combine_mode`. The evaluate_moisture decision either
+        adjusts the runtime (boost / cut) or returns a skip reason."""
+        moisture_entities = zone_cfg.get("moisture_entities") or []
+        if not moisture_entities:
+            return adjusted_minutes, None
+
+        readings: list[float] = []
+        for ent in moisture_entities:
+            state = self._hass.states.get(ent)
+            if state is None or state.state in ("unknown", "unavailable"):
+                continue
+            try:
+                readings.append(float(state.state))
+            except (TypeError, ValueError):
+                continue
+        combine_mode = zone_cfg.get("combine_mode", COMBINE_AVERAGE)
+        current = combine_moisture(readings, combine_mode)
+        min_pct = float(zone_cfg.get("min_pct", DEFAULT_ZONE_MIN_PCT))
+        target_pct = float(zone_cfg.get("target_pct", DEFAULT_ZONE_TARGET_PCT))
+        max_pct = float(zone_cfg.get("max_pct", DEFAULT_ZONE_MAX_PCT))
+        triggers["moisture"] = {
+            "entities": list(moisture_entities),
+            "readings": readings,
+            "combined_pct": current,
+            "combine_mode": combine_mode,
+            "min_pct": min_pct,
+            "target_pct": target_pct,
+            "max_pct": max_pct,
+            "decision": "no_reading" if current is None else "ok",
+        }
+        if current is None:
+            return adjusted_minutes, None
+        decision = evaluate_moisture(
+            current=current,
+            min_pct=min_pct,
+            target=target_pct,
+            max_pct=max_pct,
+            base_minutes=adjusted_minutes,
+        )
+        _LOGGER.info("Moisture decision for %s: %s", zone_id, decision.reason)
+        if decision.skip:
+            triggers["moisture"]["decision"] = "skip"
+            return adjusted_minutes, decision.reason
+        triggers["moisture"]["decision"] = "ok"
+        triggers["moisture"]["adjusted_minutes"] = decision.runtime_minutes
+        return decision.runtime_minutes, None
+
+    def _evaluate_wind_gate(self, triggers: dict) -> str | None:
+        """PRD #52 — defer if current wind ≥ threshold. Threshold of 0
+        or missing → off, returns None without touching triggers."""
+        wind_threshold = self._config.get("wind_defer_mph", 0)
+        if not wind_threshold or float(wind_threshold) <= 0:
+            return None
+        wind = self._read_current_wind_mph()
+        deferred = evaluate_wind_defer(wind, float(wind_threshold))
+        triggers["wind"] = {
+            "mph": wind,
+            "threshold_mph": float(wind_threshold),
+            "deferred": deferred,
+        }
+        if deferred:
+            return f"wind defer (current {wind} mph >= {wind_threshold} mph)"
+        return None
+
+    def _evaluate_hot_weather_gate(
+        self, adjusted_minutes: int, triggers: dict
+    ) -> tuple[int, str | None]:
+        """Hot-weather runtime boost. Returns (new minutes, boost-note
+        for logging or None). No threshold configured → no-op."""
+        forecast_high = self._read_forecast_high()
+        threshold = self._config.get("hot_threshold_f")
+        boost_pct = self._config.get("boost_percent", 0)
+        if forecast_high is None or threshold is None:
+            return adjusted_minutes, None
+        hw = evaluate_hot_weather(
+            daily_high_f=forecast_high,
+            threshold_f=float(threshold),
+            boost_percent=int(boost_pct),
+        )
+        triggers["hot_weather"] = {
+            "forecast_high_f": forecast_high,
+            "threshold_f": float(threshold),
+            "boost_percent": int(boost_pct),
+            "applied_multiplier": hw.multiplier,
+            "boost_applied": bool(hw.boost),
+        }
+        if not hw.boost:
+            return adjusted_minutes, None
+        new_minutes = max(1, round(adjusted_minutes * hw.multiplier))
+        note = f"hot-weather boost (high {forecast_high}F >= {threshold}F) x{hw.multiplier:.2f}"
+        return new_minutes, note
 
     # ── Rain lockout ──────────────────────────────────────────────
 

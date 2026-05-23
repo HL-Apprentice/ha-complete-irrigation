@@ -169,19 +169,6 @@ def test_tracker_multiple_entities_held_independently():
     assert tracker.active() == [r2]
 
 
-def test_tracker_due_runs_filters_by_deadline():
-    tracker = ManualRunTracker()
-    expired = ManualRun("switch.a", NOW, timedelta(minutes=5))
-    fresh = ManualRun("switch.b", NOW + timedelta(minutes=4), timedelta(minutes=10))
-    tracker.start(expired)
-    tracker.start(fresh)
-
-    # At NOW + 6 min: expired's deadline (NOW + 5 min) has passed,
-    # fresh's deadline (NOW + 4 min + 10 min = NOW + 14 min) has not.
-    due = tracker.due_runs(NOW + timedelta(minutes=6))
-    assert due == [expired]
-
-
-def test_tracker_due_runs_empty_when_nothing_active():
-    tracker = ManualRunTracker()
-    assert tracker.due_runs(NOW) == []
+# `due_runs` removed in v1.16 cleanup — services.py drives auto-stop
+# via async_call_later deadlines, never polled. The tests that exercised
+# the unused method were dropped with it.
