@@ -98,7 +98,7 @@
       interval_days: 5,
       interval_hours: 6,
       interval_anchor: _todayIso(),
-      // Optional daily-window cap for interval_hours mode (v1.14.1).
+      // Optional daily-window cap for interval_hours mode (v1.15.0).
       // Empty string = no cap (legacy continuous-across-days behavior).
       interval_end_time: "",
       // Active period (v1.12). Empty strings mean "no bound".
@@ -145,6 +145,11 @@
       // Run history (v1.14) — lazy-loaded when the History tab opens.
       this._runHistory = [];
       this._runHistoryLoaded = false;
+      // Notification targets editor draft (v1.15). Array of strings,
+      // each typically "notify.mobile_app_pete". Empty slots are
+      // unfinished rows the user just added. Hydrated from config when
+      // the Notifications tab opens.
+      this._notifyDraft = null;
       // Filter state for the History tab — kept on the instance so it
       // survives re-renders within the same session (not persisted).
       this._historyFilters = { zone: "", schedule: "", status: "", days: 7 };
@@ -357,6 +362,20 @@
           this._clearRunHistory();
           return;
         }
+        if (action === "notify-target-add") {
+          if (!Array.isArray(this._notifyDraft)) this._hydrateNotifyDraft();
+          this._notifyDraft.push("");  // new empty row, user picks via dropdown
+          return this._renderNow();
+        }
+        if (action === "notify-target-remove") {
+          const idx = parseInt(node.dataset.idx, 10);
+          if (!Array.isArray(this._notifyDraft)) return;
+          if (Number.isFinite(idx) && idx >= 0 && idx < this._notifyDraft.length) {
+            this._notifyDraft.splice(idx, 1);
+            return this._renderNow();
+          }
+          return;
+        }
         if (action === "clear-interval-end-time") {
           this._scheduleEditor.interval_end_time = "";
           return this._renderNow();
@@ -500,6 +519,14 @@
       if (!t) return;
       // History filters — driven by data-action, not name.
       const action = t.dataset?.action;
+      if (action === "notify-target-change") {
+        const idx = parseInt(t.dataset.idx, 10);
+        if (!Array.isArray(this._notifyDraft)) this._hydrateNotifyDraft();
+        if (Number.isFinite(idx) && idx >= 0 && idx < this._notifyDraft.length) {
+          this._notifyDraft[idx] = t.value;
+        }
+        return;  // no re-render — the dropdown already shows the chosen value
+      }
       if (action === "history-filter-zone") {
         this._historyFilters.zone = t.value;
         return this._renderNow();
@@ -734,6 +761,7 @@
       this._currentSection = sectionId;
       if (sectionId === "schedules" && !this._schedulesLoaded) this._fetchSchedules();
       if (sectionId === "history") this._fetchRunHistory();  // always refetch on open
+      if (sectionId === "notifications") this._hydrateNotifyDraft();
       if (sectionId === "weather") {
         const w = this._findWeatherEntity();
         if (w && !this._forecastCache[w.entity_id]) {
@@ -741,6 +769,20 @@
         }
       }
       this._renderNow();
+    }
+
+    _hydrateNotifyDraft() {
+      // Pull the currently-configured targets from config into a local
+      // editable array. Called when entering the Notifications tab so the
+      // draft always reflects saved state on first render. Subsequent
+      // add/remove clicks mutate this array directly without re-pulling.
+      const n = (this._config && this._config.notifications) || {};
+      const targetsList = Array.isArray(n.notify_targets)
+        ? n.notify_targets
+        : n.notify_target
+        ? [n.notify_target]
+        : [];
+      this._notifyDraft = targetsList.slice();  // copy
     }
 
     _openRunModal(entityId, zoneName) {
@@ -971,16 +1013,29 @@
       // If the user picked an HA theme, inject a <style> block whose
       // :host rule overrides our --ci-* variables (and the underlying
       // HA vars they fall back to) with the theme's values.
+      //
+      // v1.15 — theme keys/values are sanitized before interpolation. A
+      // malicious or malformed theme value containing `}` could otherwise
+      // close the `:host{...}` rule and inject arbitrary CSS, and
+      // `</style>` would break out of the style element entirely. We
+      // strip chars that have CSS-syntactic meaning + any quotes / angle
+      // brackets so the worst a bad theme can do is produce an
+      // ineffective rule.
       const name = this._haTheme;
       if (!name || !this._haThemes || !this._haThemes[name]) return "";
       const theme = this._haThemes[name];
-      // HA theme variables are stored with hyphenated keys like
-      // "primary-color" → CSS variable --primary-color. Apply each on
-      // :host. Our --ci-* vars resolve via these, so the panel auto-themes.
+      const safeKey = (k) =>
+        typeof k === "string" && /^[a-zA-Z0-9_-]+$/.test(k) ? k : null;
+      const safeVal = (v) =>
+        typeof v === "string"
+          ? v.replace(/[{}<>;"'\\\r\n]/g, "").trim()
+          : null;
       const lines = [];
       for (const [k, v] of Object.entries(theme)) {
-        if (typeof v !== "string") continue;
-        lines.push(`--${k}: ${v};`);
+        const sk = safeKey(k);
+        const sv = safeVal(v);
+        if (!sk || !sv) continue;
+        lines.push(`--${sk}: ${sv};`);
       }
       // Also remap to --ci-* directly for safety when the theme doesn't
       // define every fallback var we use.
@@ -994,10 +1049,10 @@
         "secondary-background-color": ["--ci-hover"],
       };
       for (const [haKey, ciKeys] of Object.entries(map)) {
-        if (typeof theme[haKey] === "string") {
-          for (const ciKey of ciKeys) {
-            lines.push(`${ciKey}: ${theme[haKey]};`);
-          }
+        const sv = safeVal(theme[haKey]);
+        if (!sv) continue;
+        for (const ciKey of ciKeys) {
+          lines.push(`${ciKey}: ${sv};`);
         }
       }
       if (lines.length === 0) return "";
@@ -1383,13 +1438,8 @@
 
     _renderNotifications() {
       const n = (this._config && this._config.notifications) || {};
-      // Merge legacy single target into the multi-list for display.
-      const targetsList = Array.isArray(n.notify_targets)
-        ? n.notify_targets
-        : n.notify_target
-        ? [n.notify_target]
-        : [];
-      const targetsText = targetsList.join("\n");
+      if (this._notifyDraft === null) this._hydrateNotifyDraft();
+      const draft = this._notifyDraft || [];
       const qStart = n.quiet_hours_start || "22:00";
       const qEnd = n.quiet_hours_end || "07:00";
       const enabled = n.enabled !== false; // default true
@@ -1397,16 +1447,65 @@
       const tip = (text) =>
         `<span class="help-tip" title="${escapeAttr(text)}" aria-label="${escapeAttr(text)}">ⓘ</span>`;
 
+      // Build the dropdown of available notify.* services from HA. We
+      // include any draft value that's NOT in the live list so users
+      // can still see + remove a stale target whose integration was
+      // unloaded.
+      const notifyServices = Object.keys(
+        (this._hass && this._hass.services && this._hass.services.notify) || {}
+      )
+        .map((s) => "notify." + s)
+        .sort();
+      const allOptions = new Set(notifyServices);
+      for (const t of draft) {
+        if (t) allOptions.add(t);
+      }
+      const optionList = Array.from(allOptions).sort();
+
+      // One row per target — select dropdown + remove button.
+      const rows = draft
+        .map((target, idx) => {
+          const isMissing = target && !notifyServices.includes(target);
+          const optHtml = optionList
+            .map(
+              (opt) =>
+                `<option value="${escapeAttr(opt)}"${
+                  opt === target ? " selected" : ""
+                }>${escapeHtml(opt)}${
+                  isMissing && opt === target ? " (not loaded)" : ""
+                }</option>`
+            )
+            .join("");
+          return (
+            `<div class="notify-target-row">` +
+            `<select class="notify-target-select" data-action="notify-target-change" data-idx="${idx}">` +
+            `<option value=""${target ? "" : " selected"}>— Pick a notify service —</option>` +
+            optHtml +
+            `</select>` +
+            `<button type="button" class="btn btn-icon notify-target-remove" data-action="notify-target-remove" data-idx="${idx}" title="Remove this target">✕</button>` +
+            `</div>`
+          );
+        })
+        .join("");
+
+      const noServicesHint =
+        notifyServices.length === 0
+          ? `<p class="section-hint" style="color:var(--ci-text-2)">No <code>notify.*</code> services found in this HA instance yet. Install the Home Assistant Companion app on your phone (or another notify integration) and they'll appear here.</p>`
+          : "";
+
       return (
         `<header class="page-header"><h2>Notifications</h2>` +
-        `<span class="version-pill">v1.14.1</span></header>` +
+        `<span class="version-pill">v1.15.0</span></header>` +
         `<form class="weather-form" data-form="notifications">` +
         `<label class="enabled-check"><input type="checkbox" name="enabled"${
           enabled ? " checked" : ""
         } /> Notifications enabled ${tip("Master switch. Turn off to silence all push notifications without losing your config.")}</label>` +
-        `<label>Notify targets ${tip("One HA notify service per line (e.g. notify.mobile_app_pete_iphone). Add as many as you want — every notification fans out to all of them.")}</label>` +
-        `<textarea name="notify_targets" rows="3" placeholder="notify.mobile_app_pete_iphone\nnotify.mobile_app_pat_iphone">${escapeHtml(targetsText)}</textarea>` +
-        `<p class="section-hint" style="margin:6px 0 12px">Find your phone's notify service at <code>Developer Tools → Services</code> and search for <code>notify.mobile_app</code>.</p>` +
+        `<label>Notify targets ${tip("Pick one or more HA notify services. Every notification this integration sends will fan out to all of them.")}</label>` +
+        `<div class="notify-target-list">${rows}</div>` +
+        `<div class="notify-target-actions">` +
+        `<button type="button" class="btn btn-small" data-action="notify-target-add">+ Add target</button>` +
+        `</div>` +
+        noServicesHint +
         `<h3 class="section-title">Quiet hours</h3>` +
         `<p class="section-hint">Non-urgent notifications received in this window are bundled into a single morning summary.</p>` +
         `<div class="row-2">` +
@@ -1427,12 +1526,25 @@
 
     async _saveNotificationConfig(form) {
       const data = new FormData(form);
-      // Parse the textarea: split on newlines + commas, trim, drop empties.
-      const raw = data.get("notify_targets") || "";
-      const targets = String(raw)
-        .split(/[\n,]+/)
-        .map((s) => s.trim())
+      // Targets come from the row-based editor draft, not a textarea.
+      // Strip empty / whitespace-only slots and reject any that aren't
+      // notify.<service> (the backend will also reject, but the alert
+      // is friendlier here).
+      const draft = Array.isArray(this._notifyDraft) ? this._notifyDraft : [];
+      const targets = draft
+        .map((t) => (typeof t === "string" ? t.trim() : ""))
         .filter(Boolean);
+      const bad = targets.filter((t) => {
+        const parts = t.split(".", 2);
+        return parts.length !== 2 || parts[0] !== "notify" || !parts[1];
+      });
+      if (bad.length > 0) {
+        return alert(
+          `These targets aren't valid notify services and won't be saved:\n` +
+            bad.map((s) => `  • ${s}`).join("\n") +
+            `\n\nEach target must be of the form notify.<service>.`
+        );
+      }
       const payload = {
         // Send both for compat: notify_target = first entry (legacy
         // consumers), notify_targets = the full list (the dispatcher's
@@ -1460,6 +1572,9 @@
           );
         }
         await this._fetchConfig();
+        // Invalidate the draft so the next render re-hydrates from the
+        // freshly-loaded config (catches server-side filtering / dedupe).
+        this._notifyDraft = null;
         alert("Notification config saved.");
       } catch (err) {
         alert("Failed to save: " + (err?.message || err));
@@ -1498,7 +1613,7 @@
 
       return (
         `<header class="page-header"><h2>Settings</h2>` +
-        `<span class="version-pill">v1.14.1</span></header>` +
+        `<span class="version-pill">v1.15.0</span></header>` +
         `<section class="settings-card">` +
         `<h3 class="section-title">Theme ${tip("Cycle Light/Dark/Auto with the ☀️/🌙 button on Today, or pick one of your HA-installed themes below.")}</h3>` +
         `<p class="section-hint">Light/Dark/Auto: <strong>${escapeHtml(themeLabel)}</strong>.</p>` +
@@ -1567,8 +1682,8 @@
         `<section class="settings-card">` +
         `<h3 class="section-title">About</h3>` +
         `<table class="settings-table">` +
-        `<tr><td>Version</td><td><strong>v1.14.1</strong></td></tr>` +
-        `<tr><td>Repository</td><td><a href="${repoUrl}" target="_blank">${escapeHtml(repoUrl)}</a></td></tr>` +
+        `<tr><td>Version</td><td><strong>v1.15.0</strong></td></tr>` +
+        `<tr><td>Repository</td><td><a href="${escapeAttr(repoUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(repoUrl)}</a></td></tr>` +
         `<tr><td>Zones configured</td><td>${(this._panel?.config?.zones || []).length}</td></tr>` +
         `<tr><td>Schedules</td><td>${(this._schedules || []).length}</td></tr>` +
         `</table>` +
@@ -1696,7 +1811,7 @@
       return (
         `<header class="page-header"><h2>Today</h2>` +
         `<div class="page-header-right">${themeBtn}` +
-        `<span class="version-pill">v1.14.1</span></div></header>` +
+        `<span class="version-pill">v1.15.0</span></div></header>` +
         this._renderRainLockoutBanner() +
         this._renderWeatherBanner() +
         `<section>` +
@@ -2209,7 +2324,7 @@
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Zones</h2>` +
-          `<span class="version-pill">v1.14.1</span></header>` +
+          `<span class="version-pill">v1.15.0</span></header>` +
           `<div class="empty"><p>No zones configured. Add them via Settings → Devices &amp; Services.</p></div>`
         );
       }
@@ -2218,7 +2333,7 @@
         .join("");
       return (
         `<header class="page-header"><h2>Zones</h2>` +
-        `<span class="version-pill">v1.14.1</span></header>` +
+        `<span class="version-pill">v1.15.0</span></header>` +
         `<p class="section-hint">Hidden zones still run on schedule — they're just hidden from the Today view.</p>` +
         `<div class="zones-list">${rows}</div>`
       );
@@ -2276,7 +2391,8 @@
 
     _renderZoneClimateChips(zoneCfg) {
       const chips = [];
-      const moistures = this._readPercentSensors(zoneCfg.moisture_entities || []);
+      const moistureIds = zoneCfg.moisture_entities || [];
+      const moistures = this._readPercentSensors(moistureIds);
       if (moistures.length > 0) {
         const combined = this._combineReadings(moistures, zoneCfg.combine_mode);
         const minPct = zoneCfg.min_pct;
@@ -2287,8 +2403,19 @@
           )}">💧 ${combined.toFixed(0)}%${moistures.length > 1 ? ` (${moistures.length})` : ""}</span>`
         );
       }
-      // Temp — always averaged, unit pulled from the first sensor
-      const tempEids = zoneCfg.temperature_entities || [];
+
+      // v1.15 — if the user hasn't explicitly bound temp/humidity but
+      // their bound moisture sensors have sibling entities on the same
+      // device (typical for multi-purpose soil sensors that report
+      // moisture + temperature + humidity), fall back to those for
+      // display. Marked with "(auto)" in the hover tooltip so the
+      // distinction is visible.
+      let tempEids = zoneCfg.temperature_entities || [];
+      let tempAuto = false;
+      if (tempEids.length === 0 && moistureIds.length > 0) {
+        tempEids = this._findSiblingSensors(moistureIds, "temperature");
+        tempAuto = tempEids.length > 0;
+      }
       if (tempEids.length > 0) {
         const readings = tempEids
           .map((eid) => this._readSensor(eid))
@@ -2302,29 +2429,80 @@
         if (readings.length > 0) {
           const avg = readings.reduce((a, b) => a + b.value, 0) / readings.length;
           const unit = readings[0].unit;
+          const tipLines = readings
+            .map((r) => `${r.friendly}: ${r.value.toFixed(1)}${unit}`)
+            .concat(
+              tempAuto
+                ? ["", "(auto-detected from moisture sensor device)"]
+                : []
+            )
+            .join("\n");
           chips.push(
-            `<span class="zone-chip" title="${escapeAttr(
-              readings.map((r) => `${r.friendly}: ${r.value.toFixed(1)}${unit}`).join("\n")
-            )}">🌡️ ${avg.toFixed(0)}${unit}${readings.length > 1 ? ` (${readings.length})` : ""}</span>`
+            `<span class="zone-chip${tempAuto ? " zone-chip-auto" : ""}" title="${escapeAttr(tipLines)}">🌡️ ${avg.toFixed(0)}${unit}${readings.length > 1 ? ` (${readings.length})` : ""}</span>`
           );
         }
       }
-      // Humidity
-      const humEids = zoneCfg.humidity_entities || [];
+
+      // Same fallback for humidity
+      let humEids = zoneCfg.humidity_entities || [];
+      let humAuto = false;
+      if (humEids.length === 0 && moistureIds.length > 0) {
+        humEids = this._findSiblingSensors(moistureIds, "humidity");
+        humAuto = humEids.length > 0;
+      }
       if (humEids.length > 0) {
-        const readings = humEids
+        const reads = humEids
           .map((eid) => this._readSensor(eid))
           .filter(Boolean)
-          .map((s) => parseFloat(s.state))
-          .filter((v) => !Number.isNaN(v));
-        if (readings.length > 0) {
-          const avg = readings.reduce((a, b) => a + b, 0) / readings.length;
+          .map((s) => ({
+            value: parseFloat(s.state),
+            friendly: s.attributes?.friendly_name || s.entity_id,
+          }))
+          .filter((r) => !Number.isNaN(r.value));
+        if (reads.length > 0) {
+          const avg = reads.reduce((a, b) => a + b.value, 0) / reads.length;
+          const tipLines = reads
+            .map((r) => `${r.friendly}: ${r.value.toFixed(1)}%`)
+            .concat(
+              humAuto
+                ? ["", "(auto-detected from moisture sensor device)"]
+                : []
+            )
+            .join("\n");
           chips.push(
-            `<span class="zone-chip">💨 ${avg.toFixed(0)}%${readings.length > 1 ? ` (${readings.length})` : ""}</span>`
+            `<span class="zone-chip${humAuto ? " zone-chip-auto" : ""}" title="${escapeAttr(tipLines)}">💨 ${avg.toFixed(0)}%${reads.length > 1 ? ` (${reads.length})` : ""}</span>`
           );
         }
       }
       return chips.join("");
+    }
+
+    _findSiblingSensors(moistureIds, kind) {
+      // Given a list of moisture entity_ids and a target kind
+      // ("temperature" | "humidity"), return live entity_ids that look
+      // like siblings on the same device. Pure name-substitution: we
+      // swap the word "moisture" for "temperature"/"humidity" (and a
+      // few common variants) and check if the resulting entity exists
+      // in HA's state. No device-registry lookup required.
+      if (!this._hass?.states) return [];
+      const wordMap = {
+        temperature: ["temperature", "temp"],
+        humidity: ["humidity", "humid"],
+      };
+      const targets = wordMap[kind] || [];
+      const found = new Set();
+      for (const moistureId of moistureIds) {
+        if (typeof moistureId !== "string" || !/moisture/i.test(moistureId)) continue;
+        for (const word of targets) {
+          // Replace "moisture" (case-insensitive) with the target word
+          const candidate = moistureId.replace(/moisture/gi, word);
+          if (candidate === moistureId) continue;
+          if (this._hass.states[candidate]) {
+            found.add(candidate);
+          }
+        }
+      }
+      return Array.from(found);
     }
 
     _renderZone7DayStrip(entityId) {
@@ -2417,13 +2595,6 @@
       return result.sort((a, b) => a.start_time.localeCompare(b.start_time));
     }
 
-    _todaysRuns() {
-      // Backward-compat shim — today's runs only.
-      const d = new Date();
-      d.setHours(0, 0, 0, 0);
-      return this._runsForDay(d);
-    }
-
     _runsForDay(day) {
       // All scheduled runs firing on `day` (a Date at local midnight),
       // expanded into one entry per zone-step. Each entry is
@@ -2487,7 +2658,7 @@
           const anchorDt = new Date(s.interval_anchor + "T00:00:00");
           anchorDt.setHours(hh, mm, 0, 0);
           if (Number.isNaN(anchorDt.getTime())) continue;
-          // v1.14.1: with interval_end_time set, the schedule fires every
+          // v1.15.0: with interval_end_time set, the schedule fires every
           // N hours from start_time EACH DAY, capped at end_time. Without
           // it, the legacy continuous-across-days behavior applies.
           if (s.interval_end_time) {
@@ -2521,71 +2692,6 @@
         }
       }
       return out.sort((a, b) => a.start_minutes - b.start_minutes);
-    }
-
-    _renderTodaysTimeline() {
-      const runs = this._todaysRuns();
-      const now = new Date();
-      const nowMin = now.getHours() * 60 + now.getMinutes();
-      const pct = (m) => (m / 1440) * 100;
-      const fmtTime = (m) => {
-        const h = Math.floor(m / 60);
-        const mm = String(m % 60).padStart(2, "0");
-        const ampm = h >= 12 ? "PM" : "AM";
-        const h12 = h % 12 || 12;
-        return `${h12}:${mm} ${ampm}`;
-      };
-
-      if (runs.length === 0) {
-        return (
-          `<section class="today-timeline">` +
-          `<h3 class="section-title">Today's runs</h3>` +
-          `<div class="empty"><p>No runs scheduled for today.</p></div>` +
-          `</section>`
-        );
-      }
-
-      // Hour ticks every 6h — keeps the axis readable
-      const ticks = [0, 360, 720, 1080, 1440]
-        .map((m) => {
-          const label = m === 1440 ? "12 AM" : fmtTime(m);
-          return `<span class="timeline-tick" style="left:${pct(m)}%">${label}</span>`;
-        })
-        .join("");
-
-      // One pill per run, anchored at the start time
-      const pills = runs
-        .map((r) => {
-          const widthPct = Math.max(2, pct(r.duration_minutes));
-          const past = r.start_minutes + r.duration_minutes < nowMin;
-          const live =
-            r.start_minutes <= nowMin && nowMin < r.start_minutes + r.duration_minutes;
-          const cls =
-            "timeline-pill" +
-            (past ? " timeline-pill-past" : "") +
-            (live ? " timeline-pill-live" : "");
-          const title = `${r.schedule_name} → ${r.zone_name}\n${fmtTime(r.start_minutes)} for ${r.duration_minutes} min\nClick to edit`;
-          return (
-            `<div class="${cls}" style="left:${pct(r.start_minutes)}%;width:${widthPct}%" title="${escapeAttr(title)}" data-action="open-schedule-edit" data-schedule-id="${escapeAttr(r.schedule_id)}">` +
-            `<span class="timeline-pill-time">${fmtTime(r.start_minutes)}</span>` +
-            `<span class="timeline-pill-zone">${escapeHtml(r.zone_name)} · ${r.duration_minutes}m</span>` +
-            `</div>`
-          );
-        })
-        .join("");
-
-      const nowMarker = `<div class="timeline-now" style="left:${pct(nowMin)}%" title="Now: ${fmtTime(nowMin)}"></div>`;
-
-      return (
-        `<section class="today-timeline">` +
-        `<h3 class="section-title">Today's runs (${runs.length})</h3>` +
-        `<div class="timeline-track">` +
-        `<div class="timeline-axis">${ticks}</div>` +
-        `<div class="timeline-bar">${nowMarker}${pills}</div>` +
-        `</div>` +
-        `</section>` +
-        this._renderTomorrowList()
-      );
     }
 
     _renderDayCalendar() {
@@ -2807,7 +2913,7 @@
         const hasTriggers = r.triggers && Object.keys(r.triggers).length > 0;
         const expanded = this._historyExpanded.has(r.id);
         const triggerCell = hasTriggers
-          ? `<button class="btn btn-small history-trigger-toggle" data-action="history-toggle-triggers" data-record-id="${escapeAttr(r.id)}">${expanded ? "▾" : "▸"} ${Object.keys(r.triggers).join(", ")}</button>`
+          ? `<button class="btn btn-small history-trigger-toggle" data-action="history-toggle-triggers" data-record-id="${escapeAttr(r.id)}">${expanded ? "▾" : "▸"} ${Object.keys(r.triggers).map(escapeHtml).join(", ")}</button>`
           : `<span class="history-dim">—</span>`;
         const expandedBlock =
           expanded && hasTriggers
@@ -2836,7 +2942,7 @@
 
       return (
         `<header class="page-header"><h2>Run history</h2>` +
-        `<span class="version-pill">v1.14.1</span></header>` +
+        `<span class="version-pill">v1.15.0</span></header>` +
         `<div class="history-toolbar">` +
         `<label>Zone <select data-action="history-filter-zone"><option value="">All zones</option>${zoneOptions}</select></label>` +
         `<label>Schedule <select data-action="history-filter-schedule"><option value="">All schedules</option>${scheduleOptions}</select></label>` +
@@ -2884,7 +2990,7 @@
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Sensors</h2>` +
-          `<span class="version-pill">v1.14.1</span></header>` +
+          `<span class="version-pill">v1.15.0</span></header>` +
           `<div class="empty"><p>No zones configured.</p></div>`
         );
       }
@@ -2893,7 +2999,7 @@
         .join("");
       return (
         `<header class="page-header"><h2>Sensors</h2>` +
-        `<span class="version-pill">v1.14.1</span></header>` +
+        `<span class="version-pill">v1.15.0</span></header>` +
         `<p class="section-hint">Bind soil-moisture sensors to a zone so runtimes auto-adjust based on actual moisture. You can attach one sensor or several (combined as average, lowest, highest, or just the primary).</p>` +
         `<div class="sensor-zone-list">${cards}</div>`
       );
@@ -3310,7 +3416,7 @@
 
       return (
         `<header class="page-header"><h2>Weather</h2>` +
-        `<span class="version-pill">v1.14.1</span></header>` +
+        `<span class="version-pill">v1.15.0</span></header>` +
         lockoutHtml +
         forecastHtml +
         `<form class="weather-form" data-form="weather">` +
@@ -3584,7 +3690,7 @@
           `</div>` +
           `</div>`;
       } else if (mode === "interval_hours") {
-        // Optional daily-window cap (v1.14.1). Empty = legacy continuous.
+        // Optional daily-window cap (v1.15.0). Empty = legacy continuous.
         const endTime = (e.interval_end_time || "").trim();
         const [endH, endM] = endTime ? endTime.split(":") : ["", ""];
         modeFields =
@@ -3896,6 +4002,13 @@
         `.day-cal-now{position:absolute;left:0;right:0;border-top:2px solid #db4437;z-index:2;pointer-events:none}` +
         `.day-cal-empty-hint{position:absolute;top:24px;left:60px;right:8px;text-align:center;color:var(--ci-text-2);font-size:13px}` +
         // Run history tab
+        // Notification target rows (v1.15) — replaces the textarea
+        `.notify-target-list{display:flex;flex-direction:column;gap:6px;margin:4px 0 10px}` +
+        `.notify-target-row{display:flex;gap:8px;align-items:center}` +
+        `.notify-target-select{flex:1;padding:8px 10px;border:1px solid var(--ci-border);border-radius:6px;font-size:14px;background:var(--ci-input-bg);color:inherit;font-family:inherit;min-width:0}` +
+        `.notify-target-remove{flex:0 0 auto;padding:6px 10px;background:transparent;border:1px solid var(--ci-border);border-radius:6px;color:var(--ci-text-2);cursor:pointer;font-size:14px;line-height:1}` +
+        `.notify-target-remove:hover{color:#db4437;border-color:#db4437}` +
+        `.notify-target-actions{margin-bottom:14px}` +
         `.history-toolbar{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-bottom:10px}` +
         `.history-toolbar label{display:flex;flex-direction:column;font-size:11px;color:var(--ci-text-2);gap:4px}` +
         `.history-toolbar select{padding:6px 8px;border:1px solid var(--ci-border);border-radius:6px;background:var(--ci-input-bg);color:inherit;font-family:inherit;font-size:13px}` +
@@ -4003,6 +4116,10 @@
         `.zone-row-climate{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}` +
         `.zone-chip{display:inline-flex;align-items:center;gap:4px;font-size:12px;background:var(--ci-hover);border:1px solid var(--ci-border,rgba(0,0,0,0.08));border-radius:999px;padding:2px 8px;color:var(--ci-text);cursor:help}` +
         `.zone-chip-low{background:rgba(219,68,55,0.12);border-color:#db4437;color:#db4437;font-weight:600}` +
+        // Auto-detected chips (v1.15) — sibling temp/humidity inferred
+        // from a bound moisture sensor's entity_id; dashed border tells
+        // users they didn't explicitly bind it.
+        `.zone-chip-auto{border-style:dashed;opacity:0.9}` +
         `.zone-row-strip{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}` +
         `.zone-day{background:var(--ci-hover);border:1px solid var(--ci-border);border-radius:6px;padding:6px 4px;text-align:center;font-size:11px;cursor:default}` +
         `.zone-day-today{outline:2px solid var(--ci-accent);outline-offset:-2px}` +
@@ -4131,5 +4248,5 @@
   }
 
   customElements.define(ELEMENT_NAME, CompleteIrrigationPanel);
-  console.info("[complete-irrigation] panel registered, version v1.14.1");
+  console.info("[complete-irrigation] panel registered, version v1.15.0");
 })();

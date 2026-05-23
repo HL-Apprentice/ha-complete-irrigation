@@ -87,9 +87,39 @@ _ZONE_STEP_SCHEMA = vol.Schema(
     }
 )
 
+
+def _no_control_chars(value: str) -> str:
+    """v1.15 — reject control characters in user strings.
+
+    Schedule names land in the iCal feed and the run_history records,
+    both of which are echoed verbatim to other surfaces (calendar
+    subscribers, panel). An embedded CR/LF would let a name carry
+    extra ICS fields or break log parsing."""
+    for c in value:
+        if c < " " and c not in ("\t",):
+            raise vol.Invalid("control characters not allowed in name")
+    return value
+
+
+def _validate_notify_target(value: str) -> str:
+    """v1.15 — restrict notify targets to the `notify.*` service domain.
+
+    Without this guard, an attacker who can call set_notification_config
+    could install something like `shell_command.curl_exfil` as a "notify
+    target" and have it invoked on every notification event. We only
+    allow the `notify` domain since that's the only one whose service
+    contract takes (title, message)."""
+    if not isinstance(value, str) or not value.strip():
+        raise vol.Invalid("notify target must be a non-empty string")
+    parts = value.strip().split(".", 1)
+    if len(parts) != 2 or parts[0] != "notify" or not parts[1]:
+        raise vol.Invalid(f"notify target must be of the form 'notify.<service>', got {value!r}")
+    return value.strip()
+
+
 _ADD_SCHEDULE_SCHEMA = vol.Schema(
     {
-        vol.Required("name"): vol.All(cv.string, vol.Length(min=1, max=80)),
+        vol.Required("name"): vol.All(cv.string, vol.Length(min=1, max=80), _no_control_chars),
         vol.Required("zone_entity_id"): cv.entity_id,
         vol.Required("start_time"): cv.time,
         vol.Required("duration_minutes"): vol.All(
@@ -127,7 +157,7 @@ _ADD_SCHEDULE_SCHEMA = vol.Schema(
 _UPDATE_SCHEDULE_SCHEMA = vol.Schema(
     {
         vol.Required("schedule_id"): cv.string,
-        vol.Optional("name"): vol.All(cv.string, vol.Length(min=1, max=80)),
+        vol.Optional("name"): vol.All(cv.string, vol.Length(min=1, max=80), _no_control_chars),
         vol.Optional("zone_entity_id"): cv.entity_id,
         vol.Optional("start_time"): cv.time,
         vol.Optional("duration_minutes"): vol.All(
@@ -197,10 +227,12 @@ _CLEAR_RAIN_LOCKOUT_SCHEMA = vol.Schema({})
 _SET_NOTIFICATION_CONFIG_SCHEMA = vol.Schema(
     {
         # Single legacy target — still accepted for back-compat.
-        vol.Optional("notify_target"): cv.string,
+        vol.Optional("notify_target"): vol.Any("", _validate_notify_target),
         # Multi-target list. Accepted as list-of-strings OR a
         # comma/newline-separated string (the dispatcher normalizes).
-        vol.Optional("notify_targets"): vol.Any(cv.string, [cv.string]),
+        # When a string, each comma/newline-separated entry is validated
+        # by the dispatcher; we accept the raw string here.
+        vol.Optional("notify_targets"): vol.Any(cv.string, [_validate_notify_target]),
         vol.Optional("quiet_hours_start"): cv.string,
         vol.Optional("quiet_hours_end"): cv.string,
         vol.Optional("enabled"): cv.boolean,
@@ -210,7 +242,9 @@ _SET_NOTIFICATION_CONFIG_SCHEMA = vol.Schema(
     }
 )
 
-_TEST_NOTIFICATION_SCHEMA = vol.Schema({vol.Optional("message", default="Test"): cv.string})
+_TEST_NOTIFICATION_SCHEMA = vol.Schema(
+    {vol.Optional("message", default="Test"): vol.All(cv.string, vol.Length(max=1024))}
+)
 
 _SET_GENERAL_CONFIG_SCHEMA = vol.Schema(
     {
@@ -247,17 +281,11 @@ _START_ESTABLISHMENT_SCHEMA = vol.Schema(
 
 
 def _find_coordinator(hass: HomeAssistant):
-    """Return the first (and currently only) ScheduleCoordinator. v0.x
-    limits to one config entry; multi-controller support comes later."""
-    from . import _SHARED_KEY
+    """Thin re-export so existing call sites keep working; the canonical
+    implementation lives in __init__.py (v1.15 dedupe)."""
+    from . import find_coordinator
 
-    for key, data in hass.data.get(DOMAIN, {}).items():
-        if key == _SHARED_KEY:
-            continue
-        coord = data.get("coordinator")
-        if coord is not None:
-            return coord
-    return None
+    return find_coordinator(hass)
 
 
 def _find_entry_data(hass: HomeAssistant, entity_id: str) -> dict[str, Any] | None:
@@ -534,36 +562,38 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         if existing is None:
             _LOGGER.warning("update_schedule: no such schedule %s", data["schedule_id"])
             return
-        # Build a new Schedule with overrides applied (frozen dataclass).
+        # v1.15 — collect only the fields the caller actually sent, then
+        # let with_changes do the rest. Avoids the "added a field, forgot
+        # to copy it in update_schedule" bug class.
+        overrides: dict[str, Any] = {}
+        for key in (
+            "name",
+            "zone_entity_id",
+            "start_time",
+            "duration_minutes",
+            "enabled",
+            "mode",
+            "interval_days",
+            "interval_hours",
+            "interval_anchor",
+            "interval_end_time",
+            "start_date",
+            "repeat_annually",
+            "end_date",
+        ):
+            if key in data:
+                overrides[key] = data[key]
+        if "weekdays" in data:
+            overrides["weekdays"] = tuple(sorted(data["weekdays"]))
         if "zone_steps" in data:
-            new_steps = tuple(
+            overrides["zone_steps"] = tuple(
                 ZoneStep(
                     zone_entity_id=s["zone_entity_id"],
                     duration_minutes=int(s["duration_minutes"]),
                 )
                 for s in (data["zone_steps"] or [])
             )
-        else:
-            new_steps = existing.zone_steps
-        merged = Schedule(
-            id=existing.id,
-            name=data.get("name", existing.name),
-            zone_entity_id=data.get("zone_entity_id", existing.zone_entity_id),
-            start_time=data.get("start_time", existing.start_time),
-            duration_minutes=data.get("duration_minutes", existing.duration_minutes),
-            weekdays=(tuple(sorted(data["weekdays"])) if "weekdays" in data else existing.weekdays),
-            enabled=data.get("enabled", existing.enabled),
-            mode=data.get("mode", existing.mode),
-            interval_days=data.get("interval_days", existing.interval_days),
-            interval_hours=data.get("interval_hours", existing.interval_hours),
-            interval_anchor=data.get("interval_anchor", existing.interval_anchor),
-            interval_end_time=data.get("interval_end_time", existing.interval_end_time),
-            start_date=data.get("start_date", existing.start_date),
-            repeat_annually=data.get("repeat_annually", existing.repeat_annually),
-            end_date=data.get("end_date", existing.end_date),
-            zone_steps=new_steps,
-            created_via=existing.created_via,
-        )
+        merged = existing.with_changes(**overrides)
         coord.schedule_store.upsert(merged)
         await coord.async_save()
         _LOGGER.info("Updated schedule %s", merged.id)
@@ -585,25 +615,9 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         existing = coord.schedule_store.get(data["schedule_id"])
         if existing is None:
             return
-        new = Schedule(
-            id=existing.id,
-            name=existing.name,
-            zone_entity_id=existing.zone_entity_id,
-            start_time=existing.start_time,
-            duration_minutes=existing.duration_minutes,
-            weekdays=existing.weekdays,
-            enabled=data["enabled"],
-            end_date=existing.end_date,
-            start_date=existing.start_date,
-            repeat_annually=existing.repeat_annually,
-            mode=existing.mode,
-            interval_days=existing.interval_days,
-            interval_hours=existing.interval_hours,
-            interval_anchor=existing.interval_anchor,
-            interval_end_time=existing.interval_end_time,
-            zone_steps=existing.zone_steps,
-            created_via=existing.created_via,
-        )
+        # v1.15 — with_changes preserves every field automatically, so
+        # new Schedule attributes don't silently get dropped here.
+        new = existing.with_changes(enabled=data["enabled"])
         coord.schedule_store.upsert(new)
         await coord.async_save()
         _LOGGER.info("Set schedule %s enabled=%s", existing.id, data["enabled"])

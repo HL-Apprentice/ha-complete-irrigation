@@ -73,6 +73,22 @@ def _entry_count(hass: HomeAssistant) -> int:
     return sum(1 for k in hass.data.get(DOMAIN, {}) if k != _SHARED_KEY)
 
 
+def find_coordinator(hass: HomeAssistant):
+    """Return the first live ScheduleCoordinator for this integration, or None.
+
+    v1.15 — single source of truth. services.py + ws_api.py + ical_view.py
+    all share this helper instead of each maintaining its own copy of the
+    same _SHARED_KEY skip-and-walk loop.
+    """
+    for key, data in hass.data.get(DOMAIN, {}).items():
+        if key == _SHARED_KEY:
+            continue
+        coord = data.get("coordinator")
+        if coord is not None:
+            return coord
+    return None
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Complete Irrigation from a config entry."""
     # Deferred imports — only loaded when HA actually calls us, so the
@@ -177,7 +193,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 "zones": entry.data.get("zones", []),
                 "controller_domain": entry.data.get("controller_domain"),
             },
-            require_admin=False,
+            # Admin-only (v1.15): the panel drives hardware (run/stop zones)
+            # and edits the shared schedule store. Non-admin HA users should
+            # not be able to start/stop irrigation or change schedules.
+            require_admin=True,
         )
         shared.panel_registered = True
 

@@ -9,7 +9,7 @@ ScheduleStore instance and persists it to HA's storage on every change.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, time
 from typing import Any
 
@@ -189,6 +189,17 @@ class Schedule:
                 raise ValueError(
                     "zone_steps[0].duration_minutes must match top-level duration_minutes"
                 )
+
+    def with_changes(self, **overrides: Any) -> Schedule:
+        """Return a new Schedule with the given field overrides.
+
+        v1.15 — services.py previously rebuilt Schedule field-by-field
+        whenever a single property changed (set_schedule_enabled,
+        update_schedule), which silently dropped any field added to the
+        dataclass after the handler was written. dataclasses.replace
+        keeps the full field set in sync automatically and re-runs
+        __post_init__ validation."""
+        return replace(self, **overrides)
 
     def all_steps(self) -> tuple[ZoneStep, ...]:
         """Return the zone sequence. Falls back to a single ZoneStep
