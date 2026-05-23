@@ -107,6 +107,8 @@ def test_schedule_to_dict_has_expected_shape():
         "interval_days": None,
         "interval_anchor": None,
         "interval_hours": None,
+        "start_date": None,
+        "repeat_annually": False,
         "zone_steps": [],
         "created_via": "panel",
     }
@@ -510,3 +512,98 @@ def test_schedule_interval_hours_roundtrip():
     )
     rebuilt = Schedule.from_dict(original.to_dict())
     assert rebuilt == original
+
+
+# ════════════════════════════════════════════════════════════════════
+# Active period — start_date / end_date / repeat_annually (v1.12)
+# ════════════════════════════════════════════════════════════════════
+
+
+def test_schedule_start_date_defaults_to_none():
+    assert _good_schedule().start_date is None
+
+
+def test_schedule_repeat_annually_defaults_to_false():
+    assert _good_schedule().repeat_annually is False
+
+
+def test_schedule_active_period_roundtrips():
+    from datetime import date
+
+    s = _good_schedule(
+        start_date=date(2026, 3, 1),
+        end_date=date(2026, 10, 31),
+        repeat_annually=True,
+    )
+    rebuilt = Schedule.from_dict(s.to_dict())
+    assert rebuilt == s
+
+
+def test_schedule_repeat_annually_requires_both_dates():
+    from datetime import date
+
+    with pytest.raises(ValueError, match="repeat_annually"):
+        _good_schedule(start_date=date(2026, 3, 1), repeat_annually=True)
+    with pytest.raises(ValueError, match="repeat_annually"):
+        _good_schedule(end_date=date(2026, 10, 31), repeat_annually=True)
+
+
+def test_schedule_repeat_annually_rejects_year_wrap():
+    """Window must stay within one calendar year (Mar→Oct OK; Nov→Feb not)."""
+    from datetime import date
+
+    with pytest.raises(ValueError, match="wrap"):
+        _good_schedule(
+            start_date=date(2026, 11, 15),
+            end_date=date(2026, 2, 28),
+            repeat_annually=True,
+        )
+
+
+def test_is_within_active_window_no_bounds():
+    """No start/end → always within."""
+    from datetime import date
+
+    from custom_components.complete_irrigation.schedule import is_within_active_window
+
+    s = _good_schedule()
+    assert is_within_active_window(s, date(1999, 1, 1)) is True
+    assert is_within_active_window(s, date(2100, 12, 31)) is True
+
+
+def test_is_within_active_window_one_shot_bounds():
+    from datetime import date
+
+    from custom_components.complete_irrigation.schedule import is_within_active_window
+
+    s = _good_schedule(start_date=date(2026, 3, 1), end_date=date(2026, 10, 31))
+    assert is_within_active_window(s, date(2026, 2, 28)) is False
+    assert is_within_active_window(s, date(2026, 3, 1)) is True
+    assert is_within_active_window(s, date(2026, 6, 15)) is True
+    assert is_within_active_window(s, date(2026, 10, 31)) is True
+    assert is_within_active_window(s, date(2026, 11, 1)) is False
+    # Next year — one-shot, so outside the window
+    assert is_within_active_window(s, date(2027, 6, 15)) is False
+
+
+def test_is_within_active_window_annual_repeats_each_year():
+    from datetime import date
+
+    from custom_components.complete_irrigation.schedule import is_within_active_window
+
+    s = _good_schedule(
+        start_date=date(2026, 3, 1),
+        end_date=date(2026, 10, 31),
+        repeat_annually=True,
+    )
+    # 2026 in-window
+    assert is_within_active_window(s, date(2026, 6, 15)) is True
+    # 2027 same month/day = also in window
+    assert is_within_active_window(s, date(2027, 6, 15)) is True
+    # 2030 December = outside (Nov+ outside)
+    assert is_within_active_window(s, date(2030, 12, 25)) is False
+    # On the edges
+    assert is_within_active_window(s, date(2099, 3, 1)) is True
+    assert is_within_active_window(s, date(2099, 10, 31)) is True
+    assert is_within_active_window(s, date(2099, 2, 28)) is False
+    assert is_within_active_window(s, date(2099, 11, 1)) is False

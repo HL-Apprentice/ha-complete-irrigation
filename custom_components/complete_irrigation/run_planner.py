@@ -109,15 +109,21 @@ def _expand_steps(
 
 
 def _runs_for_weekdays(sched, from_dt, until_dt, buffer_seconds=None):
+    from .schedule import is_within_active_window
+
     tz = from_dt.tzinfo
     weekday_set = set(sched.weekdays)
     current = from_dt.date()
     end = until_dt.date()
-    if sched.end_date is not None and sched.end_date < end:
+    # For one-shot non-repeating schedules, the end_date narrows the
+    # planning window. For repeat_annually schedules the per-year active
+    # window may be larger or smaller than end_date — handled per-day
+    # via is_within_active_window below.
+    if sched.end_date is not None and not sched.repeat_annually and sched.end_date < end:
         end = sched.end_date
 
     while current <= end:
-        if current.weekday() in weekday_set:
+        if current.weekday() in weekday_set and is_within_active_window(sched, current):
             base_start = datetime.combine(current, sched.start_time, tzinfo=tz)
             for run in _expand_steps(sched, base_start, buffer_seconds):
                 # Window check on each step individually so a multi-zone
@@ -131,6 +137,8 @@ def _runs_for_weekdays(sched, from_dt, until_dt, buffer_seconds=None):
 def _runs_for_interval(sched, from_dt, until_dt, buffer_seconds=None):
     """Generate dates every `interval_days` days starting at `interval_anchor`.
     Skip past dates before the window, stop at end_date / window end."""
+    from .schedule import is_within_active_window
+
     tz = from_dt.tzinfo
     step = sched.interval_days
     anchor = sched.interval_anchor
@@ -144,14 +152,15 @@ def _runs_for_interval(sched, from_dt, until_dt, buffer_seconds=None):
         current = anchor + timedelta(days=skip_steps * step)
 
     end = until_dt.date()
-    if sched.end_date is not None and sched.end_date < end:
+    if sched.end_date is not None and not sched.repeat_annually and sched.end_date < end:
         end = sched.end_date
 
     while current <= end:
-        base_start = datetime.combine(current, sched.start_time, tzinfo=tz)
-        for run in _expand_steps(sched, base_start, buffer_seconds):
-            if from_dt <= run.start_at < until_dt:
-                yield run
+        if is_within_active_window(sched, current):
+            base_start = datetime.combine(current, sched.start_time, tzinfo=tz)
+            for run in _expand_steps(sched, base_start, buffer_seconds):
+                if from_dt <= run.start_at < until_dt:
+                    yield run
         current += timedelta(days=step)
 
 
@@ -163,6 +172,8 @@ def _runs_for_interval_hours(sched, from_dt, until_dt, buffer_seconds=None):
     06:00 the next day, ... continuing until end_date or window end.
     Skips runs before interval_anchor; stops at end_date if set.
     """
+    from .schedule import is_within_active_window
+
     tz = from_dt.tzinfo
     step_hours = sched.interval_hours
     anchor_dt = datetime.combine(sched.interval_anchor, sched.start_time, tzinfo=tz)
@@ -180,7 +191,9 @@ def _runs_for_interval_hours(sched, from_dt, until_dt, buffer_seconds=None):
             current += step
 
     end_dt = until_dt
-    if sched.end_date is not None:
+    # Only narrow window for non-repeating end_date; annual repeat is
+    # checked per-cycle via is_within_active_window below.
+    if sched.end_date is not None and not sched.repeat_annually:
         # Cap at end-of-day on end_date so runs before midnight are kept.
         end_of_end = datetime.combine(sched.end_date, sched.start_time, tzinfo=tz) + timedelta(
             days=1
@@ -189,9 +202,10 @@ def _runs_for_interval_hours(sched, from_dt, until_dt, buffer_seconds=None):
             end_dt = end_of_end
 
     while current < end_dt:
-        for run in _expand_steps(sched, current, buffer_seconds):
-            if from_dt <= run.start_at < until_dt:
-                yield run
+        if is_within_active_window(sched, current.date()):
+            for run in _expand_steps(sched, current, buffer_seconds):
+                if from_dt <= run.start_at < until_dt:
+                    yield run
         current += step
 
 
