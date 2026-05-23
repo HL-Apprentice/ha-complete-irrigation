@@ -1262,7 +1262,7 @@
 
       return (
         `<header class="page-header"><h2>Notifications</h2>` +
-        `<span class="version-pill">v1.13.2</span></header>` +
+        `<span class="version-pill">v1.13.3</span></header>` +
         `<form class="weather-form" data-form="notifications">` +
         `<label class="enabled-check"><input type="checkbox" name="enabled"${
           enabled ? " checked" : ""
@@ -1361,7 +1361,7 @@
 
       return (
         `<header class="page-header"><h2>Settings</h2>` +
-        `<span class="version-pill">v1.13.2</span></header>` +
+        `<span class="version-pill">v1.13.3</span></header>` +
         `<section class="settings-card">` +
         `<h3 class="section-title">Theme ${tip("Cycle Light/Dark/Auto with the ☀️/🌙 button on Today, or pick one of your HA-installed themes below.")}</h3>` +
         `<p class="section-hint">Light/Dark/Auto: <strong>${escapeHtml(themeLabel)}</strong>.</p>` +
@@ -1430,7 +1430,7 @@
         `<section class="settings-card">` +
         `<h3 class="section-title">About</h3>` +
         `<table class="settings-table">` +
-        `<tr><td>Version</td><td><strong>v1.13.2</strong></td></tr>` +
+        `<tr><td>Version</td><td><strong>v1.13.3</strong></td></tr>` +
         `<tr><td>Repository</td><td><a href="${repoUrl}" target="_blank">${escapeHtml(repoUrl)}</a></td></tr>` +
         `<tr><td>Zones configured</td><td>${(this._panel?.config?.zones || []).length}</td></tr>` +
         `<tr><td>Schedules</td><td>${(this._schedules || []).length}</td></tr>` +
@@ -1559,7 +1559,7 @@
       return (
         `<header class="page-header"><h2>Today</h2>` +
         `<div class="page-header-right">${themeBtn}` +
-        `<span class="version-pill">v1.13.2</span></div></header>` +
+        `<span class="version-pill">v1.13.3</span></div></header>` +
         this._renderRainLockoutBanner() +
         this._renderWeatherBanner() +
         `<section>` +
@@ -2072,7 +2072,7 @@
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Zones</h2>` +
-          `<span class="version-pill">v1.13.2</span></header>` +
+          `<span class="version-pill">v1.13.3</span></header>` +
           `<div class="empty"><p>No zones configured. Add them via Settings → Devices &amp; Services.</p></div>`
         );
       }
@@ -2081,7 +2081,7 @@
         .join("");
       return (
         `<header class="page-header"><h2>Zones</h2>` +
-        `<span class="version-pill">v1.13.2</span></header>` +
+        `<span class="version-pill">v1.13.3</span></header>` +
         `<p class="section-hint">Hidden zones still run on schedule — they're just hidden from the Today view.</p>` +
         `<div class="zones-list">${rows}</div>`
       );
@@ -2479,40 +2479,38 @@
           : "") +
         `</div>`;
 
-      if (runs.length === 0) {
-        return (
-          `<section class="day-cal">` +
-          navBar +
-          `<div class="empty"><p>No runs scheduled.</p></div>` +
-          `</section>`
+      // 24-hour time grid. One <div class="day-cal-hour"> per hour, each
+      // 60px tall. Hour line = top border (solid). Half-hour line = ::after
+      // pseudo-element at 50% height with 30% opacity. Runs are absolutely
+      // positioned over the grid using 1px per minute (top = start_minutes,
+      // height = duration_minutes, min 18px so 5-min runs stay legible).
+      const hourLabels = [];
+      for (let h = 0; h < 24; h++) {
+        const ampm = h >= 12 ? "PM" : "AM";
+        const h12 = h % 12 || 12;
+        hourLabels.push(
+          `<div class="day-cal-hour" style="top:${h * 60}px"><span class="day-cal-hour-label">${h12} ${ampm}</span></div>`
         );
       }
+      const hours = hourLabels.join("");
 
-      // Group runs by hour for visual grouping (12 AM, 1 AM, ..., 11 PM)
-      // Renders each run as a row with: time, zone color stripe, zone name,
-      // duration, schedule name, status (Past/Now/Upcoming on today).
-      const rows = runs
+      // Pills — one per run, absolutely positioned.
+      const pills = runs
         .map((r) => {
+          const top = r.start_minutes;
+          const height = Math.max(18, r.duration_minutes);
+          let cls = "day-cal-pill";
           let status = "";
-          let cls = "day-cal-row";
           if (isToday) {
             if (r.start_minutes + r.duration_minutes < nowMin) {
-              status = `<span class="day-cal-status past">Past</span>`;
               cls += " past";
+              status = " · Past";
             } else if (
               r.start_minutes <= nowMin &&
               nowMin < r.start_minutes + r.duration_minutes
             ) {
-              status = `<span class="day-cal-status live">Running now</span>`;
               cls += " live";
-            } else {
-              const mins = r.start_minutes - nowMin;
-              if (mins > 0 && mins <= 120) {
-                const h = Math.floor(mins / 60);
-                const m = mins % 60;
-                const in_str = h > 0 ? `in ${h}h ${m}m` : `in ${m}m`;
-                status = `<span class="day-cal-status soon">${in_str}</span>`;
-              }
+              status = " · Running now";
             }
           }
           const endMin = r.start_minutes + r.duration_minutes;
@@ -2521,26 +2519,32 @@
             `${fmtTime(r.start_minutes)} – ${fmtTime(endMin)} (${r.duration_minutes} min)\n` +
             `Click to edit`;
           return (
-            `<div class="${cls}" data-action="open-schedule-edit" data-schedule-id="${escapeAttr(r.schedule_id)}" title="${escapeAttr(title)}">` +
-            `<div class="day-cal-time">` +
-            `<span class="day-cal-start">${fmtTime(r.start_minutes)}</span>` +
-            `<span class="day-cal-end">${fmtTime(endMin)}</span>` +
-            `</div>` +
-            `<div class="day-cal-stripe"></div>` +
-            `<div class="day-cal-body">` +
-            `<div class="day-cal-zone">${escapeHtml(r.zone_name)}</div>` +
-            `<div class="day-cal-meta">${escapeHtml(r.schedule_name)} · ${r.duration_minutes}m</div>` +
-            `</div>` +
-            `<div class="day-cal-side">${status}</div>` +
+            `<div class="${cls}" style="top:${top}px;height:${height}px" data-action="open-schedule-edit" data-schedule-id="${escapeAttr(r.schedule_id)}" title="${escapeAttr(title)}">` +
+            `<div class="day-cal-pill-time">${fmtTime(r.start_minutes)}</div>` +
+            `<div class="day-cal-pill-zone">${escapeHtml(r.zone_name)}</div>` +
+            `<div class="day-cal-pill-meta">${escapeHtml(r.schedule_name)} · ${r.duration_minutes}m${status}</div>` +
             `</div>`
           );
         })
         .join("");
 
+      // Red "now" line when viewing today
+      const nowMarker = isToday
+        ? `<div class="day-cal-now" style="top:${nowMin}px" title="Now: ${fmtTime(nowMin)}"></div>`
+        : "";
+
+      const emptyHint =
+        runs.length === 0
+          ? `<div class="day-cal-empty-hint">No runs scheduled for this day.</div>`
+          : "";
+
       return (
         `<section class="day-cal">` +
         navBar +
-        `<div class="day-cal-rows">${rows}</div>` +
+        `<div class="day-cal-grid">` +
+        `<div class="day-cal-hours">${hours}</div>` +
+        `<div class="day-cal-pills">${nowMarker}${pills}${emptyHint}</div>` +
+        `</div>` +
         `</section>`
       );
     }
@@ -2551,7 +2555,7 @@
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Sensors</h2>` +
-          `<span class="version-pill">v1.13.2</span></header>` +
+          `<span class="version-pill">v1.13.3</span></header>` +
           `<div class="empty"><p>No zones configured.</p></div>`
         );
       }
@@ -2560,7 +2564,7 @@
         .join("");
       return (
         `<header class="page-header"><h2>Sensors</h2>` +
-        `<span class="version-pill">v1.13.2</span></header>` +
+        `<span class="version-pill">v1.13.3</span></header>` +
         `<p class="section-hint">Bind soil-moisture sensors to a zone so runtimes auto-adjust based on actual moisture. You can attach one sensor or several (combined as average, lowest, highest, or just the primary).</p>` +
         `<div class="sensor-zone-list">${cards}</div>`
       );
@@ -2977,7 +2981,7 @@
 
       return (
         `<header class="page-header"><h2>Weather</h2>` +
-        `<span class="version-pill">v1.13.2</span></header>` +
+        `<span class="version-pill">v1.13.3</span></header>` +
         lockoutHtml +
         forecastHtml +
         `<form class="weather-form" data-form="weather">` +
@@ -3511,24 +3515,26 @@
         `.day-cal-nav{display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap}` +
         `.day-cal-label{flex:1;font-weight:600;font-size:15px;color:var(--ci-text)}` +
         `.day-cal-count{font-weight:400;font-size:13px;color:var(--ci-text-2);margin-left:6px}` +
-        `.day-cal-rows{display:flex;flex-direction:column;gap:4px;background:var(--ci-card);border:1px solid var(--ci-border);border-radius:12px;padding:6px}` +
-        `.day-cal-row{display:grid;grid-template-columns:80px 4px 1fr auto;gap:10px;align-items:center;padding:10px 12px;border-radius:8px;cursor:pointer;transition:background 0.1s}` +
-        `.day-cal-row:hover{background:var(--ci-hover)}` +
-        `.day-cal-row.past{opacity:0.55}` +
-        `.day-cal-row.live{background:rgba(67,160,71,0.12);border-left:3px solid #43a047;padding-left:9px}` +
-        `.day-cal-time{display:flex;flex-direction:column;font-variant-numeric:tabular-nums}` +
-        `.day-cal-start{font-weight:700;font-size:13px;color:var(--ci-accent)}` +
-        `.day-cal-end{font-size:11px;color:var(--ci-text-2);margin-top:1px}` +
-        `.day-cal-stripe{height:32px;background:var(--ci-accent);border-radius:2px;opacity:0.7}` +
-        `.day-cal-row.past .day-cal-stripe{background:var(--ci-text-2)}` +
-        `.day-cal-body{min-width:0}` +
-        `.day-cal-zone{font-weight:600;font-size:14px;color:var(--ci-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}` +
-        `.day-cal-meta{font-size:11px;color:var(--ci-text-2);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}` +
-        `.day-cal-side{font-size:11px;text-align:right}` +
-        `.day-cal-status{display:inline-block;padding:2px 8px;border-radius:999px;font-weight:600;font-size:10px;letter-spacing:0.3px;text-transform:uppercase}` +
-        `.day-cal-status.past{background:rgba(0,0,0,0.06);color:var(--ci-text-2)}` +
-        `.day-cal-status.live{background:#43a047;color:#fff}` +
-        `.day-cal-status.soon{background:rgba(3,169,244,0.15);color:var(--ci-accent)}` +
+        // 24-hour time grid. 1 minute = 1px; full day = 1440px. Scrollable
+        // viewport caps at ~600px so the section doesn't dominate the page.
+        `.day-cal-grid{position:relative;height:600px;overflow-y:auto;background:var(--ci-card);border:1px solid var(--ci-border);border-radius:12px}` +
+        `.day-cal-hours{position:relative;width:100%;height:1440px}` +
+        // Solid line at top of each hour.
+        `.day-cal-hour{position:absolute;left:0;right:0;height:60px;border-top:1px solid var(--ci-border)}` +
+        // Half-hour mark — 50% opacity line at the 30-minute point.
+        `.day-cal-hour::after{content:"";position:absolute;left:0;right:0;top:30px;border-top:1px solid var(--ci-border);opacity:0.5}` +
+        `.day-cal-hour-label{position:absolute;left:6px;top:2px;font-size:10px;color:var(--ci-text-2);font-variant-numeric:tabular-nums}` +
+        `.day-cal-pills{position:absolute;top:0;left:60px;right:8px;height:1440px;pointer-events:none}` +
+        `.day-cal-pill{position:absolute;left:0;right:0;background:var(--ci-accent);color:#fff;border-radius:6px;padding:3px 8px;font-size:11px;line-height:1.15;overflow:hidden;cursor:pointer;pointer-events:auto;box-shadow:0 1px 2px rgba(0,0,0,0.15);box-sizing:border-box}` +
+        `.day-cal-pill:hover{filter:brightness(1.1)}` +
+        `.day-cal-pill.past{opacity:0.55;background:var(--ci-text-2)}` +
+        `.day-cal-pill.live{background:#43a047;box-shadow:0 0 0 3px rgba(67,160,71,0.35)}` +
+        `.day-cal-pill-time{font-weight:700;font-size:10px;opacity:0.95}` +
+        `.day-cal-pill-zone{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}` +
+        `.day-cal-pill-meta{font-size:10px;opacity:0.9;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}` +
+        // Red "now" line — only shown on today.
+        `.day-cal-now{position:absolute;left:0;right:0;border-top:2px solid #db4437;z-index:2;pointer-events:none}` +
+        `.day-cal-empty-hint{position:absolute;top:24px;left:60px;right:8px;text-align:center;color:var(--ci-text-2);font-size:13px}` +
         // Timeline pills are now clickable too (kept for retro-compat)
         `.timeline-pill{cursor:pointer}` +
         `.timeline-track{position:relative;padding-top:18px;padding-bottom:46px;background:var(--ci-card);border:1px solid var(--ci-border);border-radius:12px;padding-left:8px;padding-right:8px}` +
@@ -3737,5 +3743,5 @@
   }
 
   customElements.define(ELEMENT_NAME, CompleteIrrigationPanel);
-  console.info("[complete-irrigation] panel registered, version v1.13.2");
+  console.info("[complete-irrigation] panel registered, version v1.13.3");
 })();
