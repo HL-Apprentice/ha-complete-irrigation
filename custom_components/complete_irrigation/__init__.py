@@ -27,17 +27,22 @@ PANEL_STATIC_URL = "/complete_irrigation_panel"
 PANEL_JS_FILENAME = "complete-irrigation-panel.js"
 
 
-def _panel_version() -> str:
-    """Read the integration version from manifest.json for cache-busting.
+async def _async_panel_version(hass: HomeAssistant) -> str:
+    """Return the integration version for cache-busting the panel JS URL.
 
-    Falls back to a literal string if the manifest can't be read so the
-    panel still loads — worst case, just no cache-bust.
+    v1.16.1 — was synchronously reading manifest.json on the event loop,
+    which HA 2025+ flags as a blocking call. Now pulls from the
+    already-loaded `Integration` object HA holds in its loader cache, so
+    there's no file I/O at all.
+
+    Falls back to "0" if the integration object isn't available so the
+    panel still loads (worst case: no cache-bust).
     """
-    import json
-
     try:
-        manifest = Path(__file__).parent / "manifest.json"
-        return json.loads(manifest.read_text()).get("version", "0")
+        from homeassistant.loader import async_get_integration
+
+        integration = await async_get_integration(hass, DOMAIN)
+        return integration.version or "0"
     except Exception:
         return "0"
 
@@ -172,6 +177,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Sidebar panel — also idempotent.
     if not shared.panel_registered:
+        panel_version = await _async_panel_version(hass)
         async_register_built_in_panel(
             hass,
             component_name="custom",
@@ -188,7 +194,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     # Append the integration version so each release gets a
                     # unique URL — browsers will fetch the new file instead
                     # of serving the stale cached one.
-                    "js_url": f"{PANEL_STATIC_URL}/{PANEL_JS_FILENAME}?v={_panel_version()}",
+                    "js_url": f"{PANEL_STATIC_URL}/{PANEL_JS_FILENAME}?v={panel_version}",
                 },
                 "zones": entry.data.get("zones", []),
                 "controller_domain": entry.data.get("controller_domain"),
