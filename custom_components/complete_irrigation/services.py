@@ -31,6 +31,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import DEFAULT_MANUAL_RUN_MINUTES, DOMAIN, MAX_MANUAL_RUN_MINUTES
 from .manual_run import ManualRun, validate_run_duration
+from .run_history import SOURCE_MANUAL, SOURCE_SCHEDULED
 from .schedule import Schedule, ZoneStep
 
 if TYPE_CHECKING:
@@ -40,6 +41,7 @@ _LOGGER = logging.getLogger(__name__)
 
 SERVICE_RUN_ZONE = "run_zone"
 SERVICE_STOP_ZONE = "stop_zone"
+SERVICE_CLEAR_RUN_HISTORY = "clear_run_history"
 SERVICE_ADD_SCHEDULE = "add_schedule"
 SERVICE_UPDATE_SCHEDULE = "update_schedule"
 SERVICE_DELETE_SCHEDULE = "delete_schedule"
@@ -339,6 +341,11 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         )
         entry_data["manual_runs"].start(run)
 
+        # Pop any pending metadata stashed by the coordinator (scheduled
+        # run) — if present, this is a scheduled call; otherwise manual.
+        meta = entry_data.get("pending_run_meta", {}).pop(entity_id, None)
+        source = SOURCE_SCHEDULED if meta else SOURCE_MANUAL
+
         try:
             await hass.services.async_call(
                 "switch",
@@ -363,6 +370,25 @@ async def _async_register_services(hass: HomeAssistant) -> None:
                 )
             return
 
+        # ── Run history: record the start ──
+        # `requested_minutes` for scheduled runs uses the ORIGINAL planned
+        # duration (before boost), so the actual_minutes vs requested
+        # comparison reflects gate adjustments. Manual runs just use the
+        # service call's minutes.
+        if coord is not None:
+            zone_name_attr = (state.attributes.get("friendly_name") if state else None) or entity_id
+            coord.run_history.start_run(
+                zone_entity_id=entity_id,
+                zone_name=(meta or {}).get("zone_name") or zone_name_attr,
+                requested_minutes=(meta or {}).get("requested_minutes", minutes),
+                source=source,
+                started_at=now,
+                schedule_id=(meta or {}).get("schedule_id"),
+                schedule_name=(meta or {}).get("schedule_name", ""),
+                triggers=(meta or {}).get("triggers") or {},
+            )
+            hass.async_create_task(coord.async_save_run_history())
+
         # ── auto-stop timer ──
         async def _auto_stop(_now=None):
             run_now = entry_data["manual_runs"].get(entity_id)
@@ -376,6 +402,10 @@ async def _async_register_services(hass: HomeAssistant) -> None:
                 blocking=False,
             )
             _cancel_handles(entry_data, entity_id)
+            # Run history: timer expired → completed
+            if coord is not None:
+                coord.run_history.complete_run(entity_id, ended_at=dt_util.utcnow())
+                await coord.async_save_run_history()
             _LOGGER.info("Manual run for %s expired and was stopped", entity_id)
 
         cancel_timer = async_call_later(hass, minutes * 60, _auto_stop)
@@ -392,6 +422,14 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             if entry_data["manual_runs"].get(entity_id):
                 entry_data["manual_runs"].stop(entity_id)
                 _cancel_handles(entry_data, entity_id)
+                # External off — treat as abort with a generic reason.
+                if coord is not None:
+                    coord.run_history.abort_run(
+                        entity_id,
+                        ended_at=dt_util.utcnow(),
+                        reason="switch turned off externally",
+                    )
+                    hass.async_create_task(coord.async_save_run_history())
                 _LOGGER.info(
                     "Manual run for %s ended externally — cancelled auto-stop",
                     entity_id,
@@ -431,6 +469,15 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             {"entity_id": entity_id},
             blocking=False,
         )
+        # Run history: explicit Stop button → abort with reason.
+        coord = entry_data.get("coordinator")
+        if coord is not None:
+            coord.run_history.abort_run(
+                entity_id,
+                ended_at=dt_util.utcnow(),
+                reason="user pressed Stop",
+            )
+            await coord.async_save_run_history()
         _LOGGER.info("Stopped manual run for %s by request", entity_id)
 
     # ── Schedule CRUD ──────────────────────────────────────────────
@@ -774,12 +821,28 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         schema=_START_ESTABLISHMENT_SCHEMA,
     )
 
+    async def handle_clear_run_history(_call: ServiceCall) -> None:
+        coord = _find_coordinator(hass)
+        if coord is None:
+            return
+        removed = coord.run_history.clear()
+        await coord.async_save_run_history()
+        _LOGGER.info("Cleared %d run-history record(s)", removed)
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_CLEAR_RUN_HISTORY,
+        handle_clear_run_history,
+        schema=vol.Schema({}),
+    )
+
 
 def _async_unregister_services(hass: HomeAssistant) -> None:
     """Tear down services. Called when the last config entry unloads."""
     for svc in (
         SERVICE_RUN_ZONE,
         SERVICE_STOP_ZONE,
+        SERVICE_CLEAR_RUN_HISTORY,
         SERVICE_ADD_SCHEDULE,
         SERVICE_UPDATE_SCHEDULE,
         SERVICE_DELETE_SCHEDULE,

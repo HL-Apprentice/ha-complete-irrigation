@@ -30,6 +30,10 @@ from .notifications import (
     CATEGORY_IMPORTANT,
     NotificationDispatcher,
 )
+from .run_history import (
+    DEFAULT_RETENTION_DAYS,
+    RunHistoryStore,
+)
 from .run_planner import due_runs_since, next_runs
 from .schedule import ScheduleStore
 from .weather_gate import evaluate_hot_weather, evaluate_rain_lockout, evaluate_wind_defer
@@ -233,6 +237,25 @@ async def _async_save_config(hass: HomeAssistant, entry_id: str, config: dict[st
     await helper.async_save(config)
 
 
+async def _async_load_run_history(hass: HomeAssistant, entry_id: str) -> RunHistoryStore:
+    from homeassistant.helpers.storage import Store
+
+    helper = Store(hass, STORAGE_VERSION, _storage_key(entry_id, "run_history"))
+    data = await helper.async_load()
+    if not data:
+        return RunHistoryStore()
+    return RunHistoryStore.from_serializable(data.get("records", []))
+
+
+async def _async_save_run_history(
+    hass: HomeAssistant, entry_id: str, store: RunHistoryStore
+) -> None:
+    from homeassistant.helpers.storage import Store
+
+    helper = Store(hass, STORAGE_VERSION, _storage_key(entry_id, "run_history"))
+    await helper.async_save({"records": store.to_serializable()})
+
+
 class ScheduleCoordinator:
     """Per-entry orchestrator for persisted schedules + per-tick firing."""
 
@@ -261,6 +284,9 @@ class ScheduleCoordinator:
         # End-of-establishment tracking (PRD #76): schedule ids we've
         # already prompted about, so the prompt doesn't fire daily.
         self._establishment_prompted: set[str] = set()
+        # Run history (v1.14): every completed / skipped / aborted run.
+        # Loaded in async_setup, pruned at load + on each tick boundary.
+        self._run_history: RunHistoryStore = RunHistoryStore()
 
     @property
     def schedule_store(self) -> ScheduleStore:
@@ -269,6 +295,10 @@ class ScheduleCoordinator:
     @property
     def config(self) -> dict[str, Any]:
         return self._config
+
+    @property
+    def run_history(self) -> RunHistoryStore:
+        return self._run_history
 
     def register_lockout_listener(self, callback: Callable[[], None]) -> None:
         self._lockout_listeners.append(callback)
@@ -297,6 +327,13 @@ class ScheduleCoordinator:
         self._store = await _async_load_schedules(self._hass, self._entry_id)
         self._config = await _async_load_config(self._hass, self._entry_id)
         self._config.setdefault("zones", {})
+        self._run_history = await _async_load_run_history(self._hass, self._entry_id)
+        # Prune on load — drops anything past the 90-day window so the
+        # store file shrinks over time even if the user rarely opens
+        # the History tab.
+        removed = self._run_history.prune(now=dt_util.now(), retention_days=DEFAULT_RETENTION_DAYS)
+        if removed:
+            await _async_save_run_history(self._hass, self._entry_id, self._run_history)
 
         # Notifications
         self.notifier = NotificationDispatcher(self._hass)
@@ -536,6 +573,9 @@ class ScheduleCoordinator:
     async def async_save_config(self) -> None:
         await _async_save_config(self._hass, self._entry_id, self._config)
 
+    async def async_save_run_history(self) -> None:
+        await _async_save_run_history(self._hass, self._entry_id, self._run_history)
+
     def clear_lockout(self) -> None:
         if self.lockout_until is not None:
             self.lockout_until = None
@@ -591,12 +631,23 @@ class ScheduleCoordinator:
             await self._fire_run(run)
 
     async def _fire_run(self, run) -> None:
-        """Evaluate moisture + hot-weather modifiers for `run`, then fire it."""
+        """Evaluate moisture + hot-weather modifiers for `run`, then fire it.
+
+        Builds a `triggers` snapshot dict along the way so the run history
+        can show what gates were evaluated and how they decided. If any
+        gate decides to skip, records a SKIPPED entry directly to history
+        (the service path is not taken). Otherwise stashes the metadata
+        in entry_data so the service handler can include it on the start
+        record.
+        """
+        from homeassistant.util import dt as dt_util
+
         zone_id = run.zone_entity_id
         zone_cfg = self._config["zones"].get(zone_id, {})
         adjusted_minutes = run.duration_minutes
         skip_reasons: list[str] = []
         boost_reasons: list[str] = []
+        triggers: dict[str, Any] = {}
 
         # ── Moisture (if sensor configured for this zone) ──
         moisture_entities = zone_cfg.get("moisture_entities") or []
@@ -612,6 +663,16 @@ class ScheduleCoordinator:
                     continue
             combine_mode = zone_cfg.get("combine_mode", COMBINE_AVERAGE)
             current = combine_moisture(readings, combine_mode)
+            triggers["moisture"] = {
+                "entities": list(moisture_entities),
+                "readings": readings,
+                "combined_pct": current,
+                "combine_mode": combine_mode,
+                "min_pct": float(zone_cfg.get("min_pct", 21)),
+                "target_pct": float(zone_cfg.get("target_pct", 31)),
+                "max_pct": float(zone_cfg.get("max_pct", 40)),
+                "decision": "no_reading" if current is None else "ok",
+            }
             if current is not None:
                 decision = evaluate_moisture(
                     current=current,
@@ -622,9 +683,12 @@ class ScheduleCoordinator:
                 )
                 _LOGGER.info("Moisture decision for %s: %s", zone_id, decision.reason)
                 if decision.skip:
+                    triggers["moisture"]["decision"] = "skip"
                     skip_reasons.append(decision.reason)
                 else:
                     adjusted_minutes = decision.runtime_minutes
+                    triggers["moisture"]["decision"] = "ok"
+                    triggers["moisture"]["adjusted_minutes"] = decision.runtime_minutes
 
         # ── Wind defer (PRD #52) ──
         # Conservative: skip the run if current wind speed meets/exceeds
@@ -633,7 +697,13 @@ class ScheduleCoordinator:
             wind_threshold = self._config.get("wind_defer_mph", 0)
             if wind_threshold and float(wind_threshold) > 0:
                 wind = self._read_current_wind_mph()
-                if evaluate_wind_defer(wind, float(wind_threshold)):
+                deferred = evaluate_wind_defer(wind, float(wind_threshold))
+                triggers["wind"] = {
+                    "mph": wind,
+                    "threshold_mph": float(wind_threshold),
+                    "deferred": deferred,
+                }
+                if deferred:
                     skip_reasons.append(f"wind defer (current {wind} mph >= {wind_threshold} mph)")
 
         # ── Hot weather boost (single, integration-wide for now) ──
@@ -647,6 +717,13 @@ class ScheduleCoordinator:
                     threshold_f=float(threshold),
                     boost_percent=int(boost_pct),
                 )
+                triggers["hot_weather"] = {
+                    "forecast_high_f": forecast_high,
+                    "threshold_f": float(threshold),
+                    "boost_percent": int(boost_pct),
+                    "applied_multiplier": hw.multiplier,
+                    "boost_applied": bool(hw.boost),
+                }
                 if hw.boost:
                     adjusted_minutes = max(1, round(adjusted_minutes * hw.multiplier))
                     boost_reasons.append(
@@ -654,16 +731,44 @@ class ScheduleCoordinator:
                         f" x{hw.multiplier:.2f}"
                     )
 
+        # Resolve a friendly zone name (state attribute → entity_id fallback).
+        zone_state = self._hass.states.get(zone_id)
+        zone_name = (zone_state.attributes.get("friendly_name") if zone_state else None) or zone_id
+
         if skip_reasons:
             _LOGGER.info(
                 "Skipped scheduled run for %s: %s",
                 zone_id,
                 "; ".join(skip_reasons),
             )
+            self._run_history.record_skipped(
+                zone_entity_id=zone_id,
+                zone_name=zone_name,
+                requested_minutes=run.duration_minutes,
+                schedule_id=run.schedule_id,
+                schedule_name=run.schedule_name,
+                fired_at=dt_util.now(),
+                reason="; ".join(skip_reasons),
+                triggers=triggers,
+            )
+            await self.async_save_run_history()
             return
 
         for r in boost_reasons:
             _LOGGER.info("Adjusted run for %s: %s", zone_id, r)
+
+        # Stash metadata for the service handler to pick up — lets the
+        # history record include schedule/trigger info even though the
+        # service-call signature itself can't carry extras.
+        entry_data = self._hass.data.get(DOMAIN, {}).get(self._entry_id)
+        if entry_data is not None:
+            entry_data.setdefault("pending_run_meta", {})[zone_id] = {
+                "schedule_id": run.schedule_id,
+                "schedule_name": run.schedule_name,
+                "requested_minutes": run.duration_minutes,
+                "triggers": triggers,
+                "zone_name": zone_name,
+            }
 
         _LOGGER.info(
             "Firing run: %s for %d min (schedule %s)",
@@ -680,6 +785,10 @@ class ScheduleCoordinator:
             )
         except Exception:
             _LOGGER.exception("Failed to fire scheduled run for %s", zone_id)
+            # Clean up the stash so a later manual run doesn't accidentally
+            # inherit the scheduled metadata.
+            if entry_data is not None:
+                entry_data.get("pending_run_meta", {}).pop(zone_id, None)
 
     # ── Rain lockout ──────────────────────────────────────────────
 
