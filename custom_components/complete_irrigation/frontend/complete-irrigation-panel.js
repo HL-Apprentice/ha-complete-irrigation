@@ -97,6 +97,10 @@
       interval_days: 5,
       interval_hours: 6,
       interval_anchor: _todayIso(),
+      // Active period (v1.12). Empty strings mean "no bound".
+      start_date: "",
+      end_date: "",
+      repeat_annually: false,
       // Multi-zone: additional zones after the primary. Each is
       // {zone_entity_id, duration_minutes}. Empty = single-zone schedule.
       // The primary (top-level zone_entity_id + duration_minutes) is
@@ -457,6 +461,8 @@
         this._scheduleEditor.weekdays = Array.from(set).sort((a, b) => a - b);
       } else if (t.name === "enabled") {
         this._scheduleEditor.enabled = t.checked;
+      } else if (t.name === "repeat_annually") {
+        this._scheduleEditor.repeat_annually = t.checked;
       } else if (t.name === "mode") {
         // Mode toggle flips which fields show — re-render the modal.
         this._scheduleEditor.mode = t.value;
@@ -622,6 +628,9 @@
         mode: found.mode || "weekdays",
         interval_days: found.interval_days || 5,
         interval_hours: found.interval_hours || 6,
+        start_date: found.start_date || "",
+        end_date: found.end_date || "",
+        repeat_annually: !!found.repeat_annually,
         interval_anchor: found.interval_anchor || _todayIso(),
         extra_steps: extra.map((s) => ({
           zone_entity_id: s.zone_entity_id,
@@ -853,7 +862,7 @@
         }
         this._scheduleRender();
       } catch (err) {
-        // Pre-v1.11.0 backends don't have this command — no-op, fall
+        // Pre-v1.12.0 backends don't have this command — no-op, fall
         // back to the local-only countdown behavior.
         console.warn("[complete-irrigation] get_active_runs not available:", err);
       }
@@ -917,6 +926,24 @@
         if (!e.interval_anchor) return alert("Pick a first-run date.");
       }
 
+      // Validate annual-repeat preconditions client-side for a friendlier
+      // error than the server-side voluptuous failure.
+      if (e.repeat_annually && (!e.start_date || !e.end_date)) {
+        return alert(
+          "Repeat every year needs both a Start date and an End date."
+        );
+      }
+      if (
+        e.repeat_annually &&
+        e.start_date &&
+        e.end_date &&
+        e.start_date.slice(5) > e.end_date.slice(5)
+      ) {
+        return alert(
+          "For yearly repeat, Start date's month/day must be on or before End date's month/day."
+        );
+      }
+
       const payload = {
         name: e.name.trim(),
         zone_entity_id: e.zone_entity_id,
@@ -924,6 +951,10 @@
         duration_minutes: minutes,
         enabled: e.enabled,
         mode,
+        // Active period. Empty string → null (no bound).
+        start_date: e.start_date || null,
+        end_date: e.end_date || null,
+        repeat_annually: !!e.repeat_annually,
       };
       if (mode === "weekdays") {
         payload.weekdays = e.weekdays;
@@ -1166,7 +1197,7 @@
 
       return (
         `<header class="page-header"><h2>Notifications</h2>` +
-        `<span class="version-pill">v1.11.0</span></header>` +
+        `<span class="version-pill">v1.12.0</span></header>` +
         `<form class="weather-form" data-form="notifications">` +
         `<label class="enabled-check"><input type="checkbox" name="enabled"${
           enabled ? " checked" : ""
@@ -1265,7 +1296,7 @@
 
       return (
         `<header class="page-header"><h2>Settings</h2>` +
-        `<span class="version-pill">v1.11.0</span></header>` +
+        `<span class="version-pill">v1.12.0</span></header>` +
         `<section class="settings-card">` +
         `<h3 class="section-title">Theme ${tip("Cycle Light/Dark/Auto with the ☀️/🌙 button on Today, or pick one of your HA-installed themes below.")}</h3>` +
         `<p class="section-hint">Light/Dark/Auto: <strong>${escapeHtml(themeLabel)}</strong>.</p>` +
@@ -1334,7 +1365,7 @@
         `<section class="settings-card">` +
         `<h3 class="section-title">About</h3>` +
         `<table class="settings-table">` +
-        `<tr><td>Version</td><td><strong>v1.11.0</strong></td></tr>` +
+        `<tr><td>Version</td><td><strong>v1.12.0</strong></td></tr>` +
         `<tr><td>Repository</td><td><a href="${repoUrl}" target="_blank">${escapeHtml(repoUrl)}</a></td></tr>` +
         `<tr><td>Zones configured</td><td>${(this._panel?.config?.zones || []).length}</td></tr>` +
         `<tr><td>Schedules</td><td>${(this._schedules || []).length}</td></tr>` +
@@ -1463,7 +1494,7 @@
       return (
         `<header class="page-header"><h2>Today</h2>` +
         `<div class="page-header-right">${themeBtn}` +
-        `<span class="version-pill">v1.11.0</span></div></header>` +
+        `<span class="version-pill">v1.12.0</span></div></header>` +
         this._renderRainLockoutBanner() +
         this._renderWeatherBanner() +
         `<section>` +
@@ -1976,7 +2007,7 @@
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Zones</h2>` +
-          `<span class="version-pill">v1.11.0</span></header>` +
+          `<span class="version-pill">v1.12.0</span></header>` +
           `<div class="empty"><p>No zones configured. Add them via Settings → Devices &amp; Services.</p></div>`
         );
       }
@@ -1985,7 +2016,7 @@
         .join("");
       return (
         `<header class="page-header"><h2>Zones</h2>` +
-        `<span class="version-pill">v1.11.0</span></header>` +
+        `<span class="version-pill">v1.12.0</span></header>` +
         `<p class="section-hint">Hidden zones still run on schedule — they're just hidden from the Today view.</p>` +
         `<div class="zones-list">${rows}</div>`
       );
@@ -2328,7 +2359,7 @@
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Sensors</h2>` +
-          `<span class="version-pill">v1.11.0</span></header>` +
+          `<span class="version-pill">v1.12.0</span></header>` +
           `<div class="empty"><p>No zones configured.</p></div>`
         );
       }
@@ -2337,7 +2368,7 @@
         .join("");
       return (
         `<header class="page-header"><h2>Sensors</h2>` +
-        `<span class="version-pill">v1.11.0</span></header>` +
+        `<span class="version-pill">v1.12.0</span></header>` +
         `<p class="section-hint">Bind soil-moisture sensors to a zone so runtimes auto-adjust based on actual moisture. You can attach one sensor or several (combined as average, lowest, highest, or just the primary).</p>` +
         `<div class="sensor-zone-list">${cards}</div>`
       );
@@ -2754,7 +2785,7 @@
 
       return (
         `<header class="page-header"><h2>Weather</h2>` +
-        `<span class="version-pill">v1.11.0</span></header>` +
+        `<span class="version-pill">v1.12.0</span></header>` +
         lockoutHtml +
         forecastHtml +
         `<form class="weather-form" data-form="weather">` +
@@ -2895,6 +2926,14 @@
       } else {
         recurrence = (s.weekdays || []).map((d) => WEEKDAY_LABELS[d] || "?").join(" ") || "—";
       }
+      // Active-period chip
+      let periodLabel = "";
+      if (s.start_date || s.end_date) {
+        const sd = s.start_date || "—";
+        const ed = s.end_date || "never";
+        const tag = s.repeat_annually ? " (yearly)" : "";
+        periodLabel = ` · 📅 ${sd} → ${ed}${tag}`;
+      }
       // Multi-zone: show "Front Lawn + 2 more" if extra steps exist
       const extraCount =
         Array.isArray(s.zone_steps) && s.zone_steps.length > 1
@@ -2917,7 +2956,7 @@
           s.enabled ? "" : " (disabled)"
         }</div>` +
         `<div class="schedule-meta">` +
-        `${escapeHtml(zoneName)} · ${s.start_time} · ${durLabel} · ${escapeHtml(recurrence)}` +
+        `${escapeHtml(zoneName)} · ${s.start_time} · ${durLabel} · ${escapeHtml(recurrence)}${escapeHtml(periodLabel)}` +
         `</div>` +
         `</div>` +
         `<div class="schedule-row-actions">` +
@@ -3079,6 +3118,21 @@
         } /> Every N hours</label>` +
         `</div>` +
         modeFields +
+        // Active period (v1.12): optional start/end dates + annual repeat.
+        `<label>Active period ${tip("Optional. Pick when the schedule should be active. Leave blank to start now / never end. 'Repeat every year' makes the date range apply seasonally each year.")}</label>` +
+        `<div class="row-2">` +
+        `<div>` +
+        `<label>Start date <small style="color:var(--ci-text-2)">(blank = start now)</small></label>` +
+        `<input name="start_date" type="date" value="${escapeAttr(e.start_date || "")}" />` +
+        `</div>` +
+        `<div>` +
+        `<label>End date <small style="color:var(--ci-text-2)">(blank = never end)</small></label>` +
+        `<input name="end_date" type="date" value="${escapeAttr(e.end_date || "")}" />` +
+        `</div>` +
+        `</div>` +
+        `<label class="enabled-check"><input type="checkbox" name="repeat_annually"${
+          e.repeat_annually ? " checked" : ""
+        } />Repeat every year (same date range each year)</label>` +
         // Multi-zone: additional zones to run back-to-back after the primary.
         `<label>Additional zones (run in order) ${tip("Optional — add more zones to run after the primary one above. They fire back-to-back at run time, each waiting for the previous to finish + 30s valve buffer. Per-zone moisture saturation still skips individual zones.")}</label>` +
         `<div class="extra-steps">` +
@@ -3444,5 +3498,5 @@
   }
 
   customElements.define(ELEMENT_NAME, CompleteIrrigationPanel);
-  console.info("[complete-irrigation] panel registered, version v1.11.0");
+  console.info("[complete-irrigation] panel registered, version v1.12.0");
 })();

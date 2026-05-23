@@ -495,3 +495,106 @@ def test_interval_hours_from_dt_after_anchor_advances_correctly():
     # First cycle ≥ 13:00 with anchor 06:00 + 6h steps is 18:00.
     times = [(r.start_at.hour, r.start_at.minute) for r in runs]
     assert times == [(18, 0)]
+
+
+# ════════════════════════════════════════════════════════════════════
+# Active period filtering in the planner (v1.12)
+# ════════════════════════════════════════════════════════════════════
+
+
+def test_planner_respects_start_date_one_shot():
+    """Schedule with start_date in the future shouldn't fire today."""
+    from datetime import date
+
+    s = _sched(start_date=date(2026, 5, 25))  # week after MONDAY_MIDNIGHT
+    runs = next_runs(
+        [s],
+        from_dt=MONDAY_MIDNIGHT,
+        until_dt=MONDAY_MIDNIGHT + timedelta(days=3),
+    )
+    # All runs in this window are before May 25, should be empty
+    assert runs == []
+
+
+def test_planner_respects_end_date_one_shot():
+    """Schedule with end_date in the past shouldn't fire."""
+    from datetime import date
+
+    s = _sched(end_date=date(2026, 5, 15))  # before MONDAY_MIDNIGHT (May 18)
+    runs = next_runs(
+        [s],
+        from_dt=MONDAY_MIDNIGHT,
+        until_dt=MONDAY_MIDNIGHT + timedelta(days=14),
+    )
+    assert runs == []
+
+
+def test_planner_fires_within_one_shot_window():
+    """Schedule with both bounds fires inside the window."""
+    from datetime import date
+
+    s = _sched(
+        start_date=date(2026, 5, 18),  # MONDAY
+        end_date=date(2026, 5, 22),  # Friday
+    )
+    runs = next_runs(
+        [s],
+        from_dt=MONDAY_MIDNIGHT,
+        until_dt=MONDAY_MIDNIGHT + timedelta(days=10),
+    )
+    # 5 daily runs Mon-Fri only (Sat May 23 + later are after end_date)
+    assert len(runs) == 5
+    days = [r.start_at.day for r in runs]
+    assert days == [18, 19, 20, 21, 22]
+
+
+def test_planner_annual_repeat_fires_each_year():
+    """A March-October window with repeat_annually fires both years
+    when the planner window straddles two springs."""
+    from datetime import date
+
+    s = _sched(
+        weekdays=(0,),  # Monday only
+        start_date=date(2026, 5, 1),
+        end_date=date(2026, 6, 30),
+        repeat_annually=True,
+    )
+    # Window from Mon May 18 2026 → +400 days lands in mid 2027
+    runs = next_runs(
+        [s],
+        from_dt=MONDAY_MIDNIGHT,
+        until_dt=MONDAY_MIDNIGHT + timedelta(days=400),
+    )
+    # 2026 Mondays in May/June: 18, 25 (May); 1, 8, 15, 22, 29 (June) = 7
+    # 2027 Mondays in May/June (5/3, 5/10, ..., 6/28) = 9
+    # Out of window months should be excluded.
+    months = {(r.start_at.year, r.start_at.month) for r in runs}
+    assert months == {(2026, 5), (2026, 6), (2027, 5), (2027, 6)}
+
+
+def test_planner_interval_mode_honors_active_window():
+    """interval-days fires only inside the window."""
+    from datetime import date
+
+    s = Schedule(
+        id="i",
+        name="i",
+        zone_entity_id="switch.x",
+        start_time=time(6, 0),
+        duration_minutes=10,
+        weekdays=(),
+        mode="interval",
+        interval_days=3,
+        interval_anchor=date(2026, 5, 18),
+        start_date=date(2026, 5, 20),
+        end_date=date(2026, 5, 26),
+    )
+    runs = next_runs(
+        [s],
+        from_dt=MONDAY_MIDNIGHT,
+        until_dt=MONDAY_MIDNIGHT + timedelta(days=14),
+    )
+    # Cycle anchor May 18 + 3-day step: 18, 21, 24, 27, 30...
+    # But window is May 20-26, so only 21 and 24 should fire.
+    days = sorted(r.start_at.day for r in runs)
+    assert days == [21, 24]
