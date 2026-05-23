@@ -27,17 +27,11 @@ WS_TYPE_LIST_RUN_HISTORY = f"{DOMAIN}/list_run_history"
 
 
 def _find_coordinator(hass: HomeAssistant):
-    """Mirror of services._find_coordinator — duplicated to avoid an
-    import cycle (services.py imports from here too in the future)."""
-    from . import _SHARED_KEY
+    """Thin re-export so existing call sites keep working; the canonical
+    implementation lives in __init__.py (v1.15 dedupe)."""
+    from . import find_coordinator
 
-    for key, data in hass.data.get(DOMAIN, {}).items():
-        if key == _SHARED_KEY:
-            continue
-        coord = data.get("coordinator")
-        if coord is not None:
-            return coord
-    return None
+    return find_coordinator(hass)
 
 
 @websocket_api.websocket_command({vol.Required("type"): WS_TYPE_LIST_SCHEDULES})
@@ -54,10 +48,15 @@ async def list_schedules(hass, connection, msg):
     )
 
 
+@websocket_api.require_admin
 @websocket_api.websocket_command({vol.Required("type"): WS_TYPE_GET_CONFIG})
 @websocket_api.async_response
 async def get_config(hass, connection, msg):
-    """Return the coordinator's full config (weather + zones)."""
+    """Return the coordinator's full config (weather + zones).
+
+    Admin-only — config exposes notify_targets, all rain/wind/temperature
+    sensor entity_ids, and per-zone moisture settings. Read-only HA
+    users see only what's exposed on their dashboards."""
     coord = _find_coordinator(hass)
     if coord is None:
         connection.send_result(msg["id"], {})
@@ -98,6 +97,7 @@ async def get_active_runs(hass, connection, msg):
     connection.send_result(msg["id"], {"runs": runs})
 
 
+@websocket_api.require_admin
 @websocket_api.websocket_command(
     {
         vol.Required("type"): WS_TYPE_LIST_RUN_HISTORY,
@@ -106,7 +106,7 @@ async def get_active_runs(hass, connection, msg):
 )
 @websocket_api.async_response
 async def list_run_history(hass, connection, msg):
-    """Return run-history records (newest first).
+    """Return run-history records (newest first). Admin-only.
 
     Optional `limit` caps the list size on the WS payload. Default
     returns everything in the store (already pruned to <=1000).
