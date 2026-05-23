@@ -108,6 +108,7 @@ _ADD_SCHEDULE_SCHEMA = vol.Schema(
         vol.Optional("interval_days"): vol.All(vol.Coerce(int), vol.Range(min=1, max=365)),
         vol.Optional("interval_hours"): vol.All(vol.Coerce(int), vol.Range(min=1, max=72)),
         vol.Optional("interval_anchor"): cv.date,
+        vol.Optional("interval_end_time"): vol.Any(None, cv.time),
         # Active period (v1.12). end_date already accepted (no field here —
         # historically Schedule.end_date wasn't a service field; we add it
         # below alongside start_date + repeat_annually).
@@ -138,6 +139,7 @@ _UPDATE_SCHEDULE_SCHEMA = vol.Schema(
         vol.Optional("interval_days"): vol.All(vol.Coerce(int), vol.Range(min=1, max=365)),
         vol.Optional("interval_hours"): vol.All(vol.Coerce(int), vol.Range(min=1, max=72)),
         vol.Optional("interval_anchor"): cv.date,
+        vol.Optional("interval_end_time"): vol.Any(None, cv.time),
         vol.Optional("start_date"): vol.Any(None, cv.date),
         vol.Optional("end_date"): vol.Any(None, cv.date),
         vol.Optional("repeat_annually"): cv.boolean,
@@ -508,6 +510,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             interval_days=data.get("interval_days"),
             interval_hours=data.get("interval_hours"),
             interval_anchor=data.get("interval_anchor"),
+            interval_end_time=data.get("interval_end_time"),
             start_date=data.get("start_date"),
             end_date=data.get("end_date"),
             repeat_annually=data.get("repeat_annually", False),
@@ -554,6 +557,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             interval_days=data.get("interval_days", existing.interval_days),
             interval_hours=data.get("interval_hours", existing.interval_hours),
             interval_anchor=data.get("interval_anchor", existing.interval_anchor),
+            interval_end_time=data.get("interval_end_time", existing.interval_end_time),
             start_date=data.get("start_date", existing.start_date),
             repeat_annually=data.get("repeat_annually", existing.repeat_annually),
             end_date=data.get("end_date", existing.end_date),
@@ -596,6 +600,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             interval_days=existing.interval_days,
             interval_hours=existing.interval_hours,
             interval_anchor=existing.interval_anchor,
+            interval_end_time=existing.interval_end_time,
             zone_steps=existing.zone_steps,
             created_via=existing.created_via,
         )

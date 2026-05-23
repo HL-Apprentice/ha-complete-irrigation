@@ -98,6 +98,9 @@
       interval_days: 5,
       interval_hours: 6,
       interval_anchor: _todayIso(),
+      // Optional daily-window cap for interval_hours mode (v1.14.1).
+      // Empty string = no cap (legacy continuous-across-days behavior).
+      interval_end_time: "",
       // Active period (v1.12). Empty strings mean "no bound".
       start_date: "",
       end_date: "",
@@ -354,6 +357,10 @@
           this._clearRunHistory();
           return;
         }
+        if (action === "clear-interval-end-time") {
+          this._scheduleEditor.interval_end_time = "";
+          return this._renderNow();
+        }
         if (action === "history-toggle-triggers") {
           const id = node.dataset.recordId;
           if (!id) return;
@@ -567,6 +574,8 @@
         this._syncDurationFromForm();
       } else if (t.name === "start_time_h" || t.name === "start_time_m") {
         this._syncStartTimeFromForm();
+      } else if (t.name === "interval_end_time_h" || t.name === "interval_end_time_m") {
+        this._syncIntervalEndTimeFromForm();
       } else if (
         t.name === "extra_zone" ||
         t.name === "extra_dur_h" ||
@@ -589,6 +598,10 @@
       }
       if (t.name === "start_time_h" || t.name === "start_time_m") {
         this._syncStartTimeFromForm();
+        return;
+      }
+      if (t.name === "interval_end_time_h" || t.name === "interval_end_time_m") {
+        this._syncIntervalEndTimeFromForm();
         return;
       }
       if (
@@ -629,6 +642,28 @@
       const h = Number.isFinite(rawH) ? Math.max(0, Math.min(23, rawH)) : 0;
       const m = Number.isFinite(rawM) ? Math.max(0, Math.min(59, rawM)) : 0;
       this._scheduleEditor.start_time =
+        String(h).padStart(2, "0") + ":" + String(m).padStart(2, "0");
+    }
+
+    _syncIntervalEndTimeFromForm() {
+      // Mirror of _syncStartTimeFromForm for the interval_hours daily-
+      // window cap. Empty inputs → empty string (= no cap).
+      const form = this.shadowRoot?.querySelector(".schedule-form");
+      if (!form) return;
+      const hEl = form.querySelector('[name="interval_end_time_h"]');
+      const mEl = form.querySelector('[name="interval_end_time_m"]');
+      if (!hEl || !mEl) return;
+      const hStr = hEl.value.trim();
+      const mStr = mEl.value.trim();
+      if (hStr === "" && mStr === "") {
+        this._scheduleEditor.interval_end_time = "";
+        return;
+      }
+      const rawH = parseInt(hStr, 10);
+      const rawM = parseInt(mStr, 10);
+      const h = Number.isFinite(rawH) ? Math.max(0, Math.min(23, rawH)) : 0;
+      const m = Number.isFinite(rawM) ? Math.max(0, Math.min(59, rawM)) : 0;
+      this._scheduleEditor.interval_end_time =
         String(h).padStart(2, "0") + ":" + String(m).padStart(2, "0");
     }
 
@@ -749,6 +784,7 @@
         end_date: found.end_date || "",
         repeat_annually: !!found.repeat_annually,
         interval_anchor: found.interval_anchor || _todayIso(),
+        interval_end_time: found.interval_end_time || "",
         extra_steps: extra.map((s) => ({
           zone_entity_id: s.zone_entity_id,
           duration_minutes: s.duration_minutes,
@@ -1047,6 +1083,7 @@
       // event fired).
       this._syncDurationFromForm();
       this._syncStartTimeFromForm();
+      this._syncIntervalEndTimeFromForm();
       const e = this._scheduleEditor;
       const minutes = parseInt(e.duration_minutes, 10);
       const mode =
@@ -1074,6 +1111,14 @@
         if (!hrs || hrs < 1 || hrs > 72)
           return alert("Interval must be 1–72 hours.");
         if (!e.interval_anchor) return alert("Pick a first-run date.");
+        // Optional daily-window cap — must be strictly after start_time.
+        if (e.interval_end_time && e.interval_end_time.trim()) {
+          if (e.interval_end_time <= e.start_time) {
+            return alert(
+              `Stop-after time (${e.interval_end_time}) must be later than start time (${e.start_time}).`
+            );
+          }
+        }
       }
 
       // Validate annual-repeat preconditions client-side for a friendlier
@@ -1117,6 +1162,12 @@
         payload.weekdays = [];
         payload.interval_hours = parseInt(e.interval_hours, 10);
         payload.interval_anchor = e.interval_anchor;
+        // Optional daily-window cap. Empty string → omit (legacy mode).
+        if (e.interval_end_time && e.interval_end_time.trim()) {
+          payload.interval_end_time = e.interval_end_time;
+        } else {
+          payload.interval_end_time = null;  // explicit clear on edit
+        }
       }
 
       // Multi-zone: always send zone_steps (full list including primary).
@@ -1348,7 +1399,7 @@
 
       return (
         `<header class="page-header"><h2>Notifications</h2>` +
-        `<span class="version-pill">v1.14.0</span></header>` +
+        `<span class="version-pill">v1.14.1</span></header>` +
         `<form class="weather-form" data-form="notifications">` +
         `<label class="enabled-check"><input type="checkbox" name="enabled"${
           enabled ? " checked" : ""
@@ -1447,7 +1498,7 @@
 
       return (
         `<header class="page-header"><h2>Settings</h2>` +
-        `<span class="version-pill">v1.14.0</span></header>` +
+        `<span class="version-pill">v1.14.1</span></header>` +
         `<section class="settings-card">` +
         `<h3 class="section-title">Theme ${tip("Cycle Light/Dark/Auto with the ☀️/🌙 button on Today, or pick one of your HA-installed themes below.")}</h3>` +
         `<p class="section-hint">Light/Dark/Auto: <strong>${escapeHtml(themeLabel)}</strong>.</p>` +
@@ -1516,7 +1567,7 @@
         `<section class="settings-card">` +
         `<h3 class="section-title">About</h3>` +
         `<table class="settings-table">` +
-        `<tr><td>Version</td><td><strong>v1.14.0</strong></td></tr>` +
+        `<tr><td>Version</td><td><strong>v1.14.1</strong></td></tr>` +
         `<tr><td>Repository</td><td><a href="${repoUrl}" target="_blank">${escapeHtml(repoUrl)}</a></td></tr>` +
         `<tr><td>Zones configured</td><td>${(this._panel?.config?.zones || []).length}</td></tr>` +
         `<tr><td>Schedules</td><td>${(this._schedules || []).length}</td></tr>` +
@@ -1645,7 +1696,7 @@
       return (
         `<header class="page-header"><h2>Today</h2>` +
         `<div class="page-header-right">${themeBtn}` +
-        `<span class="version-pill">v1.14.0</span></div></header>` +
+        `<span class="version-pill">v1.14.1</span></div></header>` +
         this._renderRainLockoutBanner() +
         this._renderWeatherBanner() +
         `<section>` +
@@ -2158,7 +2209,7 @@
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Zones</h2>` +
-          `<span class="version-pill">v1.14.0</span></header>` +
+          `<span class="version-pill">v1.14.1</span></header>` +
           `<div class="empty"><p>No zones configured. Add them via Settings → Devices &amp; Services.</p></div>`
         );
       }
@@ -2167,7 +2218,7 @@
         .join("");
       return (
         `<header class="page-header"><h2>Zones</h2>` +
-        `<span class="version-pill">v1.14.0</span></header>` +
+        `<span class="version-pill">v1.14.1</span></header>` +
         `<p class="section-hint">Hidden zones still run on schedule — they're just hidden from the Today view.</p>` +
         `<div class="zones-list">${rows}</div>`
       );
@@ -2347,9 +2398,12 @@
           // The Today timeline shows every individual hourly cycle; the
           // 7-day strip just needs one marker to indicate "yes, fires
           // today" — we use the start_time for ordering.
+          const windowSuffix = s.interval_end_time
+            ? ` ${s.start_time}–${s.interval_end_time}`
+            : "";
           result.push({
             start_time: s.start_time,
-            name: `${s.name} (every ${s.interval_hours}h)`,
+            name: `${s.name} (every ${s.interval_hours}h${windowSuffix})`,
           });
         } else {
           // weekdays mode — convert JS Sun=0 to ISO Mon=0
@@ -2428,22 +2482,37 @@
           if (diffDays < 0 || diffDays % s.interval_days !== 0) continue;
           pushFiring(s, hh * 60 + mm);
         } else if (s.mode === "interval_hours") {
-          // PRD: every N hours from anchor + start_time, cycling across days.
+          // every N hours from anchor + start_time.
           if (!s.interval_anchor || !s.interval_hours) continue;
           const anchorDt = new Date(s.interval_anchor + "T00:00:00");
           anchorDt.setHours(hh, mm, 0, 0);
           if (Number.isNaN(anchorDt.getTime())) continue;
-          const stepMs = s.interval_hours * 3600000;
-          // Walk forward from the anchor until we land in [today, todayEnd).
-          let cursor = anchorDt.getTime();
-          if (cursor < today.getTime()) {
-            const skip = Math.ceil((today.getTime() - cursor) / stepMs);
-            cursor += skip * stepMs;
-          }
-          while (cursor < todayEnd.getTime()) {
-            const dt = new Date(cursor);
-            pushFiring(s, dt.getHours() * 60 + dt.getMinutes());
-            cursor += stepMs;
+          // v1.14.1: with interval_end_time set, the schedule fires every
+          // N hours from start_time EACH DAY, capped at end_time. Without
+          // it, the legacy continuous-across-days behavior applies.
+          if (s.interval_end_time) {
+            const anchorOnly = new Date(s.interval_anchor + "T00:00:00");
+            if (today < anchorOnly) continue;
+            const [endH, endM] = parseHHMM(s.interval_end_time);
+            const startMin = hh * 60 + mm;
+            const endMin = endH * 60 + endM;
+            const stepMin = s.interval_hours * 60;
+            for (let m = startMin; m <= endMin; m += stepMin) {
+              pushFiring(s, m);
+            }
+          } else {
+            const stepMs = s.interval_hours * 3600000;
+            // Walk forward from the anchor until we land in [today, todayEnd).
+            let cursor = anchorDt.getTime();
+            if (cursor < today.getTime()) {
+              const skip = Math.ceil((today.getTime() - cursor) / stepMs);
+              cursor += skip * stepMs;
+            }
+            while (cursor < todayEnd.getTime()) {
+              const dt = new Date(cursor);
+              pushFiring(s, dt.getHours() * 60 + dt.getMinutes());
+              cursor += stepMs;
+            }
           }
         } else {
           // weekdays
@@ -2767,7 +2836,7 @@
 
       return (
         `<header class="page-header"><h2>Run history</h2>` +
-        `<span class="version-pill">v1.14.0</span></header>` +
+        `<span class="version-pill">v1.14.1</span></header>` +
         `<div class="history-toolbar">` +
         `<label>Zone <select data-action="history-filter-zone"><option value="">All zones</option>${zoneOptions}</select></label>` +
         `<label>Schedule <select data-action="history-filter-schedule"><option value="">All schedules</option>${scheduleOptions}</select></label>` +
@@ -2815,7 +2884,7 @@
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Sensors</h2>` +
-          `<span class="version-pill">v1.14.0</span></header>` +
+          `<span class="version-pill">v1.14.1</span></header>` +
           `<div class="empty"><p>No zones configured.</p></div>`
         );
       }
@@ -2824,7 +2893,7 @@
         .join("");
       return (
         `<header class="page-header"><h2>Sensors</h2>` +
-        `<span class="version-pill">v1.14.0</span></header>` +
+        `<span class="version-pill">v1.14.1</span></header>` +
         `<p class="section-hint">Bind soil-moisture sensors to a zone so runtimes auto-adjust based on actual moisture. You can attach one sensor or several (combined as average, lowest, highest, or just the primary).</p>` +
         `<div class="sensor-zone-list">${cards}</div>`
       );
@@ -3241,7 +3310,7 @@
 
       return (
         `<header class="page-header"><h2>Weather</h2>` +
-        `<span class="version-pill">v1.14.0</span></header>` +
+        `<span class="version-pill">v1.14.1</span></header>` +
         lockoutHtml +
         forecastHtml +
         `<form class="weather-form" data-form="weather">` +
@@ -3379,6 +3448,9 @@
         recurrence = `every ${s.interval_days || "?"} day${s.interval_days === 1 ? "" : "s"}`;
       } else if (s.mode === "interval_hours") {
         recurrence = `every ${s.interval_hours || "?"} hour${s.interval_hours === 1 ? "" : "s"}`;
+        if (s.interval_end_time) {
+          recurrence += ` (${s.start_time}–${s.interval_end_time})`;
+        }
       } else {
         recurrence = (s.weekdays || []).map((d) => WEEKDAY_LABELS[d] || "?").join(" ") || "—";
       }
@@ -3512,20 +3584,36 @@
           `</div>` +
           `</div>`;
       } else if (mode === "interval_hours") {
+        // Optional daily-window cap (v1.14.1). Empty = legacy continuous.
+        const endTime = (e.interval_end_time || "").trim();
+        const [endH, endM] = endTime ? endTime.split(":") : ["", ""];
         modeFields =
           `<div class="row-2">` +
           `<div>` +
-          `<label>Every (hours) ${tip("Fires every N hours starting at the start_time on the first-run date. Continues across day boundaries.")}</label>` +
+          `<label>Every (hours) ${tip("Fires every N hours starting at the start time on the first-run date.")}</label>` +
           `<input name="interval_hours" type="number" min="1" max="72" step="1" value="${
             e.interval_hours || 6
           }" required />` +
           `</div>` +
           `<div>` +
-          `<label>First run date ${tip("Date of the first cycle. Subsequent cycles step by the hour interval.")}</label>` +
+          `<label>First run date ${tip("Date of the first cycle.")}</label>` +
           `<input name="interval_anchor" type="date" value="${escapeAttr(
             e.interval_anchor || _todayIso()
           )}" required />` +
           `</div>` +
+          `</div>` +
+          // Stop firing after — optional daily window cap. When set, the
+          // schedule fires every N hours from start_time each day, stops
+          // when next firing would exceed this time, then resumes the
+          // next day. Empty = legacy continuous-across-days behavior.
+          `<label>Stop firing after (optional) ${tip("Cap on each day's firings. When set, every N hours fires from Start time until this time, then waits until the next day's Start. Leave blank to fire continuously across day boundaries.")}</label>` +
+          `<div class="schedule-time-row">` +
+          `<input name="interval_end_time_h" type="number" min="0" max="23" step="1" placeholder="HH" value="${escapeAttr(endH)}" />` +
+          `<span>:</span>` +
+          `<input name="interval_end_time_m" type="number" min="0" max="59" step="1" placeholder="MM" value="${escapeAttr(endM)}" />` +
+          (endTime
+            ? ` <button type="button" class="btn btn-small btn-secondary" data-action="clear-interval-end-time">Clear</button>`
+            : "") +
           `</div>`;
       } else {
         modeFields =
@@ -4043,5 +4131,5 @@
   }
 
   customElements.define(ELEMENT_NAME, CompleteIrrigationPanel);
-  console.info("[complete-irrigation] panel registered, version v1.14.0");
+  console.info("[complete-irrigation] panel registered, version v1.14.1");
 })();

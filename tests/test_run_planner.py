@@ -7,7 +7,7 @@ caller supplies `from_dt` and `until_dt`.
 
 from __future__ import annotations
 
-from datetime import datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 
 from custom_components.complete_irrigation.run_planner import (
     PlannedRun,
@@ -495,6 +495,111 @@ def test_interval_hours_from_dt_after_anchor_advances_correctly():
     # First cycle ≥ 13:00 with anchor 06:00 + 6h steps is 18:00.
     times = [(r.start_at.hour, r.start_at.minute) for r in runs]
     assert times == [(18, 0)]
+
+
+# ── interval_hours daily-window (v1.14.1) ──────────────────────────────
+
+
+def test_interval_hours_daily_window_one_day():
+    """Every 2h from 06:00 to 20:00 → 06,08,10,12,14,16,18,20 (8 firings)."""
+    runs = next_runs(
+        [
+            _hourly_sched(
+                interval_hours=2,
+                interval_end_time=time(20, 0),
+            )
+        ],
+        from_dt=MONDAY_MIDNIGHT,
+        until_dt=MONDAY_MIDNIGHT + timedelta(days=1),
+    )
+    hours = [r.start_at.hour for r in runs]
+    assert hours == [6, 8, 10, 12, 14, 16, 18, 20]
+
+
+def test_interval_hours_daily_window_skips_overnight():
+    """Daily-window mode resets at midnight — no firings between
+    end_time and next day's start_time."""
+    runs = next_runs(
+        [
+            _hourly_sched(
+                interval_hours=4,
+                interval_end_time=time(18, 0),
+            )
+        ],
+        from_dt=MONDAY_MIDNIGHT,
+        until_dt=MONDAY_MIDNIGHT + timedelta(days=2),
+    )
+    # Each day: 06, 10, 14, 18. Never 22 or 02 or anything overnight.
+    by_day = {(r.start_at.day, r.start_at.hour) for r in runs}
+    assert by_day == {(18, 6), (18, 10), (18, 14), (18, 18), (19, 6), (19, 10), (19, 14), (19, 18)}
+
+
+def test_interval_hours_daily_window_inclusive_endpoint():
+    """The window endpoint is inclusive: if a firing lands exactly on
+    interval_end_time it still fires."""
+    runs = next_runs(
+        [
+            _hourly_sched(
+                interval_hours=3,
+                interval_end_time=time(15, 0),
+            )
+        ],
+        from_dt=MONDAY_MIDNIGHT,
+        until_dt=MONDAY_MIDNIGHT + timedelta(days=1),
+    )
+    hours = [r.start_at.hour for r in runs]
+    # 06, 09, 12, 15. Next would be 18 which exceeds 15.
+    assert hours == [6, 9, 12, 15]
+
+
+def test_interval_hours_daily_window_excludes_when_step_overshoots():
+    """If the interval steps over the endpoint, the firing is dropped."""
+    runs = next_runs(
+        [
+            _hourly_sched(
+                interval_hours=5,
+                interval_end_time=time(14, 0),
+            )
+        ],
+        from_dt=MONDAY_MIDNIGHT,
+        until_dt=MONDAY_MIDNIGHT + timedelta(days=1),
+    )
+    hours = [r.start_at.hour for r in runs]
+    # 06, 11. Next is 16 which exceeds 14 → drop.
+    assert hours == [6, 11]
+
+
+def test_interval_hours_daily_window_respects_interval_anchor():
+    """If interval_anchor is in the future, no firings until that date."""
+    runs = next_runs(
+        [
+            _hourly_sched(
+                interval_hours=4,
+                interval_anchor=date(2026, 5, 19),  # Tuesday
+                interval_end_time=time(14, 0),
+            )
+        ],
+        from_dt=MONDAY_MIDNIGHT,
+        until_dt=MONDAY_MIDNIGHT + timedelta(days=2),
+    )
+    days = {r.start_at.day for r in runs}
+    assert days == {19}  # only Tuesday, not Monday
+
+
+def test_interval_hours_daily_window_respects_end_date():
+    runs = next_runs(
+        [
+            _hourly_sched(
+                interval_hours=4,
+                interval_end_time=time(14, 0),
+                end_date=date(2026, 5, 18),  # Monday only
+            )
+        ],
+        from_dt=MONDAY_MIDNIGHT,
+        until_dt=MONDAY_MIDNIGHT + timedelta(days=5),
+    )
+    days = {r.start_at.day for r in runs}
+    assert days == {18}
 
 
 # ════════════════════════════════════════════════════════════════════

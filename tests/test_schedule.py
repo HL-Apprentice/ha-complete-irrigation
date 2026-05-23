@@ -107,6 +107,7 @@ def test_schedule_to_dict_has_expected_shape():
         "interval_days": None,
         "interval_anchor": None,
         "interval_hours": None,
+        "interval_end_time": None,
         "start_date": None,
         "repeat_annually": False,
         "zone_steps": [],
@@ -512,6 +513,83 @@ def test_schedule_interval_hours_roundtrip():
     )
     rebuilt = Schedule.from_dict(original.to_dict())
     assert rebuilt == original
+
+
+# ── interval_hours daily-window field (v1.14.1) ────────────────────
+
+
+def test_schedule_interval_end_time_accepted_when_after_start_time():
+    from datetime import date
+
+    s = Schedule(
+        id="hourly",
+        name="Daily window",
+        zone_entity_id="switch.veg",
+        start_time=time(6, 0),
+        duration_minutes=10,
+        weekdays=(),
+        mode="interval_hours",
+        interval_hours=2,
+        interval_anchor=date(2026, 5, 22),
+        interval_end_time=time(20, 0),
+    )
+    assert s.interval_end_time == time(20, 0)
+
+
+def test_schedule_interval_end_time_rejected_when_not_after_start_time():
+    from datetime import date
+
+    import pytest
+
+    with pytest.raises(ValueError, match="interval_end_time must be after start_time"):
+        Schedule(
+            id="bad",
+            name="Bad window",
+            zone_entity_id="switch.veg",
+            start_time=time(20, 0),
+            duration_minutes=10,
+            weekdays=(),
+            mode="interval_hours",
+            interval_hours=2,
+            interval_anchor=date(2026, 5, 22),
+            interval_end_time=time(6, 0),
+        )
+
+
+def test_schedule_interval_end_time_rejected_outside_interval_hours_mode():
+    import pytest
+
+    with pytest.raises(ValueError, match="only valid in interval_hours mode"):
+        Schedule(
+            id="bad",
+            name="Bad",
+            zone_entity_id="switch.veg",
+            start_time=time(6, 0),
+            duration_minutes=10,
+            weekdays=(0, 1, 2),
+            mode="weekdays",
+            interval_end_time=time(20, 0),
+        )
+
+
+def test_schedule_interval_end_time_roundtrip():
+    from datetime import date
+
+    original = Schedule(
+        id="hourly",
+        name="Daily window",
+        zone_entity_id="switch.veg",
+        start_time=time(6, 0),
+        duration_minutes=10,
+        weekdays=(),
+        mode="interval_hours",
+        interval_hours=2,
+        interval_anchor=date(2026, 5, 22),
+        interval_end_time=time(20, 0),
+    )
+    rebuilt = Schedule.from_dict(original.to_dict())
+    assert rebuilt == original
+    assert rebuilt.interval_end_time == time(20, 0)
 
 
 # ════════════════════════════════════════════════════════════════════
