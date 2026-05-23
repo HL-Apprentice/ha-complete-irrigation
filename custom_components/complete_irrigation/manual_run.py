@@ -87,7 +87,3 @@ class ManualRunTracker:
     def active(self) -> list[ManualRun]:
         """All currently-tracked runs."""
         return list(self._runs.values())
-
-    def due_runs(self, now: datetime) -> list[ManualRun]:
-        """Runs whose deadline has been reached as of `now`."""
-        return [r for r in self._runs.values() if r.is_due(now)]

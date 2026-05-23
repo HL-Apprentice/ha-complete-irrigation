@@ -34,9 +34,24 @@
     custom: "Custom: pick your own min/target/max thresholds based on your soil + plant type.",
   };
   const ELEMENT_NAME = "complete-irrigation-panel";
+  // v1.16: one constant fed to every version-pill render + the console
+  // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
+  // out of sync with manifest.json on most releases.
+  const PANEL_VERSION = "v1.16.0";
   const DEFAULT_MANUAL_MINUTES = 10;
   const MAX_MANUAL_MINUTES = 60;
   const MAX_SCHEDULE_MINUTES = 480; // 8 hours
+
+  // Shared time-of-day formatter (v1.16 — extracted from two inline
+  // copies inside _renderTodaysTimeline/_renderDayColumn). Input is
+  // minutes-since-midnight; output is a US 12-hour clock string.
+  function fmtTimeOfDay(m) {
+    const h = Math.floor(m / 60);
+    const mm = String(m % 60).padStart(2, "0");
+    const ampm = h >= 12 ? "PM" : "AM";
+    const h12 = h % 12 || 12;
+    return `${h12}:${mm} ${ampm}`;
+  }
 
   if (customElements.get(ELEMENT_NAME)) return;
 
@@ -145,6 +160,13 @@
       // Run history (v1.14) — lazy-loaded when the History tab opens.
       this._runHistory = [];
       this._runHistoryLoaded = false;
+      // Planned runs (v1.16) — fetched from the server-side run_planner
+      // + conflict_resolver instead of being reimplemented in JS.
+      // `_plannedRunsByDate` is a Map<YYYY-MM-DD, runs[]> keyed by the
+      // run's local-date, built from the WS response. Loaded on entry
+      // to Today/Zones and invalidated on any schedule mutation.
+      this._plannedRunsByDate = new Map();
+      this._plannedRunsLoaded = false;
       // Notification targets editor draft (v1.15). Array of strings,
       // each typically "notify.mobile_app_pete". Empty slots are
       // unfinished rows the user just added. Hydrated from config when
@@ -239,22 +261,39 @@
       if (!this._hass?.states) return "";
       const zones = (this._panel?.config?.zones) || [];
       const parts = [];
-      for (const z of zones) {
-        const s = this._hass.states[z];
-        parts.push(s ? `${z}=${s.state}` : `${z}=_`);
-      }
-      // Also include sun + a few common Tempest sensors
-      for (const eid of ["sun.sun"]) {
-        const s = this._hass.states[eid];
-        if (s) parts.push(`${eid}=${s.state}`);
-      }
-      // Weather-relevant sensors (auto-detected) — include them so the
-      // banner refreshes when the data changes, but not for every other
-      // sensor in HA.
-      for (const eid of Object.keys(this._hass.states)) {
-        if (/^sensor\.(tempest|weatherflow)_/.test(eid)) {
-          parts.push(`${eid}=${this._hass.states[eid].state}`);
+      const watched = new Set(zones);
+      watched.add("sun.sun");
+      // v1.16 — include every per-zone sensor the user has bound so a
+      // moisture/temperature/humidity reading change re-renders the
+      // Zones chips. Pre-v1.16, only auto-detected weather sensors
+      // were tracked, so manually-bound moisture sensors (e.g.
+      // sensor.acurite_*) wouldn't trigger a render.
+      const zonesCfg = (this._config?.zones) || {};
+      for (const zc of Object.values(zonesCfg)) {
+        for (const arr of [
+          zc.moisture_entities,
+          zc.temperature_entities,
+          zc.humidity_entities,
+        ]) {
+          if (Array.isArray(arr)) {
+            for (const eid of arr) watched.add(eid);
+          }
         }
+      }
+      // Global weather sensors
+      for (const k of ["rain_sensor", "temperature_sensor", "wind_sensor"]) {
+        const v = this._config?.[k];
+        if (typeof v === "string" && v) watched.add(v);
+      }
+      const arr = this._config?.rain_sensors;
+      if (Array.isArray(arr)) for (const v of arr) watched.add(v);
+      // Auto-detected Tempest / WeatherFlow sensors (for the banner)
+      for (const eid of Object.keys(this._hass.states)) {
+        if (/^sensor\.(tempest|weatherflow)_/.test(eid)) watched.add(eid);
+      }
+      for (const eid of watched) {
+        const s = this._hass.states[eid];
+        parts.push(s ? `${eid}=${s.state}` : `${eid}=_`);
       }
       return parts.join("|");
     }
@@ -761,6 +800,12 @@
       this._currentSection = sectionId;
       if (sectionId === "schedules" && !this._schedulesLoaded) this._fetchSchedules();
       if (sectionId === "history") this._fetchRunHistory();  // always refetch on open
+      // Today + Zones both rely on the cached PlannedRuns for their
+      // calendar / strip rendering. Fetch lazily on first open and
+      // again whenever schedules mutate (handled in _saveSchedule etc).
+      if ((sectionId === "today" || sectionId === "zones") && !this._plannedRunsLoaded) {
+        this._fetchPlannedRuns();
+      }
       if (sectionId === "notifications") this._hydrateNotifyDraft();
       if (sectionId === "weather") {
         const w = this._findWeatherEntity();
@@ -960,6 +1005,12 @@
         this._schedules = (res && res.schedules) || [];
         this._schedulesLoaded = true;
         this._scheduleRender();
+        // v1.16 — schedules drive the planner output, so any schedule
+        // refresh should invalidate + re-fetch the planned-runs cache.
+        // Fire-and-forget; the render callback inside picks up the
+        // new data when it arrives.
+        this._plannedRunsLoaded = false;
+        this._fetchPlannedRuns();
       } catch (err) {
         console.error("[complete-irrigation] list_schedules failed:", err);
       }
@@ -976,6 +1027,72 @@
       } catch (err) {
         console.error("[complete-irrigation] get_config failed:", err);
       }
+    }
+
+    async _fetchPlannedRuns() {
+      // v1.16 — pull resolved PlannedRuns from the server (covers
+      // start_date / repeat_annually / configurable zone_buffer /
+      // conflict resolution that the old JS reimplementation skipped).
+      // Window: 8 days from today midnight so a 7-day strip + a 2-day
+      // calendar window both fit without a refetch.
+      if (!this._hass?.callWS) return;
+      const now = new Date();
+      const from = new Date(now);
+      from.setHours(0, 0, 0, 0);
+      const until = new Date(from.getTime() + 8 * 86400000);
+      try {
+        const res = await this._hass.callWS({
+          type: "complete_irrigation/list_planned_runs",
+          from_dt: from.toISOString(),
+          until_dt: until.toISOString(),
+        });
+        const runs = (res && res.runs) || [];
+        // Index by local YYYY-MM-DD so renderers can lookup per-day O(1).
+        const byDate = new Map();
+        for (const r of runs) {
+          if ((r.reason || "").startsWith("skipped:")) continue;
+          const d = new Date(r.start_at);
+          const iso =
+            d.getFullYear() +
+            "-" +
+            String(d.getMonth() + 1).padStart(2, "0") +
+            "-" +
+            String(d.getDate()).padStart(2, "0");
+          if (!byDate.has(iso)) byDate.set(iso, []);
+          byDate.get(iso).push({
+            start_minutes: d.getHours() * 60 + d.getMinutes(),
+            zone_entity_id: r.zone_entity_id,
+            zone_name: this._zoneName(r.zone_entity_id),
+            duration_minutes: r.duration_minutes,
+            schedule_name: r.schedule_name,
+            schedule_id: r.schedule_id,
+          });
+        }
+        // Sort each day's bucket by start time
+        for (const arr of byDate.values()) {
+          arr.sort((a, b) => a.start_minutes - b.start_minutes);
+        }
+        this._plannedRunsByDate = byDate;
+        this._plannedRunsLoaded = true;
+        this._scheduleRender();
+      } catch (err) {
+        console.warn(
+          "[complete-irrigation] list_planned_runs failed (falling back to in-panel planner):",
+          err?.message || err
+        );
+      }
+    }
+
+    _localDateKey(date) {
+      // Format a JS Date as local YYYY-MM-DD (matches the keys in
+      // _plannedRunsByDate). Shared between Today calendar + Zones strip.
+      return (
+        date.getFullYear() +
+        "-" +
+        String(date.getMonth() + 1).padStart(2, "0") +
+        "-" +
+        String(date.getDate()).padStart(2, "0")
+      );
     }
 
     async _fetchRunHistory() {
@@ -1495,7 +1612,7 @@
 
       return (
         `<header class="page-header"><h2>Notifications</h2>` +
-        `<span class="version-pill">v1.15.0</span></header>` +
+        `<span class="version-pill">${PANEL_VERSION}</span></header>` +
         `<form class="weather-form" data-form="notifications">` +
         `<label class="enabled-check"><input type="checkbox" name="enabled"${
           enabled ? " checked" : ""
@@ -1613,7 +1730,7 @@
 
       return (
         `<header class="page-header"><h2>Settings</h2>` +
-        `<span class="version-pill">v1.15.0</span></header>` +
+        `<span class="version-pill">${PANEL_VERSION}</span></header>` +
         `<section class="settings-card">` +
         `<h3 class="section-title">Theme ${tip("Cycle Light/Dark/Auto with the ☀️/🌙 button on Today, or pick one of your HA-installed themes below.")}</h3>` +
         `<p class="section-hint">Light/Dark/Auto: <strong>${escapeHtml(themeLabel)}</strong>.</p>` +
@@ -1682,7 +1799,7 @@
         `<section class="settings-card">` +
         `<h3 class="section-title">About</h3>` +
         `<table class="settings-table">` +
-        `<tr><td>Version</td><td><strong>v1.15.0</strong></td></tr>` +
+        `<tr><td>Version</td><td><strong>${PANEL_VERSION}</strong></td></tr>` +
         `<tr><td>Repository</td><td><a href="${escapeAttr(repoUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(repoUrl)}</a></td></tr>` +
         `<tr><td>Zones configured</td><td>${(this._panel?.config?.zones || []).length}</td></tr>` +
         `<tr><td>Schedules</td><td>${(this._schedules || []).length}</td></tr>` +
@@ -1811,7 +1928,7 @@
       return (
         `<header class="page-header"><h2>Today</h2>` +
         `<div class="page-header-right">${themeBtn}` +
-        `<span class="version-pill">v1.15.0</span></div></header>` +
+        `<span class="version-pill">${PANEL_VERSION}</span></div></header>` +
         this._renderRainLockoutBanner() +
         this._renderWeatherBanner() +
         `<section>` +
@@ -2324,7 +2441,7 @@
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Zones</h2>` +
-          `<span class="version-pill">v1.15.0</span></header>` +
+          `<span class="version-pill">${PANEL_VERSION}</span></header>` +
           `<div class="empty"><p>No zones configured. Add them via Settings → Devices &amp; Services.</p></div>`
         );
       }
@@ -2333,7 +2450,7 @@
         .join("");
       return (
         `<header class="page-header"><h2>Zones</h2>` +
-        `<span class="version-pill">v1.15.0</span></header>` +
+        `<span class="version-pill">${PANEL_VERSION}</span></header>` +
         `<p class="section-hint">Hidden zones still run on schedule — they're just hidden from the Today view.</p>` +
         `<div class="zones-list">${rows}</div>`
       );
@@ -2538,160 +2655,34 @@
     }
 
     _schedulesFiringOn(zoneEntityId, dayDate) {
-      // Returns [{start_time, name}] for schedules that fire on `dayDate`
-      // for this zone. Mirrors the server-side run_planner logic for
-      // weekday + interval modes (just enough to show on the strip).
-      if (!this._schedules) return [];
+      // v1.16 — derived from the cached server-side planner output
+      // instead of the in-JS reimplementation (which ignored start_date,
+      // repeat_annually, configurable zone_buffer, conflict resolution).
+      const runs = this._runsForDay(dayDate);
+      const seen = new Set();
       const result = [];
-      for (const s of this._schedules) {
-        if (!s.enabled) continue;
-        // Match the zone as either the primary OR any zone_steps entry —
-        // multi-zone schedules fire ALL their bound zones, so each one
-        // should see this schedule on its 7-day strip.
-        const stepIds = Array.isArray(s.zone_steps)
-          ? s.zone_steps.map((st) => st.zone_entity_id)
-          : [];
-        if (s.zone_entity_id !== zoneEntityId && !stepIds.includes(zoneEntityId))
-          continue;
-        // Common end_date filter
-        if (s.end_date) {
-          const end = new Date(s.end_date + "T00:00:00");
-          if (dayDate > end) continue;
-        }
-        if (s.mode === "interval") {
-          if (!s.interval_anchor || !s.interval_days) continue;
-          const anchor = new Date(s.interval_anchor + "T00:00:00");
-          if (Number.isNaN(anchor.getTime())) continue;
-          const diffDays = Math.floor((dayDate - anchor) / 86400000);
-          if (diffDays < 0) continue;
-          if (diffDays % s.interval_days !== 0) continue;
-          result.push({ start_time: s.start_time, name: s.name });
-        } else if (s.mode === "interval_hours") {
-          if (!s.interval_anchor || !s.interval_hours) continue;
-          // Skip if dayDate is before the anchor's calendar date.
-          const anchor = new Date(s.interval_anchor + "T00:00:00");
-          if (Number.isNaN(anchor.getTime())) continue;
-          if (dayDate.getTime() + 86400000 <= anchor.getTime()) continue;
-          // Render one entry showing the first firing of the day's cycle.
-          // The Today timeline shows every individual hourly cycle; the
-          // 7-day strip just needs one marker to indicate "yes, fires
-          // today" — we use the start_time for ordering.
-          const windowSuffix = s.interval_end_time
-            ? ` ${s.start_time}–${s.interval_end_time}`
-            : "";
-          result.push({
-            start_time: s.start_time,
-            name: `${s.name} (every ${s.interval_hours}h${windowSuffix})`,
-          });
-        } else {
-          // weekdays mode — convert JS Sun=0 to ISO Mon=0
-          const isoDow = (dayDate.getDay() + 6) % 7;
-          const weekdays = s.weekdays || [];
-          if (weekdays.includes(isoDow)) {
-            result.push({ start_time: s.start_time, name: s.name });
-          }
-        }
+      for (const r of runs) {
+        if (r.zone_entity_id !== zoneEntityId) continue;
+        // Dedupe per-schedule per-day so the strip doesn't show one row
+        // per cycle for hourly-interval schedules.
+        const key = `${r.schedule_id}@${r.start_minutes}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const hh = String(Math.floor(r.start_minutes / 60)).padStart(2, "0");
+        const mm = String(r.start_minutes % 60).padStart(2, "0");
+        result.push({ start_time: `${hh}:${mm}`, name: r.schedule_name });
       }
-      return result.sort((a, b) => a.start_time.localeCompare(b.start_time));
+      return result;
     }
 
     _runsForDay(day) {
-      // All scheduled runs firing on `day` (a Date at local midnight),
-      // expanded into one entry per zone-step. Each entry is
-      // {start_minutes, zone_entity_id, zone_name, duration_minutes,
-      // schedule_name, schedule_id}. Used by Today timeline + Tomorrow list.
-      if (!this._schedules) return [];
-      const today = day;
-      const isoDow = (today.getDay() + 6) % 7; // JS Sun=0 → ISO Mon=0
-      const out = [];
-      // Inter-zone valve buffer, matches the server-side run_planner.
-      const ZONE_BUFFER_SECONDS = 30;
-
-      // Pre-compute today bounds + helpers.
-      const todayEnd = new Date(today.getTime() + 86400000);
-      // Parse "HH:MM" → [hours, minutes] tuple.
-      const parseHHMM = (str) => {
-        const parts = (str || "00:00").split(":").map((n) => parseInt(n, 10));
-        return [parts[0] || 0, parts[1] || 0];
-      };
-
-      // For each firing, expand the schedule's zone_steps starting at
-      // the given minute offset from midnight.
-      const pushFiring = (s, startMinutes) => {
-        const steps =
-          Array.isArray(s.zone_steps) && s.zone_steps.length > 0
-            ? s.zone_steps
-            : [{ zone_entity_id: s.zone_entity_id, duration_minutes: s.duration_minutes }];
-        let cursorSec = startMinutes * 60;
-        for (const step of steps) {
-          out.push({
-            start_minutes: Math.floor(cursorSec / 60),
-            zone_entity_id: step.zone_entity_id,
-            zone_name: this._zoneName(step.zone_entity_id),
-            duration_minutes: step.duration_minutes,
-            schedule_name: s.name,
-            schedule_id: s.id,  // enables click-to-edit
-          });
-          cursorSec += step.duration_minutes * 60 + ZONE_BUFFER_SECONDS;
-        }
-      };
-
-      for (const s of this._schedules) {
-        if (!s.enabled) continue;
-        // Skip schedules past their end date
-        if (s.end_date) {
-          const end = new Date(s.end_date + "T00:00:00");
-          if (today > end) continue;
-        }
-        const [hh, mm] = parseHHMM(s.start_time);
-
-        if (s.mode === "interval") {
-          if (!s.interval_anchor || !s.interval_days) continue;
-          const anchor = new Date(s.interval_anchor + "T00:00:00");
-          if (Number.isNaN(anchor.getTime())) continue;
-          const diffDays = Math.floor((today - anchor) / 86400000);
-          if (diffDays < 0 || diffDays % s.interval_days !== 0) continue;
-          pushFiring(s, hh * 60 + mm);
-        } else if (s.mode === "interval_hours") {
-          // every N hours from anchor + start_time.
-          if (!s.interval_anchor || !s.interval_hours) continue;
-          const anchorDt = new Date(s.interval_anchor + "T00:00:00");
-          anchorDt.setHours(hh, mm, 0, 0);
-          if (Number.isNaN(anchorDt.getTime())) continue;
-          // v1.15.0: with interval_end_time set, the schedule fires every
-          // N hours from start_time EACH DAY, capped at end_time. Without
-          // it, the legacy continuous-across-days behavior applies.
-          if (s.interval_end_time) {
-            const anchorOnly = new Date(s.interval_anchor + "T00:00:00");
-            if (today < anchorOnly) continue;
-            const [endH, endM] = parseHHMM(s.interval_end_time);
-            const startMin = hh * 60 + mm;
-            const endMin = endH * 60 + endM;
-            const stepMin = s.interval_hours * 60;
-            for (let m = startMin; m <= endMin; m += stepMin) {
-              pushFiring(s, m);
-            }
-          } else {
-            const stepMs = s.interval_hours * 3600000;
-            // Walk forward from the anchor until we land in [today, todayEnd).
-            let cursor = anchorDt.getTime();
-            if (cursor < today.getTime()) {
-              const skip = Math.ceil((today.getTime() - cursor) / stepMs);
-              cursor += skip * stepMs;
-            }
-            while (cursor < todayEnd.getTime()) {
-              const dt = new Date(cursor);
-              pushFiring(s, dt.getHours() * 60 + dt.getMinutes());
-              cursor += stepMs;
-            }
-          }
-        } else {
-          // weekdays
-          if (!(s.weekdays || []).includes(isoDow)) continue;
-          pushFiring(s, hh * 60 + mm);
-        }
-      }
-      return out.sort((a, b) => a.start_minutes - b.start_minutes);
+      // v1.16 — reads from the server-resolved planner output that's
+      // cached in this._plannedRunsByDate, keyed by local YYYY-MM-DD.
+      // Returns an empty array until the first WS response arrives; the
+      // _scheduleRender callback inside _fetchPlannedRuns will trigger
+      // a fresh render then.
+      const key = this._localDateKey(day);
+      return (this._plannedRunsByDate.get(key) || []).slice();
     }
 
     _renderDayCalendar() {
@@ -2742,14 +2733,7 @@
       // One 24-hour vertical grid for a single day. Used twice by
       // _renderDayCalendar to show a 2-day window.
       const runs = this._runsForDay(selected);
-
-      const fmtTime = (m) => {
-        const h = Math.floor(m / 60);
-        const mm = String(m % 60).padStart(2, "0");
-        const ampm = h >= 12 ? "PM" : "AM";
-        const h12 = h % 12 || 12;
-        return `${h12}:${mm} ${ampm}`;
-      };
+      const fmtTime = fmtTimeOfDay;  // module-level shared helper (v1.16)
 
       const now = new Date();
       const nowMin = now.getHours() * 60 + now.getMinutes();
@@ -2942,7 +2926,7 @@
 
       return (
         `<header class="page-header"><h2>Run history</h2>` +
-        `<span class="version-pill">v1.15.0</span></header>` +
+        `<span class="version-pill">${PANEL_VERSION}</span></header>` +
         `<div class="history-toolbar">` +
         `<label>Zone <select data-action="history-filter-zone"><option value="">All zones</option>${zoneOptions}</select></label>` +
         `<label>Schedule <select data-action="history-filter-schedule"><option value="">All schedules</option>${scheduleOptions}</select></label>` +
@@ -2990,7 +2974,7 @@
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Sensors</h2>` +
-          `<span class="version-pill">v1.15.0</span></header>` +
+          `<span class="version-pill">${PANEL_VERSION}</span></header>` +
           `<div class="empty"><p>No zones configured.</p></div>`
         );
       }
@@ -2999,7 +2983,7 @@
         .join("");
       return (
         `<header class="page-header"><h2>Sensors</h2>` +
-        `<span class="version-pill">v1.15.0</span></header>` +
+        `<span class="version-pill">${PANEL_VERSION}</span></header>` +
         `<p class="section-hint">Bind soil-moisture sensors to a zone so runtimes auto-adjust based on actual moisture. You can attach one sensor or several (combined as average, lowest, highest, or just the primary).</p>` +
         `<div class="sensor-zone-list">${cards}</div>`
       );
@@ -3416,7 +3400,7 @@
 
       return (
         `<header class="page-header"><h2>Weather</h2>` +
-        `<span class="version-pill">v1.15.0</span></header>` +
+        `<span class="version-pill">${PANEL_VERSION}</span></header>` +
         lockoutHtml +
         forecastHtml +
         `<form class="weather-form" data-form="weather">` +
@@ -3806,7 +3790,7 @@
         `<label>Additional zones (run in order) ${tip("Optional — add more zones to run after the primary one above. They fire back-to-back at run time, each waiting for the previous to finish + 30s valve buffer. Per-zone moisture saturation still skips individual zones.")}</label>` +
         `<div class="extra-steps">` +
         (e.extra_steps || [])
-          .map((step, i) => this._renderExtraStepRow(step, i, zoneOpts))
+          .map((step, i) => this._renderExtraStepRow(step, i, zones))
           .join("") +
         `<button type="button" class="btn btn-small" data-action="add-extra-step">+ Add another zone</button>` +
         `</div>` +
@@ -3824,16 +3808,22 @@
       );
     }
 
-    _renderExtraStepRow(step, idx, zoneOpts) {
+    _renderExtraStepRow(step, idx, zones) {
       // One row per extra step: zone picker + duration h/m + remove button.
+      // v1.16 — build <option> markup directly from the zone list, avoiding
+      // the prior regex-mutate-of-rendered-HTML hack that broke if a zone
+      // entity_id contained `=" selected` substrings.
       const totalMin = parseInt(step.duration_minutes, 10) || 0;
       const h = Math.floor(totalMin / 60);
       const m = totalMin % 60;
-      // Re-render zone options with this step's selected value
-      const opts = zoneOpts.replace(/ selected/g, "").replace(
-        new RegExp(`value="${step.zone_entity_id.replace(/[.\\^$*+?()|[\]{}]/g, "\\$&")}"`),
-        `value="${step.zone_entity_id}" selected`
-      );
+      const opts = (zones || [])
+        .map(
+          (z) =>
+            `<option value="${escapeAttr(z)}"${
+              z === step.zone_entity_id ? " selected" : ""
+            }>${escapeHtml(this._zoneName(z))} (${escapeHtml(z)})</option>`
+        )
+        .join("");
       return (
         `<div class="extra-step-row" data-step-idx="${idx}">` +
         `<select name="extra_zone" data-step-idx="${idx}" required>${opts || '<option value="">No zones</option>'}</select>` +
@@ -4236,6 +4226,10 @@
     return `${m}:${String(s).padStart(2, "0")}`;
   }
 
+  // Escape for HTML body context (<div>...</div>) AND double-quoted
+  // attribute contexts (<a href="..."). Does NOT escape `'` because
+  // every attribute in this file uses double quotes — if you ever
+  // switch any attribute to single quotes, you MUST update this helper.
   function escapeHtml(s) {
     return String(s == null ? "" : s)
       .replace(/&/g, "&amp;")
@@ -4243,10 +4237,12 @@
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;");
   }
-  function escapeAttr(s) {
-    return escapeHtml(s);
-  }
+  // escapeAttr is the same function as escapeHtml — the alias just
+  // makes interpolation sites self-documenting (developer can see at
+  // a glance whether content is going into body or attribute). DO NOT
+  // remove without a sweep to retag the call sites.
+  const escapeAttr = escapeHtml;
 
   customElements.define(ELEMENT_NAME, CompleteIrrigationPanel);
-  console.info("[complete-irrigation] panel registered, version v1.15.0");
+  console.info(`[complete-irrigation] panel registered, version ${PANEL_VERSION}`);
 })();

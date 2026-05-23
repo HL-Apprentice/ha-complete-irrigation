@@ -88,6 +88,14 @@ DEFAULT_CASCADE_DEFER_LIMIT = 3
 DEFAULT_MANUAL_RUN_MINUTES = 10
 MAX_MANUAL_RUN_MINUTES = 60  # safety cap on manual runs
 
+# Per-zone moisture defaults when the user hasn't configured min/target/max
+# (matches the "lawn" preset in PLANT_CATEGORIES above). Used by the
+# coordinator's moisture gate when a zone has bound sensors but no
+# explicit thresholds.
+DEFAULT_ZONE_MIN_PCT = 21
+DEFAULT_ZONE_TARGET_PCT = 31
+DEFAULT_ZONE_MAX_PCT = 40
+
 # Hot weather adjustment defaults (in user's unit; converted internally).
 DEFAULT_HOT_WEATHER_F = 100
 DEFAULT_HOT_WEATHER_BOOST_PCT = 25

@@ -50,15 +50,33 @@ class IrrigationCalendar(CalendarEntity):
     _attr_icon = "mdi:sprinkler-variant"
     _attr_supported_features = CalendarEntityFeature.CREATE_EVENT
 
+    # v1.16 — `event` is polled by HA frequently. The 30-day next_runs
+    # + resolve_conflicts computation was running on every poll. Cache
+    # the next-event for ~60 seconds so the hot path is a dict lookup.
+    _EVENT_TTL = timedelta(seconds=60)
+
     def __init__(self, coordinator, entry_id: str) -> None:
         self._coordinator = coordinator
         self._attr_unique_id = f"{DOMAIN}_{entry_id}_calendar"
+        self._event_cache: CalendarEvent | None = None
+        self._event_cache_expires_at: datetime | None = None
 
     @property
     def event(self) -> CalendarEvent | None:
-        """Return the next upcoming event (or one currently running)."""
+        """Return the next upcoming event (or one currently running).
+
+        Cached for _EVENT_TTL — the polled call site doesn't need
+        per-second freshness, and the underlying computation walks 30
+        days of expansion + conflict resolution which is heavy on
+        installs with many schedules."""
         now = dt_util.now()
-        # Look ahead 30 days for the next event.
+        if (
+            self._event_cache_expires_at is not None
+            and now < self._event_cache_expires_at
+            and (self._event_cache is None or self._event_cache.end >= now)
+        ):
+            return self._event_cache
+
         raw = next_runs(
             self._coordinator.schedule_store.enabled_schedules(),
             from_dt=now - timedelta(hours=1),  # include events that started recently
@@ -69,11 +87,15 @@ class IrrigationCalendar(CalendarEntity):
             for r in resolve_conflicts(raw, POLICY_DEFER_NEW)
             if not r.reason.startswith("skipped:")
         ]
+        event: CalendarEvent | None = None
         for run in upcoming:
             end = run.start_at + timedelta(minutes=run.duration_minutes)
-            if end >= now:  # not yet finished
-                return _to_event(run)
-        return None
+            if end >= now:
+                event = _to_event(run)
+                break
+        self._event_cache = event
+        self._event_cache_expires_at = now + self._EVENT_TTL
+        return event
 
     async def async_get_events(
         self,
