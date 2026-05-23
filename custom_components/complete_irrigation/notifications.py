@@ -106,19 +106,45 @@ class NotificationDispatcher:
         self.enabled: bool = True
         # Per-category mute (default: critical always on, others on)
         self.muted_categories: set[str] = set()
+        # Not used by the dispatcher itself — coordinator reads it from
+        # the persisted config blob. Held here only so update_config's
+        # allowlist accepts it without emitting a spurious warning when
+        # the coordinator splats the whole notifications config.
+        self.low_moisture_alerts: bool = True
+
+    # Explicit allowlist of attrs settable via update_config. setattr-based
+    # fallback was too permissive — a typo like `notify_targest` would
+    # silently stick on the dispatcher and the user would never know
+    # their config didn't apply.
+    _CONFIG_ALLOWLIST = frozenset(
+        {
+            "notify_target",
+            "notify_targets",
+            "quiet_hours_start",
+            "quiet_hours_end",
+            "enabled",
+            "muted_categories",
+            "low_moisture_alerts",
+        }
+    )
 
     def update_config(self, **kwargs) -> None:
         for k, v in kwargs.items():
             if k == "notify_targets":
-                # Normalize: accept list, comma-separated string, or None
                 self.notify_targets = _coerce_target_list(v)
             elif k == "notify_target":
                 # Run the legacy single-target path through the same domain
                 # validator so a bad value can't sneak in via setattr.
                 cleaned = _coerce_target_list([v] if v else [])
                 self.notify_target = cleaned[0] if cleaned else None
-            elif hasattr(self, k):
+            elif k in self._CONFIG_ALLOWLIST:
                 setattr(self, k, v)
+            else:
+                _LOGGER.warning(
+                    "Ignoring unknown notification config key %r (allowed: %s)",
+                    k,
+                    sorted(self._CONFIG_ALLOWLIST),
+                )
 
     def _resolved_targets(self) -> list[str]:
         """Return the list of notify.* services to fan out to.

@@ -24,6 +24,7 @@ WS_TYPE_LIST_SCHEDULES = f"{DOMAIN}/list_schedules"
 WS_TYPE_GET_CONFIG = f"{DOMAIN}/get_config"
 WS_TYPE_GET_ACTIVE_RUNS = f"{DOMAIN}/get_active_runs"
 WS_TYPE_LIST_RUN_HISTORY = f"{DOMAIN}/list_run_history"
+WS_TYPE_LIST_PLANNED_RUNS = f"{DOMAIN}/list_planned_runs"
 
 
 def _find_coordinator(hass: HomeAssistant):
@@ -122,9 +123,82 @@ async def list_run_history(hass, connection, msg):
     connection.send_result(msg["id"], {"records": records})
 
 
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): WS_TYPE_LIST_PLANNED_RUNS,
+        # Optional ISO timestamps; default = today through 7 days from now
+        # in HA's local time. We accept strings and parse them here so the
+        # panel can send `new Date().toISOString()` directly.
+        vol.Optional("from_dt"): str,
+        vol.Optional("until_dt"): str,
+    }
+)
+@websocket_api.async_response
+async def list_planned_runs(hass, connection, msg):
+    """Return resolved PlannedRuns in the requested window.
+
+    v1.16 — the panel used to re-implement calendar expansion in JS for
+    the Today calendar + Zones strip, missing start_date / repeat_annually
+    / configurable zone_buffer. This endpoint surfaces the server-side
+    `next_runs() → resolve_conflicts()` output instead so the panel
+    cannot drift.
+
+    The "skipped: cascade-cap" entries are returned too so the panel can
+    show why a run isn't going to fire.
+    """
+    from datetime import datetime, timedelta
+
+    from homeassistant.util import dt as dt_util
+
+    from .conflict_resolver import POLICY_DEFER_NEW, resolve_conflicts
+    from .run_planner import next_runs
+
+    coord = _find_coordinator(hass)
+    if coord is None:
+        connection.send_result(msg["id"], {"runs": []})
+        return
+
+    def _parse(s, default):
+        if not s:
+            return default
+        try:
+            dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        except ValueError:
+            return default
+        if dt.tzinfo is None:
+            dt = dt_util.as_local(dt.replace(tzinfo=dt_util.DEFAULT_TIME_ZONE))
+        return dt
+
+    now = dt_util.now()
+    from_dt = _parse(msg.get("from_dt"), now)
+    until_dt = _parse(msg.get("until_dt"), now + timedelta(days=7))
+
+    raw = next_runs(
+        coord.schedule_store.enabled_schedules(),
+        from_dt=from_dt,
+        until_dt=until_dt,
+        zone_buffer_seconds=coord.config.get("zone_buffer_seconds"),
+    )
+    resolved = resolve_conflicts(raw, POLICY_DEFER_NEW)
+
+    runs = [
+        {
+            "zone_entity_id": r.zone_entity_id,
+            "start_at": r.start_at.isoformat(),
+            "duration_minutes": int(r.duration_minutes),
+            "schedule_id": r.schedule_id,
+            "schedule_name": r.schedule_name,
+            "reason": r.reason,
+        }
+        for r in resolved
+    ]
+    connection.send_result(msg["id"], {"runs": runs})
+
+
 def async_register_ws_commands(hass: HomeAssistant) -> None:
     """Register all WS commands. Idempotent."""
     websocket_api.async_register_command(hass, list_schedules)
     websocket_api.async_register_command(hass, get_config)
     websocket_api.async_register_command(hass, get_active_runs)
     websocket_api.async_register_command(hass, list_run_history)
+    websocket_api.async_register_command(hass, list_planned_runs)

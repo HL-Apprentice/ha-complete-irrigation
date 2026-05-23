@@ -15,7 +15,13 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from .schedule import Schedule
+from .schedule import (
+    DEFAULT_ZONE_BUFFER_SECONDS,
+    MODE_INTERVAL,
+    MODE_INTERVAL_HOURS,
+    Schedule,
+    is_within_active_window,
+)
 
 
 @dataclass(frozen=True)
@@ -71,8 +77,6 @@ def _runs_for_schedule(
 
     Preserves `from_dt`'s tzinfo so aware/naive comparisons don't blow up.
     """
-    from .schedule import MODE_INTERVAL, MODE_INTERVAL_HOURS
-
     if sched.mode == MODE_INTERVAL:
         yield from _runs_for_interval(sched, from_dt, until_dt, zone_buffer_seconds)
     elif sched.mode == MODE_INTERVAL_HOURS:
@@ -90,8 +94,6 @@ def _expand_steps(
     Multi-zone schedules emit one per step, each starting after the
     previous one's duration + buffer (defaults to DEFAULT_ZONE_BUFFER_SECONDS).
     """
-    from .schedule import DEFAULT_ZONE_BUFFER_SECONDS
-
     buf = DEFAULT_ZONE_BUFFER_SECONDS if buffer_seconds is None else int(buffer_seconds)
     cursor = base_start
     for step in sched.all_steps():
@@ -108,9 +110,12 @@ def _expand_steps(
         )
 
 
-def _runs_for_weekdays(sched, from_dt, until_dt, buffer_seconds=None):
-    from .schedule import is_within_active_window
-
+def _runs_for_weekdays(
+    sched: Schedule,
+    from_dt: datetime,
+    until_dt: datetime,
+    buffer_seconds: int | None = None,
+) -> Iterable[PlannedRun]:
     tz = from_dt.tzinfo
     weekday_set = set(sched.weekdays)
     current = from_dt.date()
@@ -134,11 +139,14 @@ def _runs_for_weekdays(sched, from_dt, until_dt, buffer_seconds=None):
         current += timedelta(days=1)
 
 
-def _runs_for_interval(sched, from_dt, until_dt, buffer_seconds=None):
+def _runs_for_interval(
+    sched: Schedule,
+    from_dt: datetime,
+    until_dt: datetime,
+    buffer_seconds: int | None = None,
+) -> Iterable[PlannedRun]:
     """Generate dates every `interval_days` days starting at `interval_anchor`.
     Skip past dates before the window, stop at end_date / window end."""
-    from .schedule import is_within_active_window
-
     tz = from_dt.tzinfo
     step = sched.interval_days
     anchor = sched.interval_anchor
@@ -164,7 +172,12 @@ def _runs_for_interval(sched, from_dt, until_dt, buffer_seconds=None):
         current += timedelta(days=step)
 
 
-def _runs_for_interval_hours(sched, from_dt, until_dt, buffer_seconds=None):
+def _runs_for_interval_hours(
+    sched: Schedule,
+    from_dt: datetime,
+    until_dt: datetime,
+    buffer_seconds: int | None = None,
+) -> Iterable[PlannedRun]:
     """Generate runs every `interval_hours` from interval_anchor + start_time.
 
     Two sub-modes:
@@ -179,8 +192,6 @@ def _runs_for_interval_hours(sched, from_dt, until_dt, buffer_seconds=None):
 
     Skips runs before interval_anchor; stops at end_date if set.
     """
-    from .schedule import is_within_active_window
-
     tz = from_dt.tzinfo
     step_hours = sched.interval_hours
     anchor_dt = datetime.combine(sched.interval_anchor, sched.start_time, tzinfo=tz)

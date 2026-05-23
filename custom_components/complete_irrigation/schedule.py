@@ -126,6 +126,20 @@ class Schedule:
     created_via: str = "panel"
 
     def __post_init__(self) -> None:
+        # Validation split into small focused helpers — keeps each rule
+        # adjacent to its error message and the whole flow scannable.
+        self._validate_basics()
+        if self.mode == MODE_WEEKDAYS:
+            self._validate_weekdays_mode()
+        elif self.mode == MODE_INTERVAL:
+            self._validate_interval_mode()
+        elif self.mode == MODE_INTERVAL_HOURS:
+            self._validate_interval_hours_mode()
+        self._validate_interval_end_time_only_in_hours_mode()
+        self._validate_active_window()
+        self._validate_zone_steps()
+
+    def _validate_basics(self) -> None:
         if not self.name or not self.name.strip():
             raise ValueError("name must be non-empty")
         if not self.zone_entity_id:
@@ -134,61 +148,66 @@ class Schedule:
             raise ValueError(f"duration_minutes must be positive, got {self.duration_minutes}")
         if self.mode not in _VALID_MODES:
             raise ValueError(f"mode must be one of {_VALID_MODES}, got {self.mode!r}")
-        if self.mode == MODE_WEEKDAYS:
-            if not self.weekdays:
-                raise ValueError("weekdays mode requires non-empty weekdays")
-            if not set(self.weekdays).issubset(_VALID_WEEKDAYS):
-                raise ValueError(f"weekdays must be in 0..6, got {sorted(self.weekdays)}")
-        elif self.mode == MODE_INTERVAL:
-            if self.interval_days is None or self.interval_days < 1:
-                raise ValueError(
-                    f"interval mode requires interval_days >= 1, got {self.interval_days}"
-                )
-            if self.interval_anchor is None:
-                raise ValueError("interval mode requires interval_anchor (start date)")
-        elif self.mode == MODE_INTERVAL_HOURS:
-            if self.interval_hours is None or self.interval_hours < 1:
-                raise ValueError(
-                    f"interval_hours mode requires interval_hours >= 1, got {self.interval_hours}"
-                )
-            if self.interval_anchor is None:
-                raise ValueError("interval_hours mode requires interval_anchor (start date)")
-            # Daily-window cap (optional). When provided, must be strictly
-            # after start_time so at least one firing fits in the window.
-            if self.interval_end_time is not None and self.interval_end_time <= self.start_time:
-                raise ValueError(
-                    "interval_end_time must be after start_time "
-                    f"(got {self.start_time} → {self.interval_end_time})"
-                )
-        # interval_end_time is only meaningful for interval_hours mode.
-        # Catch misuse in any other mode regardless of the per-mode block above.
+
+    def _validate_weekdays_mode(self) -> None:
+        if not self.weekdays:
+            raise ValueError("weekdays mode requires non-empty weekdays")
+        if not set(self.weekdays).issubset(_VALID_WEEKDAYS):
+            raise ValueError(f"weekdays must be in 0..6, got {sorted(self.weekdays)}")
+
+    def _validate_interval_mode(self) -> None:
+        if self.interval_days is None or self.interval_days < 1:
+            raise ValueError(f"interval mode requires interval_days >= 1, got {self.interval_days}")
+        if self.interval_anchor is None:
+            raise ValueError("interval mode requires interval_anchor (start date)")
+
+    def _validate_interval_hours_mode(self) -> None:
+        if self.interval_hours is None or self.interval_hours < 1:
+            raise ValueError(
+                f"interval_hours mode requires interval_hours >= 1, got {self.interval_hours}"
+            )
+        if self.interval_anchor is None:
+            raise ValueError("interval_hours mode requires interval_anchor (start date)")
+        # Daily-window cap (optional). When provided, must be strictly
+        # after start_time so at least one firing fits in the window.
+        if self.interval_end_time is not None and self.interval_end_time <= self.start_time:
+            raise ValueError(
+                "interval_end_time must be after start_time "
+                f"(got {self.start_time} → {self.interval_end_time})"
+            )
+
+    def _validate_interval_end_time_only_in_hours_mode(self) -> None:
         if self.mode != MODE_INTERVAL_HOURS and self.interval_end_time is not None:
             raise ValueError("interval_end_time is only valid in interval_hours mode")
+
+    def _validate_active_window(self) -> None:
         # Active period (v1.12): when repeat_annually is on, BOTH dates
         # are required and start.month-day must come before end.month-day
         # (we don't support windows that wrap across the year boundary in
         # this release — keeps the per-year membership check unambiguous).
-        if self.repeat_annually:
-            if self.start_date is None or self.end_date is None:
-                raise ValueError("repeat_annually requires both start_date and end_date")
-            start_md = (self.start_date.month, self.start_date.day)
-            end_md = (self.end_date.month, self.end_date.day)
-            if start_md > end_md:
-                raise ValueError(
-                    "annually-repeating window must not wrap across year-end "
-                    "(start month-day must be on/before end month-day)"
-                )
+        if not self.repeat_annually:
+            return
+        if self.start_date is None or self.end_date is None:
+            raise ValueError("repeat_annually requires both start_date and end_date")
+        start_md = (self.start_date.month, self.start_date.day)
+        end_md = (self.end_date.month, self.end_date.day)
+        if start_md > end_md:
+            raise ValueError(
+                "annually-repeating window must not wrap across year-end "
+                "(start month-day must be on/before end month-day)"
+            )
+
+    def _validate_zone_steps(self) -> None:
         # Multi-zone: first step must agree with the top-level zone/duration
         # (the top-level fields stay authoritative for legacy single-zone
         # consumers; the steps tuple is an extension).
-        if self.zone_steps:
-            first = self.zone_steps[0]
-            if first.zone_entity_id != self.zone_entity_id:
-                raise ValueError("zone_steps[0].zone_entity_id must match top-level zone_entity_id")
-            if first.duration_minutes != self.duration_minutes:
-                raise ValueError(
-                    "zone_steps[0].duration_minutes must match top-level duration_minutes"
-                )
+        if not self.zone_steps:
+            return
+        first = self.zone_steps[0]
+        if first.zone_entity_id != self.zone_entity_id:
+            raise ValueError("zone_steps[0].zone_entity_id must match top-level zone_entity_id")
+        if first.duration_minutes != self.duration_minutes:
+            raise ValueError("zone_steps[0].duration_minutes must match top-level duration_minutes")
 
     def with_changes(self, **overrides: Any) -> Schedule:
         """Return a new Schedule with the given field overrides.
