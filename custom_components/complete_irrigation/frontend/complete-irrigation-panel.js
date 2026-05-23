@@ -1271,7 +1271,7 @@
 
       return (
         `<header class="page-header"><h2>Notifications</h2>` +
-        `<span class="version-pill">v1.13.4</span></header>` +
+        `<span class="version-pill">v1.13.5</span></header>` +
         `<form class="weather-form" data-form="notifications">` +
         `<label class="enabled-check"><input type="checkbox" name="enabled"${
           enabled ? " checked" : ""
@@ -1370,7 +1370,7 @@
 
       return (
         `<header class="page-header"><h2>Settings</h2>` +
-        `<span class="version-pill">v1.13.4</span></header>` +
+        `<span class="version-pill">v1.13.5</span></header>` +
         `<section class="settings-card">` +
         `<h3 class="section-title">Theme ${tip("Cycle Light/Dark/Auto with the ☀️/🌙 button on Today, or pick one of your HA-installed themes below.")}</h3>` +
         `<p class="section-hint">Light/Dark/Auto: <strong>${escapeHtml(themeLabel)}</strong>.</p>` +
@@ -1439,7 +1439,7 @@
         `<section class="settings-card">` +
         `<h3 class="section-title">About</h3>` +
         `<table class="settings-table">` +
-        `<tr><td>Version</td><td><strong>v1.13.4</strong></td></tr>` +
+        `<tr><td>Version</td><td><strong>v1.13.5</strong></td></tr>` +
         `<tr><td>Repository</td><td><a href="${repoUrl}" target="_blank">${escapeHtml(repoUrl)}</a></td></tr>` +
         `<tr><td>Zones configured</td><td>${(this._panel?.config?.zones || []).length}</td></tr>` +
         `<tr><td>Schedules</td><td>${(this._schedules || []).length}</td></tr>` +
@@ -1568,7 +1568,7 @@
       return (
         `<header class="page-header"><h2>Today</h2>` +
         `<div class="page-header-right">${themeBtn}` +
-        `<span class="version-pill">v1.13.4</span></div></header>` +
+        `<span class="version-pill">v1.13.5</span></div></header>` +
         this._renderRainLockoutBanner() +
         this._renderWeatherBanner() +
         `<section>` +
@@ -2081,7 +2081,7 @@
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Zones</h2>` +
-          `<span class="version-pill">v1.13.4</span></header>` +
+          `<span class="version-pill">v1.13.5</span></header>` +
           `<div class="empty"><p>No zones configured. Add them via Settings → Devices &amp; Services.</p></div>`
         );
       }
@@ -2090,7 +2090,7 @@
         .join("");
       return (
         `<header class="page-header"><h2>Zones</h2>` +
-        `<span class="version-pill">v1.13.4</span></header>` +
+        `<span class="version-pill">v1.13.5</span></header>` +
         `<p class="section-hint">Hidden zones still run on schedule — they're just hidden from the Today view.</p>` +
         `<div class="zones-list">${rows}</div>`
       );
@@ -2443,27 +2443,53 @@
     }
 
     _renderDayCalendar() {
-      // Vertical day calendar replacing the old horizontal timeline +
-      // tomorrow list. Shows all runs for the currently-selected day
-      // (this._calendarDayOffset). User navigates with ← / Today / →.
+      // Vertical day calendar — 2-day window so users see today + tomorrow
+      // at a glance. ← / → shift the window by one day; "Today" snaps back.
+      // Layout: two columns on desktop, stacked on mobile (CSS handles).
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       const offset = this._calendarDayOffset || 0;
-      const selected = new Date(today.getTime() + offset * 86400000);
-      const runs = this._runsForDay(selected);
+      const dayA = new Date(today.getTime() + offset * 86400000);
+      const dayB = new Date(today.getTime() + (offset + 1) * 86400000);
 
-      // Heading label varies by relative offset for friendly UX.
+      const navBar =
+        `<div class="day-cal-nav">` +
+        `<button class="btn btn-small" data-action="day-cal-prev" title="Previous day">←</button>` +
+        `<span class="day-cal-label">${escapeHtml(this._dayLabel(dayA, offset))} <span class="day-cal-arrow">→</span> ${escapeHtml(this._dayLabel(dayB, offset + 1))}</span>` +
+        `<button class="btn btn-small" data-action="day-cal-next" title="Next day">→</button>` +
+        (offset !== 0
+          ? `<button class="btn btn-small" data-action="day-cal-today">Today</button>`
+          : "") +
+        `</div>`;
+
+      return (
+        `<section class="day-cal">` +
+        navBar +
+        `<div class="day-cal-cols">` +
+        this._renderDayColumn(dayA, offset) +
+        this._renderDayColumn(dayB, offset + 1) +
+        `</div>` +
+        `</section>`
+      );
+    }
+
+    _dayLabel(date, offset) {
       const fmtDate = (d) =>
         d.toLocaleDateString(undefined, {
           weekday: "long",
           month: "short",
           day: "numeric",
         });
-      let label;
-      if (offset === 0) label = `Today — ${fmtDate(selected)}`;
-      else if (offset === 1) label = `Tomorrow — ${fmtDate(selected)}`;
-      else if (offset === -1) label = `Yesterday — ${fmtDate(selected)}`;
-      else label = fmtDate(selected);
+      if (offset === 0) return `Today — ${fmtDate(date)}`;
+      if (offset === 1) return `Tomorrow — ${fmtDate(date)}`;
+      if (offset === -1) return `Yesterday — ${fmtDate(date)}`;
+      return fmtDate(date);
+    }
+
+    _renderDayColumn(selected, offset) {
+      // One 24-hour vertical grid for a single day. Used twice by
+      // _renderDayCalendar to show a 2-day window.
+      const runs = this._runsForDay(selected);
 
       const fmtTime = (m) => {
         const h = Math.floor(m / 60);
@@ -2473,26 +2499,12 @@
         return `${h12}:${mm} ${ampm}`;
       };
 
-      // "Now" minute-of-day, only relevant when viewing today
       const now = new Date();
       const nowMin = now.getHours() * 60 + now.getMinutes();
       const isToday = offset === 0;
 
-      const navBar =
-        `<div class="day-cal-nav">` +
-        `<button class="btn btn-small" data-action="day-cal-prev" title="Previous day">←</button>` +
-        `<span class="day-cal-label">${escapeHtml(label)} <span class="day-cal-count">(${runs.length} run${runs.length === 1 ? "" : "s"})</span></span>` +
-        `<button class="btn btn-small" data-action="day-cal-next" title="Next day">→</button>` +
-        (offset !== 0
-          ? `<button class="btn btn-small" data-action="day-cal-today">Today</button>`
-          : "") +
-        `</div>`;
-
-      // 24-hour time grid. One <div class="day-cal-hour"> per hour, each
-      // 60px tall. Hour line = top border (solid). Half-hour line = ::after
-      // pseudo-element at 50% height with 30% opacity. Runs are absolutely
-      // positioned over the grid using 1px per minute (top = start_minutes,
-      // height = duration_minutes, min 18px so 5-min runs stay legible).
+      // 24-hour time grid markers — hour line solid (top border on each
+      // .day-cal-hour), half-hour line at 50% opacity via ::after pseudo.
       const hourLabels = [];
       for (let h = 0; h < 24; h++) {
         const ampm = h >= 12 ? "PM" : "AM";
@@ -2503,7 +2515,7 @@
       }
       const hours = hourLabels.join("");
 
-      // Pills — one per run, absolutely positioned.
+      // Pills — absolutely positioned, 1px per minute, min 18px tall.
       const pills = runs
         .map((r) => {
           const top = r.start_minutes;
@@ -2523,12 +2535,20 @@
             }
           }
           const endMin = r.start_minutes + r.duration_minutes;
-          const title =
-            `${r.schedule_name} → ${r.zone_name}\n` +
-            `${fmtTime(r.start_minutes)} – ${fmtTime(endMin)} (${r.duration_minutes} min)\n` +
-            `Click to edit`;
+          // Hover-card payload: split into structured data-attrs so the
+          // tooltip element can render rich, multi-line info instantly
+          // (native title="..." takes ~1s and can't be styled).
+          const hoverTitle = `${r.schedule_name} → ${r.zone_name}`;
+          const hoverWhen = `${fmtTime(r.start_minutes)} – ${fmtTime(endMin)} (${r.duration_minutes} min)`;
+          const hoverHint = "Click to edit schedule";
           return (
-            `<div class="${cls}" style="top:${top}px;height:${height}px" data-action="open-schedule-edit" data-schedule-id="${escapeAttr(r.schedule_id)}" title="${escapeAttr(title)}">` +
+            `<div class="${cls}" style="top:${top}px;height:${height}px" ` +
+            `data-action="open-schedule-edit" data-schedule-id="${escapeAttr(r.schedule_id)}" ` +
+            `data-hover-title="${escapeAttr(hoverTitle)}" ` +
+            `data-hover-when="${escapeAttr(hoverWhen)}" ` +
+            `data-hover-hint="${escapeAttr(hoverHint)}${status ? " · " + status.replace(/^ · /, "") : ""}" ` +
+            // keep native title as accessibility fallback
+            `title="${escapeAttr(hoverTitle + "\n" + hoverWhen + "\n" + hoverHint)}">` +
             `<div class="day-cal-pill-time">${fmtTime(r.start_minutes)}</div>` +
             `<div class="day-cal-pill-zone">${escapeHtml(r.zone_name)}</div>` +
             `<div class="day-cal-pill-meta">${escapeHtml(r.schedule_name)} · ${r.duration_minutes}m${status}</div>` +
@@ -2537,24 +2557,29 @@
         })
         .join("");
 
-      // Red "now" line when viewing today
       const nowMarker = isToday
         ? `<div class="day-cal-now" style="top:${nowMin}px" title="Now: ${fmtTime(nowMin)}"></div>`
         : "";
 
       const emptyHint =
         runs.length === 0
-          ? `<div class="day-cal-empty-hint">No runs scheduled for this day.</div>`
+          ? `<div class="day-cal-empty-hint">No runs scheduled.</div>`
           : "";
 
+      const colHead =
+        `<div class="day-cal-col-head">` +
+        `<span class="day-cal-col-title">${escapeHtml(this._dayLabel(selected, offset))}</span>` +
+        `<span class="day-cal-col-count">${runs.length} run${runs.length === 1 ? "" : "s"}</span>` +
+        `</div>`;
+
       return (
-        `<section class="day-cal">` +
-        navBar +
+        `<div class="day-cal-col">` +
+        colHead +
         `<div class="day-cal-grid">` +
         `<div class="day-cal-hours">${hours}</div>` +
         `<div class="day-cal-pills">${nowMarker}${pills}${emptyHint}</div>` +
         `</div>` +
-        `</section>`
+        `</div>`
       );
     }
 
@@ -2564,7 +2589,7 @@
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Sensors</h2>` +
-          `<span class="version-pill">v1.13.4</span></header>` +
+          `<span class="version-pill">v1.13.5</span></header>` +
           `<div class="empty"><p>No zones configured.</p></div>`
         );
       }
@@ -2573,7 +2598,7 @@
         .join("");
       return (
         `<header class="page-header"><h2>Sensors</h2>` +
-        `<span class="version-pill">v1.13.4</span></header>` +
+        `<span class="version-pill">v1.13.5</span></header>` +
         `<p class="section-hint">Bind soil-moisture sensors to a zone so runtimes auto-adjust based on actual moisture. You can attach one sensor or several (combined as average, lowest, highest, or just the primary).</p>` +
         `<div class="sensor-zone-list">${cards}</div>`
       );
@@ -2990,7 +3015,7 @@
 
       return (
         `<header class="page-header"><h2>Weather</h2>` +
-        `<span class="version-pill">v1.13.4</span></header>` +
+        `<span class="version-pill">v1.13.5</span></header>` +
         lockoutHtml +
         forecastHtml +
         `<form class="weather-form" data-form="weather">` +
@@ -3524,6 +3549,12 @@
         `.day-cal-nav{display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap}` +
         `.day-cal-label{flex:1;font-weight:600;font-size:15px;color:var(--ci-text)}` +
         `.day-cal-count{font-weight:400;font-size:13px;color:var(--ci-text-2);margin-left:6px}` +
+        // 2-day window — side-by-side columns on desktop, stacked on mobile.
+        `.day-cal-cols{display:grid;grid-template-columns:1fr 1fr;gap:12px}` +
+        `.day-cal-col{display:flex;flex-direction:column;min-width:0}` +
+        `.day-cal-col-head{display:flex;justify-content:space-between;align-items:baseline;padding:4px 4px 8px;font-weight:600;font-size:13px;color:var(--ci-text)}` +
+        `.day-cal-col-count{color:var(--ci-text-2);font-weight:400;font-size:12px}` +
+        `.day-cal-arrow{color:var(--ci-text-2);margin:0 6px}` +
         // 24-hour time grid. 1 minute = 1px; full day = 1440px. Scrollable
         // viewport caps at ~600px so the section doesn't dominate the page.
         `.day-cal-grid{position:relative;height:600px;overflow-y:auto;background:var(--ci-card);border:1px solid var(--ci-border);border-radius:12px}` +
@@ -3534,13 +3565,19 @@
         `.day-cal-hour::after{content:"";position:absolute;left:0;right:0;top:30px;border-top:1px solid var(--ci-border);opacity:0.5}` +
         `.day-cal-hour-label{position:absolute;left:6px;top:2px;font-size:10px;color:var(--ci-text-2);font-variant-numeric:tabular-nums}` +
         `.day-cal-pills{position:absolute;top:0;left:60px;right:8px;height:1440px;pointer-events:none}` +
-        `.day-cal-pill{position:absolute;left:0;right:0;background:var(--ci-accent);color:#fff;border-radius:6px;padding:3px 8px;font-size:11px;line-height:1.15;overflow:hidden;cursor:pointer;pointer-events:auto;box-shadow:0 1px 2px rgba(0,0,0,0.15);box-sizing:border-box}` +
-        `.day-cal-pill:hover{filter:brightness(1.1)}` +
+        `.day-cal-pill{position:absolute;left:0;right:0;background:var(--ci-accent);color:#fff;border-radius:6px;padding:3px 8px;font-size:11px;line-height:1.15;overflow:hidden;cursor:pointer;pointer-events:auto;box-shadow:0 1px 2px rgba(0,0,0,0.15);box-sizing:border-box;transition:min-height 0.12s ease,box-shadow 0.12s ease}` +
+        // On hover — expand the pill so all details are visible without
+        // a separate tooltip. min-height kicks in immediately so 18px
+        // pills become full-info cards; z-index raises above neighbors.
+        `.day-cal-pill:hover{min-height:78px;z-index:20;box-shadow:0 6px 16px rgba(0,0,0,0.28);filter:brightness(1.05)}` +
         `.day-cal-pill.past{opacity:0.55;background:var(--ci-text-2)}` +
         `.day-cal-pill.live{background:#43a047;box-shadow:0 0 0 3px rgba(67,160,71,0.35)}` +
         `.day-cal-pill-time{font-weight:700;font-size:10px;opacity:0.95}` +
         `.day-cal-pill-zone{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}` +
         `.day-cal-pill-meta{font-size:10px;opacity:0.9;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}` +
+        // On hover, allow the meta line to wrap (full info visible)
+        `.day-cal-pill:hover .day-cal-pill-meta{white-space:normal;overflow:visible}` +
+        `.day-cal-pill:hover .day-cal-pill-zone{white-space:normal;overflow:visible}` +
         // Red "now" line — only shown on today.
         `.day-cal-now{position:absolute;left:0;right:0;border-top:2px solid #db4437;z-index:2;pointer-events:none}` +
         `.day-cal-empty-hint{position:absolute;top:24px;left:60px;right:8px;text-align:center;color:var(--ci-text-2);font-size:13px}` +
@@ -3712,6 +3749,8 @@
         `.modal-wide{min-width:0}` +
         // Two-column rows become single-column
         `.row-2,.row-3{grid-template-columns:1fr}` +
+        // Day calendar: stack the 2-day columns vertically on phones
+        `.day-cal-cols{grid-template-columns:1fr}` +
         // Weather banner: keep cells flowing
         `.weather-banner{grid-template-columns:repeat(auto-fit,minmax(120px,1fr));padding:12px}` +
         `.banner-gear{top:6px;right:6px}` +
@@ -3752,5 +3791,5 @@
   }
 
   customElements.define(ELEMENT_NAME, CompleteIrrigationPanel);
-  console.info("[complete-irrigation] panel registered, version v1.13.4");
+  console.info("[complete-irrigation] panel registered, version v1.13.5");
 })();
