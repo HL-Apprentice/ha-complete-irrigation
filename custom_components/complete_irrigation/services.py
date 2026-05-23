@@ -100,8 +100,11 @@ _ADD_SCHEDULE_SCHEMA = vol.Schema(
             [vol.All(vol.Coerce(int), vol.Range(min=0, max=6))],
         ),
         vol.Optional("enabled", default=True): cv.boolean,
-        vol.Optional("mode", default="weekdays"): vol.In(("weekdays", "interval")),
+        vol.Optional("mode", default="weekdays"): vol.In(
+            ("weekdays", "interval", "interval_hours")
+        ),
         vol.Optional("interval_days"): vol.All(vol.Coerce(int), vol.Range(min=1, max=365)),
+        vol.Optional("interval_hours"): vol.All(vol.Coerce(int), vol.Range(min=1, max=72)),
         vol.Optional("interval_anchor"): cv.date,
         # Multi-zone: optional list of {zone_entity_id, duration_minutes}.
         # First step must equal zone_entity_id + duration_minutes.
@@ -123,8 +126,9 @@ _UPDATE_SCHEDULE_SCHEMA = vol.Schema(
         ),
         vol.Optional("weekdays"): _WEEKDAYS_SCHEMA,
         vol.Optional("enabled"): cv.boolean,
-        vol.Optional("mode"): vol.In(("weekdays", "interval")),
+        vol.Optional("mode"): vol.In(("weekdays", "interval", "interval_hours")),
         vol.Optional("interval_days"): vol.All(vol.Coerce(int), vol.Range(min=1, max=365)),
+        vol.Optional("interval_hours"): vol.All(vol.Coerce(int), vol.Range(min=1, max=72)),
         vol.Optional("interval_anchor"): cv.date,
         vol.Optional("zone_steps"): vol.All(cv.ensure_list, [_ZONE_STEP_SCHEMA]),
     }
@@ -446,6 +450,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             enabled=data["enabled"],
             mode=data["mode"],
             interval_days=data.get("interval_days"),
+            interval_hours=data.get("interval_hours"),
             interval_anchor=data.get("interval_anchor"),
             zone_steps=zone_steps,
             # PRD #60 — provenance marker so calendar.py / establishment
@@ -488,6 +493,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             enabled=data.get("enabled", existing.enabled),
             mode=data.get("mode", existing.mode),
             interval_days=data.get("interval_days", existing.interval_days),
+            interval_hours=data.get("interval_hours", existing.interval_hours),
             interval_anchor=data.get("interval_anchor", existing.interval_anchor),
             end_date=existing.end_date,
             zone_steps=new_steps,
@@ -525,6 +531,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             end_date=existing.end_date,
             mode=existing.mode,
             interval_days=existing.interval_days,
+            interval_hours=existing.interval_hours,
             interval_anchor=existing.interval_anchor,
             zone_steps=existing.zone_steps,
             created_via=existing.created_via,

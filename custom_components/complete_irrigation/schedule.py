@@ -17,7 +17,8 @@ _VALID_WEEKDAYS = frozenset(range(7))  # 0=Mon .. 6=Sun (ISO)
 
 MODE_WEEKDAYS = "weekdays"
 MODE_INTERVAL = "interval"
-_VALID_MODES = (MODE_WEEKDAYS, MODE_INTERVAL)
+MODE_INTERVAL_HOURS = "interval_hours"
+_VALID_MODES = (MODE_WEEKDAYS, MODE_INTERVAL, MODE_INTERVAL_HOURS)
 
 # Default gap (seconds) between back-to-back zones in a multi-zone schedule.
 # Lets the valve close fully before the next opens.
@@ -85,6 +86,9 @@ class Schedule:
     # interval mode: fire every N days starting interval_anchor
     interval_days: int | None = None
     interval_anchor: date | None = None
+    # interval_hours mode: fire every N hours from interval_anchor +
+    # start_time, continuing across day boundaries.
+    interval_hours: int | None = None
     # Multi-zone: ordered tuple of ZoneStep. When non-empty the schedule
     # fires zones back-to-back at run time (each waits for the previous to
     # finish, plus DEFAULT_ZONE_BUFFER_SECONDS). The first step mirrors
@@ -118,6 +122,13 @@ class Schedule:
                 )
             if self.interval_anchor is None:
                 raise ValueError("interval mode requires interval_anchor (start date)")
+        elif self.mode == MODE_INTERVAL_HOURS:
+            if self.interval_hours is None or self.interval_hours < 1:
+                raise ValueError(
+                    f"interval_hours mode requires interval_hours >= 1, got {self.interval_hours}"
+                )
+            if self.interval_anchor is None:
+                raise ValueError("interval_hours mode requires interval_anchor (start date)")
         # Multi-zone: first step must agree with the top-level zone/duration
         # (the top-level fields stay authoritative for legacy single-zone
         # consumers; the steps tuple is an extension).
@@ -157,6 +168,7 @@ class Schedule:
             "mode": self.mode,
             "interval_days": self.interval_days,
             "interval_anchor": (self.interval_anchor.isoformat() if self.interval_anchor else None),
+            "interval_hours": self.interval_hours,
             "zone_steps": [s.to_dict() for s in self.zone_steps],
             "created_via": self.created_via,
         }
@@ -187,6 +199,7 @@ class Schedule:
             mode=mode,
             interval_days=data.get("interval_days"),
             interval_anchor=anchor_val,
+            interval_hours=data.get("interval_hours"),
             zone_steps=zone_steps,
             created_via=data.get("created_via", "panel"),
         )
