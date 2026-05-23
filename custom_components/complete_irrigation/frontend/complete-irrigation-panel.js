@@ -44,6 +44,7 @@
     { id: "today", label: "Today", icon: "📅" },
     { id: "schedules", label: "Schedules", icon: "⏰" },
     { id: "zones", label: "Zones", icon: "🌱" },
+    { id: "history", label: "History", icon: "📜" },
     { id: "sensors", label: "Sensors", icon: "📊" },
     { id: "weather", label: "Weather", icon: "🌧️" },
     { id: "notifications", label: "Notifications", icon: "🔔" },
@@ -137,6 +138,14 @@
         if (layout) this._bannerLayout = JSON.parse(layout);
       } catch (_) {}
       this._currentSection = "today";
+
+      // Run history (v1.14) — lazy-loaded when the History tab opens.
+      this._runHistory = [];
+      this._runHistoryLoaded = false;
+      // Filter state for the History tab — kept on the instance so it
+      // survives re-renders within the same session (not persisted).
+      this._historyFilters = { zone: "", schedule: "", status: "", days: 7 };
+      this._historyExpanded = new Set();  // record ids whose trigger blob is open
 
       // Manual-run modal state
       this._runModalOpen = false;
@@ -336,6 +345,22 @@
           this._calendarDayOffset = 0;
           return this._renderNow();
         }
+        if (action === "history-refresh") {
+          this._fetchRunHistory();
+          return;
+        }
+        if (action === "history-clear") {
+          if (!confirm("Delete every run-history record? This cannot be undone.")) return;
+          this._clearRunHistory();
+          return;
+        }
+        if (action === "history-toggle-triggers") {
+          const id = node.dataset.recordId;
+          if (!id) return;
+          if (this._historyExpanded.has(id)) this._historyExpanded.delete(id);
+          else this._historyExpanded.add(id);
+          return this._renderNow();
+        }
         if (action === "open-schedule-edit") {
           // Click on a Today-timeline pill or Tomorrow-list row →
           // jump to the Schedules tab and open the edit modal for
@@ -465,7 +490,26 @@
 
     _onChange(e) {
       const t = e.target;
-      if (!t || !t.name) return;
+      if (!t) return;
+      // History filters — driven by data-action, not name.
+      const action = t.dataset?.action;
+      if (action === "history-filter-zone") {
+        this._historyFilters.zone = t.value;
+        return this._renderNow();
+      }
+      if (action === "history-filter-schedule") {
+        this._historyFilters.schedule = t.value;
+        return this._renderNow();
+      }
+      if (action === "history-filter-status") {
+        this._historyFilters.status = t.value;
+        return this._renderNow();
+      }
+      if (action === "history-filter-days") {
+        this._historyFilters.days = parseInt(t.value, 10) || 0;
+        return this._renderNow();
+      }
+      if (!t.name) return;
       // Sensor modal — track moisture checkbox toggles + the other fields
       if (this._sensorModalOpen && this._sensorEditor) {
         if (
@@ -654,6 +698,7 @@
     _navigateTo(sectionId) {
       this._currentSection = sectionId;
       if (sectionId === "schedules" && !this._schedulesLoaded) this._fetchSchedules();
+      if (sectionId === "history") this._fetchRunHistory();  // always refetch on open
       if (sectionId === "weather") {
         const w = this._findWeatherEntity();
         if (w && !this._forecastCache[w.entity_id]) {
@@ -855,6 +900,22 @@
       }
     }
 
+    async _fetchRunHistory() {
+      // Pulled lazily — only when the History tab opens, plus a refresh
+      // after run_zone/stop_zone since those mutate history.
+      if (!this._hass?.callWS) return;
+      try {
+        const res = await this._hass.callWS({
+          type: "complete_irrigation/list_run_history",
+        });
+        this._runHistory = (res && res.records) || [];
+        this._runHistoryLoaded = true;
+        this._scheduleRender();
+      } catch (err) {
+        console.error("[complete-irrigation] list_run_history failed:", err);
+      }
+    }
+
     async _fetchHaThemes() {
       // Pull the list of HA-installed themes so the Settings tab can
       // offer them as a picker. Response shape:
@@ -948,6 +1009,9 @@
           minutes,
         });
         this._startLocalCountdown(entityId, minutes);
+        // Refresh history if user is currently viewing it so the new
+        // run shows up at the top of the list right away.
+        if (this._currentSection === "history") this._fetchRunHistory();
       } catch (err) {
         alert("Failed to start zone: " + (err?.message || err));
       }
@@ -960,8 +1024,20 @@
           entity_id: entityId,
         });
         this._stopLocalCountdown(entityId);
+        if (this._currentSection === "history") this._fetchRunHistory();
       } catch (err) {
         alert("Failed to stop zone: " + (err?.message || err));
+      }
+    }
+
+    async _clearRunHistory() {
+      if (!this._hass?.callService) return;
+      try {
+        await this._hass.callService("complete_irrigation", "clear_run_history", {});
+        this._historyExpanded.clear();
+        await this._fetchRunHistory();
+      } catch (err) {
+        alert("Failed to clear run history: " + (err?.message || err));
       }
     }
 
@@ -1222,6 +1298,7 @@
       if (this._currentSection === "today") return this._renderToday();
       if (this._currentSection === "schedules") return this._renderSchedules();
       if (this._currentSection === "zones") return this._renderZones();
+      if (this._currentSection === "history") return this._renderHistory();
       if (this._currentSection === "sensors") return this._renderSensors();
       if (this._currentSection === "weather") return this._renderWeather();
       if (this._currentSection === "notifications") return this._renderNotifications();
@@ -1271,7 +1348,7 @@
 
       return (
         `<header class="page-header"><h2>Notifications</h2>` +
-        `<span class="version-pill">v1.13.5</span></header>` +
+        `<span class="version-pill">v1.14.0</span></header>` +
         `<form class="weather-form" data-form="notifications">` +
         `<label class="enabled-check"><input type="checkbox" name="enabled"${
           enabled ? " checked" : ""
@@ -1370,7 +1447,7 @@
 
       return (
         `<header class="page-header"><h2>Settings</h2>` +
-        `<span class="version-pill">v1.13.5</span></header>` +
+        `<span class="version-pill">v1.14.0</span></header>` +
         `<section class="settings-card">` +
         `<h3 class="section-title">Theme ${tip("Cycle Light/Dark/Auto with the ☀️/🌙 button on Today, or pick one of your HA-installed themes below.")}</h3>` +
         `<p class="section-hint">Light/Dark/Auto: <strong>${escapeHtml(themeLabel)}</strong>.</p>` +
@@ -1439,7 +1516,7 @@
         `<section class="settings-card">` +
         `<h3 class="section-title">About</h3>` +
         `<table class="settings-table">` +
-        `<tr><td>Version</td><td><strong>v1.13.5</strong></td></tr>` +
+        `<tr><td>Version</td><td><strong>v1.14.0</strong></td></tr>` +
         `<tr><td>Repository</td><td><a href="${repoUrl}" target="_blank">${escapeHtml(repoUrl)}</a></td></tr>` +
         `<tr><td>Zones configured</td><td>${(this._panel?.config?.zones || []).length}</td></tr>` +
         `<tr><td>Schedules</td><td>${(this._schedules || []).length}</td></tr>` +
@@ -1568,7 +1645,7 @@
       return (
         `<header class="page-header"><h2>Today</h2>` +
         `<div class="page-header-right">${themeBtn}` +
-        `<span class="version-pill">v1.13.5</span></div></header>` +
+        `<span class="version-pill">v1.14.0</span></div></header>` +
         this._renderRainLockoutBanner() +
         this._renderWeatherBanner() +
         `<section>` +
@@ -2081,7 +2158,7 @@
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Zones</h2>` +
-          `<span class="version-pill">v1.13.5</span></header>` +
+          `<span class="version-pill">v1.14.0</span></header>` +
           `<div class="empty"><p>No zones configured. Add them via Settings → Devices &amp; Services.</p></div>`
         );
       }
@@ -2090,7 +2167,7 @@
         .join("");
       return (
         `<header class="page-header"><h2>Zones</h2>` +
-        `<span class="version-pill">v1.13.5</span></header>` +
+        `<span class="version-pill">v1.14.0</span></header>` +
         `<p class="section-hint">Hidden zones still run on schedule — they're just hidden from the Today view.</p>` +
         `<div class="zones-list">${rows}</div>`
       );
@@ -2583,13 +2660,162 @@
       );
     }
 
+    // ── History tab ────────────────────────────────────────────────
+    _renderHistory() {
+      const all = Array.isArray(this._runHistory) ? this._runHistory : [];
+      const f = this._historyFilters;
+      const now = new Date();
+      const cutoff = f.days > 0 ? now.getTime() - f.days * 86400000 : 0;
+
+      // Distinct zones + schedules for the filter dropdowns. Built from the
+      // record set so filters auto-prune as old records age out.
+      const zoneSet = new Map();
+      const scheduleSet = new Map();
+      for (const r of all) {
+        if (r.zone_entity_id && !zoneSet.has(r.zone_entity_id)) {
+          zoneSet.set(r.zone_entity_id, r.zone_name || r.zone_entity_id);
+        }
+        if (r.schedule_id && !scheduleSet.has(r.schedule_id)) {
+          scheduleSet.set(r.schedule_id, r.schedule_name || r.schedule_id);
+        }
+      }
+      const zoneOptions = Array.from(zoneSet.entries())
+        .sort((a, b) => a[1].localeCompare(b[1]))
+        .map(([id, name]) =>
+          `<option value="${escapeAttr(id)}" ${f.zone === id ? "selected" : ""}>${escapeHtml(name)}</option>`
+        )
+        .join("");
+      const scheduleOptions = Array.from(scheduleSet.entries())
+        .sort((a, b) => a[1].localeCompare(b[1]))
+        .map(([id, name]) =>
+          `<option value="${escapeAttr(id)}" ${f.schedule === id ? "selected" : ""}>${escapeHtml(name)}</option>`
+        )
+        .join("");
+
+      // Apply filters
+      const filtered = all.filter((r) => {
+        if (f.zone && r.zone_entity_id !== f.zone) return false;
+        if (f.schedule && r.schedule_id !== f.schedule) return false;
+        if (f.status && r.status !== f.status) return false;
+        if (cutoff > 0) {
+          const started = Date.parse(r.started_at);
+          if (isFinite(started) && started < cutoff) return false;
+        }
+        return true;
+      });
+
+      const statusBadge = (s) => {
+        const cls = `history-status history-status-${s}`;
+        return `<span class="${cls}">${s}</span>`;
+      };
+
+      const fmtRow = (r) => {
+        const started = new Date(r.started_at);
+        const dateStr = started.toLocaleString(undefined, {
+          month: "short",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+        });
+        const sched = r.schedule_name
+          ? escapeHtml(r.schedule_name)
+          : `<span class="history-dim">Manual</span>`;
+        const requested = r.requested_minutes;
+        const actual = r.actual_minutes;
+        let durationCell;
+        if (r.status === "skipped") {
+          durationCell = `<span class="history-dim">${requested} min · skipped</span>`;
+        } else if (actual === null || actual === undefined) {
+          durationCell = `<span class="history-dim">${requested} min planned</span>`;
+        } else if (actual === requested) {
+          durationCell = `${actual} min`;
+        } else {
+          durationCell = `${actual} / ${requested} min`;
+        }
+        const reason = r.reason
+          ? `<span class="history-reason">${escapeHtml(r.reason)}</span>`
+          : "";
+        const hasTriggers = r.triggers && Object.keys(r.triggers).length > 0;
+        const expanded = this._historyExpanded.has(r.id);
+        const triggerCell = hasTriggers
+          ? `<button class="btn btn-small history-trigger-toggle" data-action="history-toggle-triggers" data-record-id="${escapeAttr(r.id)}">${expanded ? "▾" : "▸"} ${Object.keys(r.triggers).join(", ")}</button>`
+          : `<span class="history-dim">—</span>`;
+        const expandedBlock =
+          expanded && hasTriggers
+            ? `<tr class="history-expanded-row"><td colspan="6"><pre class="history-triggers">${escapeHtml(JSON.stringify(r.triggers, null, 2))}</pre></td></tr>`
+            : "";
+        return (
+          `<tr class="history-row history-row-${r.status}">` +
+          `<td class="history-when">${escapeHtml(dateStr)}</td>` +
+          `<td class="history-zone">${escapeHtml(r.zone_name || r.zone_entity_id)}</td>` +
+          `<td class="history-schedule">${sched}</td>` +
+          `<td class="history-duration">${durationCell}</td>` +
+          `<td class="history-status-cell">${statusBadge(r.status)}${reason ? "<br>" + reason : ""}</td>` +
+          `<td class="history-triggers-cell">${triggerCell}</td>` +
+          `</tr>` +
+          expandedBlock
+        );
+      };
+
+      const rowsHtml = filtered.length
+        ? filtered.map(fmtRow).join("")
+        : `<tr><td colspan="6" class="history-empty">No runs match these filters.</td></tr>`;
+
+      const loadingNote = !this._runHistoryLoaded
+        ? `<p class="history-loading">Loading…</p>`
+        : "";
+
+      return (
+        `<header class="page-header"><h2>Run history</h2>` +
+        `<span class="version-pill">v1.14.0</span></header>` +
+        `<div class="history-toolbar">` +
+        `<label>Zone <select data-action="history-filter-zone"><option value="">All zones</option>${zoneOptions}</select></label>` +
+        `<label>Schedule <select data-action="history-filter-schedule"><option value="">All schedules</option>${scheduleOptions}</select></label>` +
+        `<label>Status <select data-action="history-filter-status">` +
+        ["", "completed", "skipped", "aborted", "running"]
+          .map(
+            (s) =>
+              `<option value="${s}" ${f.status === s ? "selected" : ""}>${s || "All"}</option>`
+          )
+          .join("") +
+        `</select></label>` +
+        `<label>Range <select data-action="history-filter-days">` +
+        [
+          { v: 1, l: "Last 24 h" },
+          { v: 7, l: "Last 7 days" },
+          { v: 30, l: "Last 30 days" },
+          { v: 90, l: "Last 90 days" },
+          { v: 0, l: "All" },
+        ]
+          .map(
+            ({ v, l }) =>
+              `<option value="${v}" ${f.days === v ? "selected" : ""}>${l}</option>`
+          )
+          .join("") +
+        `</select></label>` +
+        `<button class="btn btn-small" data-action="history-refresh">Refresh</button>` +
+        `<button class="btn btn-small btn-stop" data-action="history-clear">Clear all</button>` +
+        `</div>` +
+        loadingNote +
+        `<p class="history-summary">${filtered.length} of ${all.length} record${all.length === 1 ? "" : "s"}</p>` +
+        `<div class="history-table-wrap">` +
+        `<table class="history-table">` +
+        `<thead><tr>` +
+        `<th>When</th><th>Zone</th><th>Schedule</th><th>Duration</th><th>Status</th><th>Triggers</th>` +
+        `</tr></thead>` +
+        `<tbody>${rowsHtml}</tbody>` +
+        `</table>` +
+        `</div>`
+      );
+    }
+
     // ── Sensors tab ────────────────────────────────────────────────
     _renderSensors() {
       const zones = this._zones();
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Sensors</h2>` +
-          `<span class="version-pill">v1.13.5</span></header>` +
+          `<span class="version-pill">v1.14.0</span></header>` +
           `<div class="empty"><p>No zones configured.</p></div>`
         );
       }
@@ -2598,7 +2824,7 @@
         .join("");
       return (
         `<header class="page-header"><h2>Sensors</h2>` +
-        `<span class="version-pill">v1.13.5</span></header>` +
+        `<span class="version-pill">v1.14.0</span></header>` +
         `<p class="section-hint">Bind soil-moisture sensors to a zone so runtimes auto-adjust based on actual moisture. You can attach one sensor or several (combined as average, lowest, highest, or just the primary).</p>` +
         `<div class="sensor-zone-list">${cards}</div>`
       );
@@ -3015,7 +3241,7 @@
 
       return (
         `<header class="page-header"><h2>Weather</h2>` +
-        `<span class="version-pill">v1.13.5</span></header>` +
+        `<span class="version-pill">v1.14.0</span></header>` +
         lockoutHtml +
         forecastHtml +
         `<form class="weather-form" data-form="weather">` +
@@ -3581,6 +3807,32 @@
         // Red "now" line — only shown on today.
         `.day-cal-now{position:absolute;left:0;right:0;border-top:2px solid #db4437;z-index:2;pointer-events:none}` +
         `.day-cal-empty-hint{position:absolute;top:24px;left:60px;right:8px;text-align:center;color:var(--ci-text-2);font-size:13px}` +
+        // Run history tab
+        `.history-toolbar{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-bottom:10px}` +
+        `.history-toolbar label{display:flex;flex-direction:column;font-size:11px;color:var(--ci-text-2);gap:4px}` +
+        `.history-toolbar select{padding:6px 8px;border:1px solid var(--ci-border);border-radius:6px;background:var(--ci-input-bg);color:inherit;font-family:inherit;font-size:13px}` +
+        `.history-summary{margin:4px 0 10px;font-size:12px;color:var(--ci-text-2)}` +
+        `.history-loading{font-size:12px;color:var(--ci-text-2);margin:6px 0}` +
+        `.history-table-wrap{background:var(--ci-card);border:1px solid var(--ci-border);border-radius:12px;overflow-x:auto}` +
+        `.history-table{width:100%;border-collapse:collapse;font-size:13px}` +
+        `.history-table th{text-align:left;padding:10px 12px;font-weight:600;border-bottom:1px solid var(--ci-border);background:var(--ci-card);color:var(--ci-text-2);font-size:11px;letter-spacing:0.4px;text-transform:uppercase}` +
+        `.history-table td{padding:8px 12px;border-bottom:1px solid var(--ci-border);vertical-align:top}` +
+        `.history-row:hover{background:var(--ci-hover)}` +
+        `.history-when{white-space:nowrap;font-variant-numeric:tabular-nums}` +
+        `.history-zone{font-weight:500}` +
+        `.history-dim{color:var(--ci-text-2)}` +
+        `.history-reason{display:inline-block;font-size:11px;color:var(--ci-text-2);margin-top:2px}` +
+        `.history-status{display:inline-block;padding:2px 8px;border-radius:999px;font-weight:600;font-size:10px;letter-spacing:0.3px;text-transform:uppercase}` +
+        `.history-status-completed{background:rgba(67,160,71,0.18);color:#2e7d32}` +
+        `.history-status-skipped{background:rgba(0,0,0,0.07);color:var(--ci-text-2)}` +
+        `.history-status-aborted{background:rgba(219,68,55,0.18);color:#c62828}` +
+        `.history-status-running{background:rgba(3,169,244,0.18);color:var(--ci-accent)}` +
+        `.history-trigger-toggle{font-size:11px;padding:3px 8px}` +
+        `.history-expanded-row td{background:var(--ci-hover)}` +
+        `.history-triggers{margin:0;font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--ci-text);white-space:pre-wrap}` +
+        `.history-empty{text-align:center;color:var(--ci-text-2);padding:24px}` +
+        `:host([data-theme="dark"]) .history-status-completed{background:rgba(67,160,71,0.22);color:#a5d6a7}` +
+        `:host([data-theme="dark"]) .history-status-aborted{background:rgba(219,68,55,0.25);color:#ef9a9a}` +
         // Timeline pills are now clickable too (kept for retro-compat)
         `.timeline-pill{cursor:pointer}` +
         `.timeline-track{position:relative;padding-top:18px;padding-bottom:46px;background:var(--ci-card);border:1px solid var(--ci-border);border-radius:12px;padding-left:8px;padding-right:8px}` +
@@ -3791,5 +4043,5 @@
   }
 
   customElements.define(ELEMENT_NAME, CompleteIrrigationPanel);
-  console.info("[complete-irrigation] panel registered, version v1.13.5");
+  console.info("[complete-irrigation] panel registered, version v1.14.0");
 })();

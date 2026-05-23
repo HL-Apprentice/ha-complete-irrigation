@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 WS_TYPE_LIST_SCHEDULES = f"{DOMAIN}/list_schedules"
 WS_TYPE_GET_CONFIG = f"{DOMAIN}/get_config"
 WS_TYPE_GET_ACTIVE_RUNS = f"{DOMAIN}/get_active_runs"
+WS_TYPE_LIST_RUN_HISTORY = f"{DOMAIN}/list_run_history"
 
 
 def _find_coordinator(hass: HomeAssistant):
@@ -97,8 +98,33 @@ async def get_active_runs(hass, connection, msg):
     connection.send_result(msg["id"], {"runs": runs})
 
 
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): WS_TYPE_LIST_RUN_HISTORY,
+        vol.Optional("limit"): vol.All(int, vol.Range(min=1, max=1000)),
+    }
+)
+@websocket_api.async_response
+async def list_run_history(hass, connection, msg):
+    """Return run-history records (newest first).
+
+    Optional `limit` caps the list size on the WS payload. Default
+    returns everything in the store (already pruned to <=1000).
+    """
+    coord = _find_coordinator(hass)
+    if coord is None:
+        connection.send_result(msg["id"], {"records": []})
+        return
+    records = coord.run_history.to_serializable()
+    limit = msg.get("limit")
+    if limit:
+        records = records[:limit]
+    connection.send_result(msg["id"], {"records": records})
+
+
 def async_register_ws_commands(hass: HomeAssistant) -> None:
     """Register all WS commands. Idempotent."""
     websocket_api.async_register_command(hass, list_schedules)
     websocket_api.async_register_command(hass, get_config)
     websocket_api.async_register_command(hass, get_active_runs)
+    websocket_api.async_register_command(hass, list_run_history)

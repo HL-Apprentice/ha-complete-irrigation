@@ -538,3 +538,7 @@ test_notification:
       default: "Test"
       selector:
         text:
+
+clear_run_history:
+  name: Clear run history
+  description: Delete every run-history record. Cannot be undone.
