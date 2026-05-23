@@ -79,6 +79,16 @@ class Schedule:
     # weekdays mode: which days of the week (0=Mon..6=Sun, ISO)
     weekdays: tuple[int, ...] = field(default_factory=tuple)
     enabled: bool = True
+    # Active period bounds (v1.12). Together with end_date these form an
+    # "active window" the schedule lives inside; outside the window it's
+    # quiet but not deleted. `start_date` is the first date firings are
+    # allowed (None = no lower bound, fires immediately). `end_date` is
+    # the last allowed date (None = never end). `repeat_annually` makes
+    # the window's month/day repeat each calendar year (seasonal mode);
+    # when on, both dates are required and their month/day pair defines
+    # the yearly window (year value is ignored on those fields).
+    start_date: date | None = None
+    repeat_annually: bool = False
     # Optional end_date — if set, schedule stops firing after this date.
     end_date: date | None = None
     # Recurrence mode: "weekdays" (default, current behavior) or "interval"
@@ -129,6 +139,20 @@ class Schedule:
                 )
             if self.interval_anchor is None:
                 raise ValueError("interval_hours mode requires interval_anchor (start date)")
+        # Active period (v1.12): when repeat_annually is on, BOTH dates
+        # are required and start.month-day must come before end.month-day
+        # (we don't support windows that wrap across the year boundary in
+        # this release — keeps the per-year membership check unambiguous).
+        if self.repeat_annually:
+            if self.start_date is None or self.end_date is None:
+                raise ValueError("repeat_annually requires both start_date and end_date")
+            start_md = (self.start_date.month, self.start_date.day)
+            end_md = (self.end_date.month, self.end_date.day)
+            if start_md > end_md:
+                raise ValueError(
+                    "annually-repeating window must not wrap across year-end "
+                    "(start month-day must be on/before end month-day)"
+                )
         # Multi-zone: first step must agree with the top-level zone/duration
         # (the top-level fields stay authoritative for legacy single-zone
         # consumers; the steps tuple is an extension).
@@ -169,6 +193,8 @@ class Schedule:
             "interval_days": self.interval_days,
             "interval_anchor": (self.interval_anchor.isoformat() if self.interval_anchor else None),
             "interval_hours": self.interval_hours,
+            "start_date": self.start_date.isoformat() if self.start_date else None,
+            "repeat_annually": self.repeat_annually,
             "zone_steps": [s.to_dict() for s in self.zone_steps],
             "created_via": self.created_via,
         }
@@ -200,6 +226,8 @@ class Schedule:
             interval_days=data.get("interval_days"),
             interval_anchor=anchor_val,
             interval_hours=data.get("interval_hours"),
+            start_date=(date.fromisoformat(data["start_date"]) if data.get("start_date") else None),
+            repeat_annually=bool(data.get("repeat_annually", False)),
             zone_steps=zone_steps,
             created_via=data.get("created_via", "panel"),
         )
@@ -253,3 +281,27 @@ class ScheduleStore:
         for d in data:
             store._items[d["id"]] = Schedule.from_dict(d)
         return store
+
+
+def is_within_active_window(sched: Schedule, check_date: date) -> bool:
+    """Pure-logic check: is `check_date` within `sched`'s active window?
+
+    Used by the run_planner to filter out firings before start_date or
+    after end_date, with optional annual-repeat semantics.
+
+    • repeat_annually = False (default): start_date / end_date are
+      absolute one-shot bounds. check_date must satisfy
+      start_date <= check_date <= end_date (whichever bounds are set).
+    • repeat_annually = True: only the (month, day) of start/end are
+      compared, year ignored. The window is required to be within a
+      single calendar year (enforced at construction).
+    """
+    if not sched.repeat_annually:
+        if sched.start_date is not None and check_date < sched.start_date:
+            return False
+        return not (sched.end_date is not None and check_date > sched.end_date)
+    # Annual repeat — validation guarantees both dates are set + non-wrap.
+    cur = (check_date.month, check_date.day)
+    start = (sched.start_date.month, sched.start_date.day)
+    end = (sched.end_date.month, sched.end_date.day)
+    return start <= cur <= end

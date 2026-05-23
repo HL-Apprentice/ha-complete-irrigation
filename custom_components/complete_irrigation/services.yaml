@@ -132,6 +132,28 @@ add_schedule:
       required: false
       selector:
         date:
+    start_date:
+      name: Active period — start date
+      description: Schedule won't fire before this date. Omit for "start now".
+      required: false
+      selector:
+        date:
+    end_date:
+      name: Active period — end date
+      description: Schedule stops firing after this date. Omit for "never end".
+      required: false
+      selector:
+        date:
+    repeat_annually:
+      name: Repeat every year
+      description: >
+        When true, treat the start/end dates' month-day as a seasonal
+        window applied each year (e.g. Mar 1 – Oct 31 yearly). Both
+        dates required; window must not wrap across year-end.
+      required: false
+      default: false
+      selector:
+        boolean:
     zone_steps:
       name: Additional zones (multi-zone mode)
       description: >
@@ -211,6 +233,18 @@ update_schedule:
       required: false
       selector:
         date:
+    start_date:
+      required: false
+      selector:
+        date:
+    end_date:
+      required: false
+      selector:
+        date:
+    repeat_annually:
+      required: false
+      selector:
+        boolean:
     zone_steps:
       required: false
       selector:
