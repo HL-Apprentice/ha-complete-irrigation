@@ -147,6 +147,11 @@
       // Weather banner customization modal state
       this._bannerModalOpen = false;
 
+      // Day calendar (Today screen): offset in days from today.
+      // 0 = today, +1 = tomorrow, -1 = yesterday, etc. Prev/Next buttons
+      // shift this; "Today" button resets to 0.
+      this._calendarDayOffset = 0;
+
       // Forecast cache: HA 2024+ deprecated weather.* attributes.forecast
       // in favor of the weather.get_forecasts service. We call it on demand
       // (when the Weather tab opens) and cache by entity_id.
@@ -310,6 +315,18 @@
           return this._openEstablishmentModal(node.dataset.entityId, node.dataset.zoneName);
         if (action === "zone-move-up") return this._reorderZone(node.dataset.entityId, -1);
         if (action === "zone-move-down") return this._reorderZone(node.dataset.entityId, 1);
+        if (action === "day-cal-prev") {
+          this._calendarDayOffset = (this._calendarDayOffset || 0) - 1;
+          return this._renderNow();
+        }
+        if (action === "day-cal-next") {
+          this._calendarDayOffset = (this._calendarDayOffset || 0) + 1;
+          return this._renderNow();
+        }
+        if (action === "day-cal-today") {
+          this._calendarDayOffset = 0;
+          return this._renderNow();
+        }
         if (action === "open-schedule-edit") {
           // Click on a Today-timeline pill or Tomorrow-list row →
           // jump to the Schedules tab and open the edit modal for
@@ -908,7 +925,7 @@
         }
         this._scheduleRender();
       } catch (err) {
-        // Pre-v1.13.0 backends don't have this command — no-op, fall
+        // Pre-v1.13.1 backends don't have this command — no-op, fall
         // back to the local-only countdown behavior.
         console.warn("[complete-irrigation] get_active_runs not available:", err);
       }
@@ -1245,7 +1262,7 @@
 
       return (
         `<header class="page-header"><h2>Notifications</h2>` +
-        `<span class="version-pill">v1.13.0</span></header>` +
+        `<span class="version-pill">v1.13.1</span></header>` +
         `<form class="weather-form" data-form="notifications">` +
         `<label class="enabled-check"><input type="checkbox" name="enabled"${
           enabled ? " checked" : ""
@@ -1344,7 +1361,7 @@
 
       return (
         `<header class="page-header"><h2>Settings</h2>` +
-        `<span class="version-pill">v1.13.0</span></header>` +
+        `<span class="version-pill">v1.13.1</span></header>` +
         `<section class="settings-card">` +
         `<h3 class="section-title">Theme ${tip("Cycle Light/Dark/Auto with the ☀️/🌙 button on Today, or pick one of your HA-installed themes below.")}</h3>` +
         `<p class="section-hint">Light/Dark/Auto: <strong>${escapeHtml(themeLabel)}</strong>.</p>` +
@@ -1413,7 +1430,7 @@
         `<section class="settings-card">` +
         `<h3 class="section-title">About</h3>` +
         `<table class="settings-table">` +
-        `<tr><td>Version</td><td><strong>v1.13.0</strong></td></tr>` +
+        `<tr><td>Version</td><td><strong>v1.13.1</strong></td></tr>` +
         `<tr><td>Repository</td><td><a href="${repoUrl}" target="_blank">${escapeHtml(repoUrl)}</a></td></tr>` +
         `<tr><td>Zones configured</td><td>${(this._panel?.config?.zones || []).length}</td></tr>` +
         `<tr><td>Schedules</td><td>${(this._schedules || []).length}</td></tr>` +
@@ -1542,7 +1559,7 @@
       return (
         `<header class="page-header"><h2>Today</h2>` +
         `<div class="page-header-right">${themeBtn}` +
-        `<span class="version-pill">v1.13.0</span></div></header>` +
+        `<span class="version-pill">v1.13.1</span></div></header>` +
         this._renderRainLockoutBanner() +
         this._renderWeatherBanner() +
         `<section>` +
@@ -1558,7 +1575,7 @@
               .map((z) => this._renderZoneTile(z))
               .join("")}</div>`) +
         `</section>` +
-        this._renderTodaysTimeline()
+        this._renderDayCalendar()
       );
     }
 
@@ -2055,7 +2072,7 @@
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Zones</h2>` +
-          `<span class="version-pill">v1.13.0</span></header>` +
+          `<span class="version-pill">v1.13.1</span></header>` +
           `<div class="empty"><p>No zones configured. Add them via Settings → Devices &amp; Services.</p></div>`
         );
       }
@@ -2064,7 +2081,7 @@
         .join("");
       return (
         `<header class="page-header"><h2>Zones</h2>` +
-        `<span class="version-pill">v1.13.0</span></header>` +
+        `<span class="version-pill">v1.13.1</span></header>` +
         `<p class="section-hint">Hidden zones still run on schedule — they're just hidden from the Today view.</p>` +
         `<div class="zones-list">${rows}</div>`
       );
@@ -2409,13 +2426,29 @@
       );
     }
 
-    _renderTomorrowList() {
-      // Vertical list of tomorrow's scheduled runs, below today's timeline.
-      // Click any row → open the schedule in the edit modal.
-      const tomorrow = new Date();
-      tomorrow.setHours(0, 0, 0, 0);
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      const runs = this._runsForDay(tomorrow);
+    _renderDayCalendar() {
+      // Vertical day calendar replacing the old horizontal timeline +
+      // tomorrow list. Shows all runs for the currently-selected day
+      // (this._calendarDayOffset). User navigates with ← / Today / →.
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const offset = this._calendarDayOffset || 0;
+      const selected = new Date(today.getTime() + offset * 86400000);
+      const runs = this._runsForDay(selected);
+
+      // Heading label varies by relative offset for friendly UX.
+      const fmtDate = (d) =>
+        d.toLocaleDateString(undefined, {
+          weekday: "long",
+          month: "short",
+          day: "numeric",
+        });
+      let label;
+      if (offset === 0) label = `Today — ${fmtDate(selected)}`;
+      else if (offset === 1) label = `Tomorrow — ${fmtDate(selected)}`;
+      else if (offset === -1) label = `Yesterday — ${fmtDate(selected)}`;
+      else label = fmtDate(selected);
+
       const fmtTime = (m) => {
         const h = Math.floor(m / 60);
         const mm = String(m % 60).padStart(2, "0");
@@ -2423,31 +2456,84 @@
         const h12 = h % 12 || 12;
         return `${h12}:${mm} ${ampm}`;
       };
-      const header = `<h3 class="section-title">Tomorrow's runs (${runs.length})</h3>`;
+
+      // "Now" minute-of-day, only relevant when viewing today
+      const now = new Date();
+      const nowMin = now.getHours() * 60 + now.getMinutes();
+      const isToday = offset === 0;
+
+      const navBar =
+        `<div class="day-cal-nav">` +
+        `<button class="btn btn-small" data-action="day-cal-prev" title="Previous day">←</button>` +
+        `<span class="day-cal-label">${escapeHtml(label)} <span class="day-cal-count">(${runs.length} run${runs.length === 1 ? "" : "s"})</span></span>` +
+        `<button class="btn btn-small" data-action="day-cal-next" title="Next day">→</button>` +
+        (offset !== 0
+          ? `<button class="btn btn-small" data-action="day-cal-today">Today</button>`
+          : "") +
+        `</div>`;
+
       if (runs.length === 0) {
         return (
-          `<section class="tomorrow-list">` +
-          header +
-          `<div class="empty"><p>Nothing scheduled tomorrow.</p></div>` +
+          `<section class="day-cal">` +
+          navBar +
+          `<div class="empty"><p>No runs scheduled.</p></div>` +
           `</section>`
         );
       }
+
+      // Group runs by hour for visual grouping (12 AM, 1 AM, ..., 11 PM)
+      // Renders each run as a row with: time, zone color stripe, zone name,
+      // duration, schedule name, status (Past/Now/Upcoming on today).
       const rows = runs
         .map((r) => {
-          const title = `${r.schedule_name} → ${r.zone_name}\n${fmtTime(r.start_minutes)} for ${r.duration_minutes} min\nClick to edit`;
+          let status = "";
+          let cls = "day-cal-row";
+          if (isToday) {
+            if (r.start_minutes + r.duration_minutes < nowMin) {
+              status = `<span class="day-cal-status past">Past</span>`;
+              cls += " past";
+            } else if (
+              r.start_minutes <= nowMin &&
+              nowMin < r.start_minutes + r.duration_minutes
+            ) {
+              status = `<span class="day-cal-status live">Running now</span>`;
+              cls += " live";
+            } else {
+              const mins = r.start_minutes - nowMin;
+              if (mins > 0 && mins <= 120) {
+                const h = Math.floor(mins / 60);
+                const m = mins % 60;
+                const in_str = h > 0 ? `in ${h}h ${m}m` : `in ${m}m`;
+                status = `<span class="day-cal-status soon">${in_str}</span>`;
+              }
+            }
+          }
+          const endMin = r.start_minutes + r.duration_minutes;
+          const title =
+            `${r.schedule_name} → ${r.zone_name}\n` +
+            `${fmtTime(r.start_minutes)} – ${fmtTime(endMin)} (${r.duration_minutes} min)\n` +
+            `Click to edit`;
           return (
-            `<div class="tomorrow-row" data-action="open-schedule-edit" data-schedule-id="${escapeAttr(r.schedule_id)}" title="${escapeAttr(title)}">` +
-            `<span class="tomorrow-time">${fmtTime(r.start_minutes)}</span>` +
-            `<span class="tomorrow-zone">${escapeHtml(r.zone_name)}</span>` +
-            `<span class="tomorrow-meta">${r.duration_minutes}m · ${escapeHtml(r.schedule_name)}</span>` +
+            `<div class="${cls}" data-action="open-schedule-edit" data-schedule-id="${escapeAttr(r.schedule_id)}" title="${escapeAttr(title)}">` +
+            `<div class="day-cal-time">` +
+            `<span class="day-cal-start">${fmtTime(r.start_minutes)}</span>` +
+            `<span class="day-cal-end">${fmtTime(endMin)}</span>` +
+            `</div>` +
+            `<div class="day-cal-stripe"></div>` +
+            `<div class="day-cal-body">` +
+            `<div class="day-cal-zone">${escapeHtml(r.zone_name)}</div>` +
+            `<div class="day-cal-meta">${escapeHtml(r.schedule_name)} · ${r.duration_minutes}m</div>` +
+            `</div>` +
+            `<div class="day-cal-side">${status}</div>` +
             `</div>`
           );
         })
         .join("");
+
       return (
-        `<section class="tomorrow-list">` +
-        header +
-        `<div class="tomorrow-rows">${rows}</div>` +
+        `<section class="day-cal">` +
+        navBar +
+        `<div class="day-cal-rows">${rows}</div>` +
         `</section>`
       );
     }
@@ -2458,7 +2544,7 @@
       if (zones.length === 0) {
         return (
           `<header class="page-header"><h2>Sensors</h2>` +
-          `<span class="version-pill">v1.13.0</span></header>` +
+          `<span class="version-pill">v1.13.1</span></header>` +
           `<div class="empty"><p>No zones configured.</p></div>`
         );
       }
@@ -2467,7 +2553,7 @@
         .join("");
       return (
         `<header class="page-header"><h2>Sensors</h2>` +
-        `<span class="version-pill">v1.13.0</span></header>` +
+        `<span class="version-pill">v1.13.1</span></header>` +
         `<p class="section-hint">Bind soil-moisture sensors to a zone so runtimes auto-adjust based on actual moisture. You can attach one sensor or several (combined as average, lowest, highest, or just the primary).</p>` +
         `<div class="sensor-zone-list">${cards}</div>`
       );
@@ -2884,7 +2970,7 @@
 
       return (
         `<header class="page-header"><h2>Weather</h2>` +
-        `<span class="version-pill">v1.13.0</span></header>` +
+        `<span class="version-pill">v1.13.1</span></header>` +
         lockoutHtml +
         forecastHtml +
         `<form class="weather-form" data-form="weather">` +
@@ -3412,15 +3498,31 @@
         `.row-2{display:grid;grid-template-columns:1fr 1fr;gap:10px}` +
         // ── Today's runs timeline (horizontal time strip below Zones)
         `.today-timeline{margin-top:24px}` +
-        // Tomorrow list (vertical, below today's timeline)
-        `.tomorrow-list{margin-top:18px}` +
-        `.tomorrow-rows{display:flex;flex-direction:column;gap:6px;background:var(--ci-card);border:1px solid var(--ci-border);border-radius:12px;padding:8px 10px}` +
-        `.tomorrow-row{display:grid;grid-template-columns:90px 1fr auto;gap:10px;align-items:center;padding:6px 8px;border-radius:6px;cursor:pointer;transition:background 0.1s}` +
-        `.tomorrow-row:hover{background:var(--ci-hover)}` +
-        `.tomorrow-time{font-weight:600;font-size:13px;color:var(--ci-accent);font-variant-numeric:tabular-nums}` +
-        `.tomorrow-zone{font-weight:500;font-size:13px;color:var(--ci-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}` +
-        `.tomorrow-meta{font-size:12px;color:var(--ci-text-2);text-align:right}` +
-        // Timeline pills are now clickable too
+        // Day calendar — vertical list with date picker, replaces the
+        // old horizontal timeline + tomorrow list on the Today screen.
+        `.day-cal{margin-top:24px}` +
+        `.day-cal-nav{display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap}` +
+        `.day-cal-label{flex:1;font-weight:600;font-size:15px;color:var(--ci-text)}` +
+        `.day-cal-count{font-weight:400;font-size:13px;color:var(--ci-text-2);margin-left:6px}` +
+        `.day-cal-rows{display:flex;flex-direction:column;gap:4px;background:var(--ci-card);border:1px solid var(--ci-border);border-radius:12px;padding:6px}` +
+        `.day-cal-row{display:grid;grid-template-columns:80px 4px 1fr auto;gap:10px;align-items:center;padding:10px 12px;border-radius:8px;cursor:pointer;transition:background 0.1s}` +
+        `.day-cal-row:hover{background:var(--ci-hover)}` +
+        `.day-cal-row.past{opacity:0.55}` +
+        `.day-cal-row.live{background:rgba(67,160,71,0.12);border-left:3px solid #43a047;padding-left:9px}` +
+        `.day-cal-time{display:flex;flex-direction:column;font-variant-numeric:tabular-nums}` +
+        `.day-cal-start{font-weight:700;font-size:13px;color:var(--ci-accent)}` +
+        `.day-cal-end{font-size:11px;color:var(--ci-text-2);margin-top:1px}` +
+        `.day-cal-stripe{height:32px;background:var(--ci-accent);border-radius:2px;opacity:0.7}` +
+        `.day-cal-row.past .day-cal-stripe{background:var(--ci-text-2)}` +
+        `.day-cal-body{min-width:0}` +
+        `.day-cal-zone{font-weight:600;font-size:14px;color:var(--ci-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}` +
+        `.day-cal-meta{font-size:11px;color:var(--ci-text-2);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}` +
+        `.day-cal-side{font-size:11px;text-align:right}` +
+        `.day-cal-status{display:inline-block;padding:2px 8px;border-radius:999px;font-weight:600;font-size:10px;letter-spacing:0.3px;text-transform:uppercase}` +
+        `.day-cal-status.past{background:rgba(0,0,0,0.06);color:var(--ci-text-2)}` +
+        `.day-cal-status.live{background:#43a047;color:#fff}` +
+        `.day-cal-status.soon{background:rgba(3,169,244,0.15);color:var(--ci-accent)}` +
+        // Timeline pills are now clickable too (kept for retro-compat)
         `.timeline-pill{cursor:pointer}` +
         `.timeline-track{position:relative;padding-top:18px;padding-bottom:46px;background:var(--ci-card);border:1px solid var(--ci-border);border-radius:12px;padding-left:8px;padding-right:8px}` +
         `.timeline-axis{position:relative;height:14px;border-bottom:1px solid var(--ci-border);margin-bottom:8px}` +
@@ -3628,5 +3730,5 @@
   }
 
   customElements.define(ELEMENT_NAME, CompleteIrrigationPanel);
-  console.info("[complete-irrigation] panel registered, version v1.13.0");
+  console.info("[complete-irrigation] panel registered, version v1.13.1");
 })();
