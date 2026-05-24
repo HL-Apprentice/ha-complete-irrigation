@@ -112,6 +112,9 @@ def test_schedule_to_dict_has_expected_shape():
         "repeat_annually": False,
         "zone_steps": [],
         "created_via": "panel",
+        "ignore_wind": False,
+        "ignore_hot_weather": False,
+        "ignore_rain_lockout": False,
     }
 
 
@@ -590,6 +593,40 @@ def test_schedule_interval_end_time_roundtrip():
     rebuilt = Schedule.from_dict(original.to_dict())
     assert rebuilt == original
     assert rebuilt.interval_end_time == time(20, 0)
+
+
+# ── per-schedule weather-gate opt-outs (v1.17.3) ──────────────────
+
+
+def test_schedule_ignore_flags_default_false():
+    s = _good_schedule()
+    assert s.ignore_wind is False
+    assert s.ignore_hot_weather is False
+    assert s.ignore_rain_lockout is False
+
+
+def test_schedule_ignore_flags_roundtrip():
+    s = _good_schedule(
+        ignore_wind=True,
+        ignore_hot_weather=True,
+        ignore_rain_lockout=True,
+    )
+    rebuilt = Schedule.from_dict(s.to_dict())
+    assert rebuilt == s
+    assert rebuilt.ignore_wind is True
+    assert rebuilt.ignore_hot_weather is True
+    assert rebuilt.ignore_rain_lockout is True
+
+
+def test_schedule_ignore_flags_with_changes_preserves():
+    # Schedule.with_changes (dataclasses.replace) must preserve the
+    # ignore_* fields when updating an unrelated field — same bug class
+    # as the field-by-field rebuild we fixed in v1.15.
+    s = _good_schedule(ignore_wind=True, ignore_hot_weather=True)
+    updated = s.with_changes(enabled=False)
+    assert updated.ignore_wind is True
+    assert updated.ignore_hot_weather is True
+    assert updated.enabled is False
 
 
 # ════════════════════════════════════════════════════════════════════
