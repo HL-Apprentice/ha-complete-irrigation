@@ -37,7 +37,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.16.1";
+  const PANEL_VERSION = "v1.16.2";
   const DEFAULT_MANUAL_MINUTES = 10;
   const MAX_MANUAL_MINUTES = 60;
   const MAX_SCHEDULE_MINUTES = 480; // 8 hours
@@ -353,6 +353,8 @@
         if (action === "add-schedule") return this._openNewSchedule();
         if (action === "edit-schedule")
           return this._openEditSchedule(node.dataset.scheduleId);
+        if (action === "copy-schedule")
+          return this._openCopyOfSchedule(node.dataset.scheduleId);
         if (action === "delete-schedule")
           return this._deleteSchedule(node.dataset.scheduleId);
         if (action === "toggle-schedule")
@@ -859,6 +861,42 @@
       this._scheduleEditor = {
         id: found.id,
         name: found.name,
+        zone_entity_id: found.zone_entity_id,
+        start_time: found.start_time,
+        duration_minutes: found.duration_minutes,
+        weekdays: [...(found.weekdays || [])],
+        enabled: found.enabled,
+        mode: found.mode || "weekdays",
+        interval_days: found.interval_days || 5,
+        interval_hours: found.interval_hours || 6,
+        start_date: found.start_date || "",
+        end_date: found.end_date || "",
+        repeat_annually: !!found.repeat_annually,
+        interval_anchor: found.interval_anchor || _todayIso(),
+        interval_end_time: found.interval_end_time || "",
+        extra_steps: extra.map((s) => ({
+          zone_entity_id: s.zone_entity_id,
+          duration_minutes: s.duration_minutes,
+        })),
+      };
+      this._scheduleModalOpen = true;
+      this._renderNow();
+    }
+
+    _openCopyOfSchedule(scheduleId) {
+      // v1.16.2 — clone an existing schedule into the editor with a
+      // null id (so save creates a new schedule, not overwriting the
+      // source) and a name suffixed " (copy)" so the duplicate is
+      // identifiable in lists before the user picks a better name.
+      // Typical flow: click Copy on an existing schedule, change just
+      // the start time, click Create. Two clicks to a second daily run.
+      const found = this._schedules.find((s) => s.id === scheduleId);
+      if (!found) return;
+      const allSteps = Array.isArray(found.zone_steps) ? found.zone_steps : [];
+      const extra = allSteps.length > 1 ? allSteps.slice(1) : [];
+      this._scheduleEditor = {
+        id: null,  // new schedule — modal title will say "New Schedule"
+        name: `${found.name} (copy)`,
         zone_entity_id: found.zone_entity_id,
         start_time: found.start_time,
         duration_minutes: found.duration_minutes,
@@ -3584,6 +3622,9 @@
         `<button class="btn btn-small" data-action="edit-schedule" data-schedule-id="${escapeAttr(
           s.id
         )}">Edit</button>` +
+        `<button class="btn btn-small" data-action="copy-schedule" data-schedule-id="${escapeAttr(
+          s.id
+        )}" title="Duplicate this schedule. Opens the editor pre-filled — change the start time (or anything else) and save.">Copy</button>` +
         `<button class="btn btn-small btn-stop" data-action="delete-schedule" data-schedule-id="${escapeAttr(
           s.id
         )}">Delete</button>` +
