@@ -67,6 +67,17 @@ _VALID_CONFLICT_POLICIES = {
 STORAGE_VERSION = 1
 TICK_SECONDS = 60
 
+# v1.17 — restart-missed lookback window. On startup, if the persisted
+# last_tick is at most this many minutes old, the coordinator resumes
+# from there so a fast HA restart spanning a fire-minute still catches
+# the run. Longer gaps fall back to "now" — long outages would otherwise
+# burst-fire every missed run, which floods the irrigation system.
+_MISSED_LOOKBACK_MIN = 5
+
+# v1.17 — Companion-notification action prefix. Used for both sending
+# the action and matching incoming mobile_app_notification_action events.
+RUN_MISSED_ACTION = "COMPLETE_IRRIGATION_RUN_MISSED"
+
 
 def _storage_key(entry_id: str, suffix: str = "schedules") -> str:
     return f"{DOMAIN}.{suffix}.{entry_id}"
@@ -208,7 +219,28 @@ class ScheduleCoordinator:
         notif_cfg = self._config.get("notifications", {})
         self.notifier.update_config(**notif_cfg)
 
-        self._last_tick = dt_util.now()
+        # v1.17 — restart-missed lookback. _last_tick is persisted into
+        # the config blob on every tick; on startup, if it's within the
+        # _MISSED_LOOKBACK_MIN window, resume from there so any runs in
+        # the gap (e.g. HA restart spanning a fire-minute) are processed.
+        # Long outages (>5 min) fall back to "now" so we don't burst-fire
+        # hours of missed runs after, say, a half-day outage.
+        saved_last_tick = self._config.get("_last_tick")
+        now = dt_util.now()
+        if saved_last_tick:
+            try:
+                saved_dt = datetime.fromisoformat(saved_last_tick)
+                if (now - saved_dt).total_seconds() <= _MISSED_LOOKBACK_MIN * 60:
+                    self._last_tick = saved_dt
+                    _LOGGER.info(
+                        "Resuming from saved last_tick %s (gap %.0fs)",
+                        saved_dt.isoformat(),
+                        (now - saved_dt).total_seconds(),
+                    )
+            except (TypeError, ValueError):
+                pass
+        if self._last_tick is None:
+            self._last_tick = now
         self._cancel_tick = async_track_time_interval(
             self._hass, self._tick, timedelta(seconds=TICK_SECONDS)
         )
@@ -465,6 +497,12 @@ class ScheduleCoordinator:
 
         last = self._last_tick
         self._last_tick = now
+        # v1.17 — persist last_tick so a restart within the lookback
+        # window resumes from here instead of dropping the gap.
+        self._config["_last_tick"] = now.isoformat()
+        # Fire-and-forget the save (no await); Store serializes writes
+        # internally and we'd rather not block the tick on disk I/O.
+        self._hass.async_create_task(self.async_save_config())
 
         # If currently locked out, no scheduled runs fire (we still
         # advance last_tick so we don't backfire a flood when lockout
@@ -504,7 +542,7 @@ class ScheduleCoordinator:
                 zone_name = (
                     zone_state.attributes.get("friendly_name") if zone_state else None
                 ) or run.zone_entity_id
-                self._run_history.record_skipped(
+                rec = self._run_history.record_skipped(
                     zone_entity_id=run.zone_entity_id,
                     zone_name=zone_name,
                     requested_minutes=run.duration_minutes,
@@ -515,8 +553,54 @@ class ScheduleCoordinator:
                     triggers={"conflict_resolver": {"verdict": run.reason}},
                 )
                 await self.async_save_run_history()
+                # v1.17 — actionable "Run now" notification
+                await self._notify_missed_run(rec, run)
                 continue
             await self._fire_run(run)
+
+    async def _notify_missed_run(self, record, run) -> None:
+        """v1.17 — actionable notification for a skipped/dropped run.
+
+        Sends one notification per skip with a single "Run now (X min)"
+        action button that, when tapped, triggers run_zone with the
+        original planned duration. Honors the `notify_on_missed`
+        setting (default true) and the notifier's enabled/quiet-hours
+        rules just like any other notification.
+
+        The action payload is packed directly into the button's `data`
+        field (mobile_app spec) so the event listener doesn't need any
+        side-table — entirely stateless.
+        """
+        if self.notifier is None:
+            return
+        notif_cfg = self._config.get("notifications", {})
+        if not notif_cfg.get("notify_on_missed", True):
+            return
+        reason_short = run.reason.replace("skipped:", "").strip() or "system"
+        message = (
+            f"{record.schedule_name} ({record.zone_name}) was skipped — "
+            f"{reason_short}. Tap to run now ({record.requested_minutes} min)."
+        )
+        await self.notifier.notify(
+            message,
+            title="Irrigation: Run missed",
+            category=CATEGORY_IMPORTANT,
+            event_type="run_missed",
+            actions=[
+                {
+                    "action": RUN_MISSED_ACTION,
+                    "title": f"Run now ({record.requested_minutes} min)",
+                    "data": {
+                        "zone_entity_id": record.zone_entity_id,
+                        "minutes": record.requested_minutes,
+                        "missed_record_id": record.id,
+                        "schedule_id": record.schedule_id,
+                        "schedule_name": record.schedule_name,
+                    },
+                },
+                {"action": f"{RUN_MISSED_ACTION}_DISMISS", "title": "Dismiss"},
+            ],
+        )
 
     async def _fire_run(self, run) -> None:
         """Evaluate moisture + wind + hot-weather modifiers for `run`, then fire it.
@@ -563,7 +647,7 @@ class ScheduleCoordinator:
                 zone_id,
                 "; ".join(skip_reasons),
             )
-            self._run_history.record_skipped(
+            rec = self._run_history.record_skipped(
                 zone_entity_id=zone_id,
                 zone_name=zone_name,
                 requested_minutes=run.duration_minutes,
@@ -574,6 +658,11 @@ class ScheduleCoordinator:
                 triggers=triggers,
             )
             await self.async_save_run_history()
+            # v1.17 — also send the actionable "Run now?" notification
+            # for gate skips (moisture / wind / hot-weather decisions).
+            # The notifier honors `notify_on_missed` so users can opt
+            # out without losing other notifications.
+            await self._notify_missed_run(rec, run)
             return
 
         for r in boost_reasons:
