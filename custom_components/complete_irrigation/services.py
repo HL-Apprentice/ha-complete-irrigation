@@ -242,6 +242,11 @@ _SET_NOTIFICATION_CONFIG_SCHEMA = vol.Schema(
         # Daily summary fires at quiet-hours-end if any zone is below its
         # configured min%. Defaults to true so it just works after setup.
         vol.Optional("low_moisture_alerts"): cv.boolean,
+        # v1.17 — when a scheduled run is dropped (conflict resolver,
+        # moisture/wind/rain gate, or missed due to HA restart), send
+        # a notification with a "Run now" action button so the user
+        # can recover the missed run with one tap.
+        vol.Optional("notify_on_missed"): cv.boolean,
     }
 )
 
