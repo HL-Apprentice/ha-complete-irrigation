@@ -37,7 +37,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.17.5";
+  const PANEL_VERSION = "v1.17.6";
   const DEFAULT_MANUAL_MINUTES = 10;
   const MAX_MANUAL_MINUTES = 60;
   const MAX_SCHEDULE_MINUTES = 480; // 8 hours
@@ -120,7 +120,7 @@
       start_date: "",
       end_date: "",
       repeat_annually: false,
-      // v1.17.5 — per-schedule weather-gate opt-outs
+      // v1.17.6 — per-schedule weather-gate opt-outs
       ignore_wind: false,
       ignore_hot_weather: false,
       ignore_rain_lockout: false,
@@ -223,7 +223,7 @@
       // tile show "4:52 left of 10 min" instead of just "4:52 left".
       this._localRunDurations = {};
       this._countdownTimer = null;
-      // v1.17.5 — minute-tick so the day calendar's "now" line drifts
+      // v1.17.6 — minute-tick so the day calendar's "now" line drifts
       // down automatically without waiting for an HA state change to
       // trigger a re-render. Only active while the Today tab is open
       // (set + cleared in connectedCallback / _navigateTo).
@@ -324,7 +324,7 @@
       this.shadowRoot.addEventListener("change", this._onChange);
       this.shadowRoot.addEventListener("input", this._onInput);
       this._scheduleRender();
-      // v1.17.5 — Today is the initial section, so kick off the
+      // v1.17.6 — Today is the initial section, so kick off the
       // now-line tick now (won't double-up because _startNowLineTimer
       // is idempotent).
       if (this._currentSection === "today") this._startNowLineTimer();
@@ -339,7 +339,7 @@
     }
 
     _startNowLineTimer() {
-      // v1.17.5 — re-render every minute so the day-cal-now line drifts
+      // v1.17.6 — re-render every minute so the day-cal-now line drifts
       // down. Idempotent: no-op if already running.
       if (this._nowLineTimer) return;
       this._nowLineTimer = setInterval(() => {
@@ -356,6 +356,31 @@
 
     _onClick(e) {
       const path = e.composedPath ? e.composedPath() : [];
+
+      // v1.17.6 — info-bubble popover toggle.
+      // Touch devices have no hover, so tapping the ⓘ bubble has to
+      // toggle the popup explicitly. We also close any open popup when
+      // the click lands anywhere else (the path-doesn't-contain-help-tip
+      // case below). Done at the very top of _onClick before action
+      // dispatch so the toggle wins over any incidental data-action
+      // ancestor.
+      const tipEl = path.find(
+        (n) => n instanceof HTMLElement && n.classList.contains("help-tip")
+      );
+      if (tipEl) {
+        const wasOpen = tipEl.classList.contains("help-tip-open");
+        // Close any other open tips so only one shows at a time
+        this.shadowRoot
+          .querySelectorAll(".help-tip-open")
+          .forEach((el) => el.classList.remove("help-tip-open"));
+        if (!wasOpen) tipEl.classList.add("help-tip-open");
+        e.stopPropagation();
+        return;
+      }
+      // Click landed outside any help-tip → close all open popups
+      const opens = this.shadowRoot.querySelectorAll(".help-tip-open");
+      if (opens.length > 0) opens.forEach((el) => el.classList.remove("help-tip-open"));
+
       for (const node of path) {
         if (!node || node === this.shadowRoot || node === this) break;
         if (!(node instanceof HTMLElement)) continue;
@@ -846,7 +871,7 @@
       // v1.17 — Today screen's missed-runs banner reads from run history,
       // so load it lazily on first Today open if not already cached.
       if (sectionId === "today" && !this._runHistoryLoaded) this._fetchRunHistory();
-      // v1.17.5 — keep the now-line drifting only while Today is open.
+      // v1.17.6 — keep the now-line drifting only while Today is open.
       if (sectionId === "today") this._startNowLineTimer();
       else this._stopNowLineTimer();
       // Today + Zones both rely on the cached PlannedRuns for their
@@ -934,7 +959,7 @@
     }
 
     _openCopyOfSchedule(scheduleId) {
-      // v1.17.5 — clone an existing schedule into the editor with a
+      // v1.17.6 — clone an existing schedule into the editor with a
       // null id (so save creates a new schedule, not overwriting the
       // source) and a name suffixed " (copy)" so the duplicate is
       // identifiable in lists before the user picks a better name.
@@ -1413,7 +1438,7 @@
         start_date: e.start_date || null,
         end_date: e.end_date || null,
         repeat_annually: !!e.repeat_annually,
-        // v1.17.5 — per-schedule weather-gate opt-outs
+        // v1.17.6 — per-schedule weather-gate opt-outs
         ignore_wind: !!e.ignore_wind,
         ignore_hot_weather: !!e.ignore_hot_weather,
         ignore_rain_lockout: !!e.ignore_rain_lockout,
@@ -1657,8 +1682,16 @@
       const enabled = n.enabled !== false; // default true
       const lowMoistureAlerts = n.low_moisture_alerts !== false; // default true
       const notifyOnMissed = n.notify_on_missed !== false; // default true (v1.17)
+      // v1.17.6 — render the info bubble with a custom popover instead
+      // of the native `title` attribute. The native tooltip is delayed
+      // ~1.5s on desktop AND silently does NOTHING on touch devices.
+      // The custom popover shows immediately on hover, on tap (touch
+      // toggles via the .help-tip-open class set by _onClick), and on
+      // keyboard focus. tabindex+role makes it screen-reader-aware.
       const tip = (text) =>
-        `<span class="help-tip" title="${escapeAttr(text)}" aria-label="${escapeAttr(text)}">ⓘ</span>`;
+        `<span class="help-tip" role="button" tabindex="0" aria-label="${escapeAttr(text)}">` +
+        `ⓘ<span class="help-tip-popup">${escapeHtml(text)}</span>` +
+        `</span>`;
 
       // Build the dropdown of available notify.* services from HA. We
       // include any draft value that's NOT in the live list so users
@@ -1824,8 +1857,16 @@
       const c = this._config || {};
       const themeLabel =
         this._theme === "dark" ? "Dark" : this._theme === "light" ? "Light" : "Auto (follow HA)";
+      // v1.17.6 — render the info bubble with a custom popover instead
+      // of the native `title` attribute. The native tooltip is delayed
+      // ~1.5s on desktop AND silently does NOTHING on touch devices.
+      // The custom popover shows immediately on hover, on tap (touch
+      // toggles via the .help-tip-open class set by _onClick), and on
+      // keyboard focus. tabindex+role makes it screen-reader-aware.
       const tip = (text) =>
-        `<span class="help-tip" title="${escapeAttr(text)}" aria-label="${escapeAttr(text)}">ⓘ</span>`;
+        `<span class="help-tip" role="button" tabindex="0" aria-label="${escapeAttr(text)}">` +
+        `ⓘ<span class="help-tip-popup">${escapeHtml(text)}</span>` +
+        `</span>`;
       const icalUrl = "/api/complete_irrigation/calendar.ics";
       const repoUrl = "https://github.com/HL-Apprentice/ha-complete-irrigation";
 
@@ -2934,7 +2975,7 @@
         })
         .join("");
 
-      // v1.17.5 — more visible now-line: 3px red line + a labeled chip
+      // v1.17.6 — more visible now-line: 3px red line + a labeled chip
       // pinned to the left edge showing the current time. The chip is
       // a child of the line so positioning is automatic. Pulses every
       // 2s so the eye catches it even on a dense calendar.
@@ -3282,8 +3323,16 @@
         .map((s) => s.entity_id)
         .sort();
 
+      // v1.17.6 — render the info bubble with a custom popover instead
+      // of the native `title` attribute. The native tooltip is delayed
+      // ~1.5s on desktop AND silently does NOTHING on touch devices.
+      // The custom popover shows immediately on hover, on tap (touch
+      // toggles via the .help-tip-open class set by _onClick), and on
+      // keyboard focus. tabindex+role makes it screen-reader-aware.
       const tip = (text) =>
-        `<span class="help-tip" title="${escapeAttr(text)}" aria-label="${escapeAttr(text)}">ⓘ</span>`;
+        `<span class="help-tip" role="button" tabindex="0" aria-label="${escapeAttr(text)}">` +
+        `ⓘ<span class="help-tip-popup">${escapeHtml(text)}</span>` +
+        `</span>`;
 
       const sensorChecks = (moistureCandidates.length > 0
         ? moistureCandidates
@@ -3430,8 +3479,16 @@
     _renderEstablishmentModal() {
       const e = this._establishmentEditor;
       if (!e) return "";
+      // v1.17.6 — render the info bubble with a custom popover instead
+      // of the native `title` attribute. The native tooltip is delayed
+      // ~1.5s on desktop AND silently does NOTHING on touch devices.
+      // The custom popover shows immediately on hover, on tap (touch
+      // toggles via the .help-tip-open class set by _onClick), and on
+      // keyboard focus. tabindex+role makes it screen-reader-aware.
       const tip = (text) =>
-        `<span class="help-tip" title="${escapeAttr(text)}" aria-label="${escapeAttr(text)}">ⓘ</span>`;
+        `<span class="help-tip" role="button" tabindex="0" aria-label="${escapeAttr(text)}">` +
+        `ⓘ<span class="help-tip-popup">${escapeHtml(text)}</span>` +
+        `</span>`;
       return (
         `<div class="modal-backdrop"></div>` +
         `<div class="modal modal-wide" role="dialog" aria-modal="true">` +
@@ -3502,8 +3559,16 @@
             .sort()
         : [];
 
+      // v1.17.6 — render the info bubble with a custom popover instead
+      // of the native `title` attribute. The native tooltip is delayed
+      // ~1.5s on desktop AND silently does NOTHING on touch devices.
+      // The custom popover shows immediately on hover, on tap (touch
+      // toggles via the .help-tip-open class set by _onClick), and on
+      // keyboard focus. tabindex+role makes it screen-reader-aware.
       const tip = (text) =>
-        `<span class="help-tip" title="${escapeAttr(text)}" aria-label="${escapeAttr(text)}">ⓘ</span>`;
+        `<span class="help-tip" role="button" tabindex="0" aria-label="${escapeAttr(text)}">` +
+        `ⓘ<span class="help-tip-popup">${escapeHtml(text)}</span>` +
+        `</span>`;
 
       // Multi-pick rain sensor checkbox list (rain-named sensors first).
       const rainCandidates = allSensors.filter((eid) => /rain|precip/i.test(eid));
@@ -3792,8 +3857,16 @@
           }/>${label}</label>`
       ).join("");
 
+      // v1.17.6 — render the info bubble with a custom popover instead
+      // of the native `title` attribute. The native tooltip is delayed
+      // ~1.5s on desktop AND silently does NOTHING on touch devices.
+      // The custom popover shows immediately on hover, on tap (touch
+      // toggles via the .help-tip-open class set by _onClick), and on
+      // keyboard focus. tabindex+role makes it screen-reader-aware.
       const tip = (text) =>
-        `<span class="help-tip" title="${escapeAttr(text)}" aria-label="${escapeAttr(text)}">ⓘ</span>`;
+        `<span class="help-tip" role="button" tabindex="0" aria-label="${escapeAttr(text)}">` +
+        `ⓘ<span class="help-tip-popup">${escapeHtml(text)}</span>` +
+        `</span>`;
 
       // Split total duration_minutes for the two-field display.
       const totalMin = parseInt(e.duration_minutes, 10) || 0;
@@ -3947,7 +4020,7 @@
         `<label class="enabled-check"><input type="checkbox" name="enabled"${
           e.enabled ? " checked" : ""
         } />Enabled ${tip("Toggle off to keep the schedule but stop it from firing. Useful while traveling.")}</label>` +
-        // v1.17.5 — per-schedule weather-gate opt-outs. Useful for
+        // v1.17.6 — per-schedule weather-gate opt-outs. Useful for
         // zones where the global gates don't make sense (e.g. a bird
         // bath fill: no spray drift to defer for wind, no
         // evapotranspiration to boost for hot weather, no point
@@ -4154,7 +4227,7 @@
         `.day-cal-pill:hover .day-cal-pill-meta{white-space:normal;overflow:visible}` +
         `.day-cal-pill:hover .day-cal-pill-zone{white-space:normal;overflow:visible}` +
         // Red "now" line — only shown on today.
-        // v1.17.5 — enhanced "now" line with a left-edge labeled chip
+        // v1.17.6 — enhanced "now" line with a left-edge labeled chip
         // and a subtle pulse so it's obvious where the current time is
         // on the day calendar. The line itself remains pointer-events:
         // none so clicks pass through to underlying pills; the label
@@ -4243,8 +4316,20 @@
         `.weekday-check{display:inline-flex;align-items:center;gap:4px;padding:6px 10px;border:1px solid var(--ci-border);border-radius:6px;cursor:pointer;font-size:12px;color:var(--ci-text);margin:0}` +
         `.weekday-check input{margin-right:4px}` +
         `.enabled-check{display:inline-flex;align-items:center;gap:6px;margin-top:14px;color:var(--ci-text);font-size:13px}` +
-        `.help-tip{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;background:var(--ci-hover);color:var(--ci-text-2);font-size:11px;margin-left:4px;cursor:help;vertical-align:middle}` +
-        `.help-tip:hover{background:var(--ci-accent);color:#fff}` +
+        // v1.17.6 — info-bubble + custom popover. Native `title` was
+        // delayed on desktop and silent on touch; the popover here
+        // shows immediately on :hover, on keyboard :focus, and on
+        // click/tap (panel toggles .help-tip-open via _onClick).
+        // The bubble itself is `position: relative` so the absolutely-
+        // positioned popup anchors to it. z-index is high enough to
+        // float above modals (.modal uses z-index:100).
+        `.help-tip{position:relative;display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;background:var(--ci-hover);color:var(--ci-text-2);font-size:11px;margin-left:4px;cursor:help;vertical-align:middle;user-select:none;-webkit-user-select:none;border:none;font-family:inherit}` +
+        `.help-tip:hover,.help-tip:focus,.help-tip.help-tip-open{background:var(--ci-accent);color:#fff;outline:none}` +
+        `.help-tip-popup{position:absolute;left:50%;bottom:calc(100% + 8px);transform:translateX(-50%);background:var(--ci-card);color:var(--ci-text);border:1px solid var(--ci-border);border-radius:8px;padding:10px 12px;font-size:12px;line-height:1.45;font-weight:400;text-align:left;white-space:normal;width:max-content;max-width:280px;box-shadow:0 6px 20px rgba(0,0,0,0.35);opacity:0;pointer-events:none;transition:opacity 0.12s ease,transform 0.12s ease;z-index:200;cursor:default}` +
+        // Small arrow pointing down to the bubble
+        `.help-tip-popup::after{content:"";position:absolute;left:50%;top:100%;transform:translateX(-50%);border:6px solid transparent;border-top-color:var(--ci-border)}` +
+        `.help-tip-popup::before{content:"";position:absolute;left:50%;top:100%;transform:translateX(-50%);border:5px solid transparent;border-top-color:var(--ci-card);margin-top:-1px;z-index:1}` +
+        `.help-tip:hover .help-tip-popup,.help-tip:focus .help-tip-popup,.help-tip.help-tip-open .help-tip-popup{opacity:1;pointer-events:auto;transform:translateX(-50%) translateY(-2px)}` +
         // Weather banner
         `.weather-banner{background:var(--ci-card);border:1px solid var(--ci-border);border-radius:12px;padding:16px;margin-bottom:16px;display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px}` +
         `.weather-banner-empty{display:flex;align-items:flex-start;gap:12px;grid-template-columns:none}` +
