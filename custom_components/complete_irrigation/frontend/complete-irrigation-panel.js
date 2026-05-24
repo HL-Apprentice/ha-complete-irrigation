@@ -37,7 +37,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.17.2";
+  const PANEL_VERSION = "v1.17.3";
   const DEFAULT_MANUAL_MINUTES = 10;
   const MAX_MANUAL_MINUTES = 60;
   const MAX_SCHEDULE_MINUTES = 480; // 8 hours
@@ -120,6 +120,10 @@
       start_date: "",
       end_date: "",
       repeat_annually: false,
+      // v1.17.3 — per-schedule weather-gate opt-outs
+      ignore_wind: false,
+      ignore_hot_weather: false,
+      ignore_rain_lockout: false,
       // Multi-zone: additional zones after the primary. Each is
       // {zone_entity_id, duration_minutes}. Empty = single-zone schedule.
       // The primary (top-level zone_entity_id + duration_minutes) is
@@ -219,7 +223,7 @@
       // tile show "4:52 left of 10 min" instead of just "4:52 left".
       this._localRunDurations = {};
       this._countdownTimer = null;
-      // v1.17.2 — minute-tick so the day calendar's "now" line drifts
+      // v1.17.3 — minute-tick so the day calendar's "now" line drifts
       // down automatically without waiting for an HA state change to
       // trigger a re-render. Only active while the Today tab is open
       // (set + cleared in connectedCallback / _navigateTo).
@@ -320,7 +324,7 @@
       this.shadowRoot.addEventListener("change", this._onChange);
       this.shadowRoot.addEventListener("input", this._onInput);
       this._scheduleRender();
-      // v1.17.2 — Today is the initial section, so kick off the
+      // v1.17.3 — Today is the initial section, so kick off the
       // now-line tick now (won't double-up because _startNowLineTimer
       // is idempotent).
       if (this._currentSection === "today") this._startNowLineTimer();
@@ -335,7 +339,7 @@
     }
 
     _startNowLineTimer() {
-      // v1.17.2 — re-render every minute so the day-cal-now line drifts
+      // v1.17.3 — re-render every minute so the day-cal-now line drifts
       // down. Idempotent: no-op if already running.
       if (this._nowLineTimer) return;
       this._nowLineTimer = setInterval(() => {
@@ -665,6 +669,12 @@
         this._scheduleEditor.enabled = t.checked;
       } else if (t.name === "repeat_annually") {
         this._scheduleEditor.repeat_annually = t.checked;
+      } else if (
+        t.name === "ignore_wind" ||
+        t.name === "ignore_hot_weather" ||
+        t.name === "ignore_rain_lockout"
+      ) {
+        this._scheduleEditor[t.name] = t.checked;
       } else if (t.name === "mode") {
         // Mode toggle flips which fields show — re-render the modal.
         this._scheduleEditor.mode = t.value;
@@ -836,7 +846,7 @@
       // v1.17 — Today screen's missed-runs banner reads from run history,
       // so load it lazily on first Today open if not already cached.
       if (sectionId === "today" && !this._runHistoryLoaded) this._fetchRunHistory();
-      // v1.17.2 — keep the now-line drifting only while Today is open.
+      // v1.17.3 — keep the now-line drifting only while Today is open.
       if (sectionId === "today") this._startNowLineTimer();
       else this._stopNowLineTimer();
       // Today + Zones both rely on the cached PlannedRuns for their
@@ -911,6 +921,9 @@
         repeat_annually: !!found.repeat_annually,
         interval_anchor: found.interval_anchor || _todayIso(),
         interval_end_time: found.interval_end_time || "",
+        ignore_wind: !!found.ignore_wind,
+        ignore_hot_weather: !!found.ignore_hot_weather,
+        ignore_rain_lockout: !!found.ignore_rain_lockout,
         extra_steps: extra.map((s) => ({
           zone_entity_id: s.zone_entity_id,
           duration_minutes: s.duration_minutes,
@@ -921,7 +934,7 @@
     }
 
     _openCopyOfSchedule(scheduleId) {
-      // v1.17.2 — clone an existing schedule into the editor with a
+      // v1.17.3 — clone an existing schedule into the editor with a
       // null id (so save creates a new schedule, not overwriting the
       // source) and a name suffixed " (copy)" so the duplicate is
       // identifiable in lists before the user picks a better name.
@@ -947,6 +960,9 @@
         repeat_annually: !!found.repeat_annually,
         interval_anchor: found.interval_anchor || _todayIso(),
         interval_end_time: found.interval_end_time || "",
+        ignore_wind: !!found.ignore_wind,
+        ignore_hot_weather: !!found.ignore_hot_weather,
+        ignore_rain_lockout: !!found.ignore_rain_lockout,
         extra_steps: extra.map((s) => ({
           zone_entity_id: s.zone_entity_id,
           duration_minutes: s.duration_minutes,
@@ -1397,6 +1413,10 @@
         start_date: e.start_date || null,
         end_date: e.end_date || null,
         repeat_annually: !!e.repeat_annually,
+        // v1.17.3 — per-schedule weather-gate opt-outs
+        ignore_wind: !!e.ignore_wind,
+        ignore_hot_weather: !!e.ignore_hot_weather,
+        ignore_rain_lockout: !!e.ignore_rain_lockout,
       };
       if (mode === "weekdays") {
         payload.weekdays = e.weekdays;
@@ -2914,7 +2934,7 @@
         })
         .join("");
 
-      // v1.17.2 — more visible now-line: 3px red line + a labeled chip
+      // v1.17.3 — more visible now-line: 3px red line + a labeled chip
       // pinned to the left edge showing the current time. The chip is
       // a child of the line so positioning is automatic. Pulses every
       // 2s so the eye catches it even on a dense calendar.
@@ -3927,6 +3947,21 @@
         `<label class="enabled-check"><input type="checkbox" name="enabled"${
           e.enabled ? " checked" : ""
         } />Enabled ${tip("Toggle off to keep the schedule but stop it from firing. Useful while traveling.")}</label>` +
+        // v1.17.3 — per-schedule weather-gate opt-outs. Useful for
+        // zones where the global gates don't make sense (e.g. a bird
+        // bath fill: no spray drift to defer for wind, no
+        // evapotranspiration to boost for hot weather, no point
+        // pausing during rain).
+        `<h3 class="section-title">Ignore weather gates ${tip("Each toggle turns OFF a global gate for this schedule only. Other schedules still honor the gates normally. Default off (gates apply).")}</h3>` +
+        `<label class="enabled-check"><input type="checkbox" name="ignore_wind"${
+          e.ignore_wind ? " checked" : ""
+        } />Ignore wind defer ${tip("Skip the global wind-speed check. Useful for zones with no spray drift concern (e.g. drip irrigation, a bird bath fill).")}</label>` +
+        `<label class="enabled-check"><input type="checkbox" name="ignore_hot_weather"${
+          e.ignore_hot_weather ? " checked" : ""
+        } />Ignore hot-weather boost ${tip("Skip the hot-weather runtime boost. Useful for fixed-volume zones (bird bath, fountain top-off) where extra water doesn't help.")}</label>` +
+        `<label class="enabled-check"><input type="checkbox" name="ignore_rain_lockout"${
+          e.ignore_rain_lockout ? " checked" : ""
+        } />Ignore rain lockout ${tip("Schedule still fires during a rain-lockout period. Useful for fills/top-offs that the rain doesn't replace.")}</label>` +
         `<div class="modal-actions">` +
         `<button type="button" class="btn btn-secondary modal-cancel">Cancel</button>` +
         `<button type="submit" class="btn btn-primary">${
@@ -4119,7 +4154,7 @@
         `.day-cal-pill:hover .day-cal-pill-meta{white-space:normal;overflow:visible}` +
         `.day-cal-pill:hover .day-cal-pill-zone{white-space:normal;overflow:visible}` +
         // Red "now" line — only shown on today.
-        // v1.17.2 — enhanced "now" line with a left-edge labeled chip
+        // v1.17.3 — enhanced "now" line with a left-edge labeled chip
         // and a subtle pulse so it's obvious where the current time is
         // on the day calendar. The line itself remains pointer-events:
         // none so clicks pass through to underlying pills; the label

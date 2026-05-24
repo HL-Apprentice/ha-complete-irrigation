@@ -148,6 +148,10 @@ _ADD_SCHEDULE_SCHEMA = vol.Schema(
         vol.Optional("start_date"): vol.Any(None, cv.date),
         vol.Optional("end_date"): vol.Any(None, cv.date),
         vol.Optional("repeat_annually", default=False): cv.boolean,
+        # v1.17.3 — per-schedule weather-gate opt-outs
+        vol.Optional("ignore_wind", default=False): cv.boolean,
+        vol.Optional("ignore_hot_weather", default=False): cv.boolean,
+        vol.Optional("ignore_rain_lockout", default=False): cv.boolean,
         # Multi-zone: optional list of {zone_entity_id, duration_minutes}.
         # First step must equal zone_entity_id + duration_minutes.
         vol.Optional("zone_steps", default=[]): vol.All(
@@ -176,6 +180,9 @@ _UPDATE_SCHEDULE_SCHEMA = vol.Schema(
         vol.Optional("start_date"): vol.Any(None, cv.date),
         vol.Optional("end_date"): vol.Any(None, cv.date),
         vol.Optional("repeat_annually"): cv.boolean,
+        vol.Optional("ignore_wind"): cv.boolean,
+        vol.Optional("ignore_hot_weather"): cv.boolean,
+        vol.Optional("ignore_rain_lockout"): cv.boolean,
         vol.Optional("zone_steps"): vol.All(cv.ensure_list, [_ZONE_STEP_SCHEMA]),
     }
 )
@@ -589,6 +596,9 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             end_date=data.get("end_date"),
             repeat_annually=data.get("repeat_annually", False),
             zone_steps=zone_steps,
+            ignore_wind=data.get("ignore_wind", False),
+            ignore_hot_weather=data.get("ignore_hot_weather", False),
+            ignore_rain_lockout=data.get("ignore_rain_lockout", False),
             # PRD #60 — provenance marker so calendar.py / establishment
             # can identify their own entries when #59 two-way calendar
             # edit lands. Anything coming through the service (panel,
@@ -626,6 +636,9 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             "start_date",
             "repeat_annually",
             "end_date",
+            "ignore_wind",
+            "ignore_hot_weather",
+            "ignore_rain_lockout",
         ):
             if key in data:
                 overrides[key] = data[key]

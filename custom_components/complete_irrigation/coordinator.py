@@ -518,16 +518,25 @@ class ScheduleCoordinator:
         # internally and we'd rather not block the tick on disk I/O.
         self._hass.async_create_task(self.async_save_config())
 
-        # If currently locked out, no scheduled runs fire (we still
-        # advance last_tick so we don't backfire a flood when lockout
-        # expires).
-        if self.is_locked_out_now():
-            return
+        # v1.17.3 — if locked out, only schedules with
+        # ignore_rain_lockout=True still fire. Others wait for the
+        # lockout to expire. last_tick still advances either way so
+        # we don't backfire a flood when lockout clears.
+        locked_out = self.is_locked_out_now()
 
         # PRD #38 — honor a user-configured inter-zone valve buffer.
         zone_buffer = self._config.get("zone_buffer_seconds")
+        enabled_scheds = self._store.enabled_schedules()
+        if locked_out:
+            enabled_scheds = [s for s in enabled_scheds if s.ignore_rain_lockout]
+            if not enabled_scheds:
+                return
+            _LOGGER.info(
+                "Rain lockout active; %d schedule(s) with ignore_rain_lockout=True still firing",
+                len(enabled_scheds),
+            )
         upcoming = next_runs(
-            self._store.enabled_schedules(),
+            enabled_scheds,
             from_dt=last - timedelta(hours=2),
             until_dt=now + timedelta(hours=2),
             zone_buffer_seconds=int(zone_buffer) if zone_buffer is not None else None,
@@ -635,21 +644,35 @@ class ScheduleCoordinator:
         boost_reasons: list[str] = []
         triggers: dict[str, Any] = {}
 
+        # v1.17.3 — look up the schedule for per-schedule gate opt-outs
+        # (ignore_wind / ignore_hot_weather). Moisture gate still runs
+        # because it's per-zone — there's no analogous "ignore" since
+        # the user just wouldn't bind a moisture sensor to a bird-bath
+        # zone.
+        sched = self._store.get(run.schedule_id)
+        ignore_wind = bool(sched and sched.ignore_wind)
+        ignore_hot = bool(sched and sched.ignore_hot_weather)
+
         adjusted_minutes, m_skip = self._evaluate_moisture_gate(
             zone_cfg, zone_id, adjusted_minutes, triggers
         )
         if m_skip:
             skip_reasons.append(m_skip)
-        if not skip_reasons:
+        if not skip_reasons and not ignore_wind:
             w_skip = self._evaluate_wind_gate(triggers)
             if w_skip:
                 skip_reasons.append(w_skip)
-        if not skip_reasons:
+        elif ignore_wind:
+            # Note in triggers so History shows the gate was deliberately skipped
+            triggers["wind"] = {"ignored_by_schedule": True}
+        if not skip_reasons and not ignore_hot:
             adjusted_minutes, boost_note = self._evaluate_hot_weather_gate(
                 adjusted_minutes, triggers
             )
             if boost_note:
                 boost_reasons.append(boost_note)
+        elif ignore_hot:
+            triggers["hot_weather"] = {"ignored_by_schedule": True}
 
         # Resolve a friendly zone name (state attribute → entity_id fallback).
         zone_state = self._hass.states.get(zone_id)
