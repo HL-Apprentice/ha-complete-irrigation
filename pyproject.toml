@@ -46,5 +46,6 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 # Dev/script files contain markdown bodies as Python strings — long
-# lines and en-dashes are intentional typography there.
-"scripts/*" = ["E501", "RUF001"]
+# lines, en-dashes, and the multiplication sign (e.g. "256×256") are
+# intentional typography in docstrings and comments.
+"scripts/*" = ["E501", "RUF001", "RUF002"]

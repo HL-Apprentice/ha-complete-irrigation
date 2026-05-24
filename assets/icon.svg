@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="Complete Irrigation">
+  <title>Complete Irrigation</title>
+  <defs>
+    <!-- Blue gradient for the water-drop body: lighter at top, deeper at base
+         so the icon reads as a 3D droplet even at 32px. -->
+    <linearGradient id="drop" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#7fcdf0"/>
+      <stop offset="55%" stop-color="#29b6f6"/>
+      <stop offset="100%" stop-color="#0277bd"/>
+    </linearGradient>
+    <!-- Soft white highlight on the upper-left to suggest a wet shine. -->
+    <radialGradient id="shine" cx="0.32" cy="0.34" r="0.42">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.7"/>
+      <stop offset="60%" stop-color="#ffffff" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <!-- Water-drop body. Classic teardrop: point at top, rounded base.
+       Path designed so the silhouette stays recognizable at sidebar size. -->
+  <path d="M128 24
+           C128 24 56 110 56 162
+           C56 205 88 236 128 236
+           C168 236 200 205 200 162
+           C200 110 128 24 128 24 Z"
+        fill="url(#drop)"/>
+  <!-- Inner shine. Slightly offset to upper-left of center for depth. -->
+  <ellipse cx="103" cy="138" rx="24" ry="36" fill="url(#shine)"/>
+</svg>

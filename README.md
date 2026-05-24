@@ -5,11 +5,15 @@
 <img width="1163" height="651" alt="Screenshot 2026-05-23 at 11 55 52 AM" src="https://github.com/user-attachments/assets/c387e855-fdc8-40c4-ac5b-1fe58875f21a" />
 <img width="1164" height="999" alt="Screenshot 2026-05-23 at 11 55 41 AM" src="https://github.com/user-attachments/assets/c92e31fb-8507-4557-975c-ac7bc815d8f6" />
 <img width="900" height="1284" alt="Screenshot 2026-05-23 at 11 53 47 AM" src="https://github.com/user-attachments/assets/fa82853c-5eee-4de2-9d01-692fbf0b2b3c" />
+<p align="center">
+  <img src="assets/icon.png" alt="Complete Irrigation" width="160" height="160" />
+</p>
+
 # HA Complete Irrigation Integration
 
 A Home Assistant custom integration for complete, sensor-driven irrigation control. Works with any controller that exposes zone switches.
 
-> **Latest: v1.7.0.** Smoke-tested against a real HA container per the 3-check protocol every release. Back up your HA before installing; report bugs at the [issues page](https://github.com/HL-Apprentice/ha-complete-irrigation/issues).
+> **Latest: v1.17.4.** Smoke-tested against a real HA container per the 3-check protocol every release. Back up your HA before installing; report bugs at the [issues page](https://github.com/HL-Apprentice/ha-complete-irrigation/issues). See [CHANGELOG.md](CHANGELOG.md) for what's new.
 
 ## What it does
 
