@@ -230,6 +230,11 @@ class ScheduleCoordinator:
         if saved_last_tick:
             try:
                 saved_dt = datetime.fromisoformat(saved_last_tick)
+                # v1.17.1 — convert to local so downstream from_dt.tzinfo
+                # matches user-configured start_time semantics. Without
+                # this, a UTC-saved last_tick reintroduced the 7-hour
+                # firing bug after a restart.
+                saved_dt = dt_util.as_local(saved_dt)
                 if (now - saved_dt).total_seconds() <= _MISSED_LOOKBACK_MIN * 60:
                     self._last_tick = saved_dt
                     _LOGGER.info(
@@ -484,6 +489,15 @@ class ScheduleCoordinator:
     # ── Tick logic ─────────────────────────────────────────────────
 
     async def _tick(self, now: datetime) -> None:
+        # v1.17.1 — `now` from async_track_time_interval is UTC. Convert
+        # to local immediately so every downstream calc uses local-aware
+        # datetimes. Critical for the planner: it uses from_dt.tzinfo to
+        # localize each schedule's start_time, and a UTC tzinfo on a
+        # user-entered "14:30" produced "14:30 UTC" = 07:30 local,
+        # firing every schedule ~UTC-offset hours early.
+        from homeassistant.util import dt as dt_util
+
+        now = dt_util.as_local(now)
         if self._last_tick is None:
             self._last_tick = now
             return
