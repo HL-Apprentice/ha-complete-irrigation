@@ -495,6 +495,26 @@ class ScheduleCoordinator:
                     run.schedule_name,
                     run.reason,
                 )
+                # v1.16.2 — also write a SKIPPED record to History so the
+                # user sees these silent drops in the panel. Previously
+                # only gate-skips inside _fire_run (moisture/wind) made
+                # it into history; conflict-resolver skips (cascade-cap
+                # deferrals past the 2h cap) were log-only and invisible.
+                zone_state = self._hass.states.get(run.zone_entity_id)
+                zone_name = (
+                    zone_state.attributes.get("friendly_name") if zone_state else None
+                ) or run.zone_entity_id
+                self._run_history.record_skipped(
+                    zone_entity_id=run.zone_entity_id,
+                    zone_name=zone_name,
+                    requested_minutes=run.duration_minutes,
+                    schedule_id=run.schedule_id,
+                    schedule_name=run.schedule_name,
+                    fired_at=now,
+                    reason=run.reason,
+                    triggers={"conflict_resolver": {"verdict": run.reason}},
+                )
+                await self.async_save_run_history()
                 continue
             await self._fire_run(run)
 
