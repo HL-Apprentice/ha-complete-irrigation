@@ -37,7 +37,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.16.2";
+  const PANEL_VERSION = "v1.17.0";
   const DEFAULT_MANUAL_MINUTES = 10;
   const MAX_MANUAL_MINUTES = 60;
   const MAX_SCHEDULE_MINUTES = 480; // 8 hours
@@ -421,6 +421,11 @@
           this._scheduleEditor.interval_end_time = "";
           return this._renderNow();
         }
+        if (action === "go-to-history-skipped") {
+          // v1.17 — banner on Today screen → History with today's skips
+          this._historyFilters = { zone: "", schedule: "", status: "skipped", days: 1 };
+          return this._navigateTo("history");
+        }
         if (action === "history-toggle-triggers") {
           const id = node.dataset.recordId;
           if (!id) return;
@@ -802,6 +807,9 @@
       this._currentSection = sectionId;
       if (sectionId === "schedules" && !this._schedulesLoaded) this._fetchSchedules();
       if (sectionId === "history") this._fetchRunHistory();  // always refetch on open
+      // v1.17 — Today screen's missed-runs banner reads from run history,
+      // so load it lazily on first Today open if not already cached.
+      if (sectionId === "today" && !this._runHistoryLoaded) this._fetchRunHistory();
       // Today + Zones both rely on the cached PlannedRuns for their
       // calendar / strip rendering. Fetch lazily on first open and
       // again whenever schedules mutate (handled in _saveSchedule etc).
@@ -884,7 +892,7 @@
     }
 
     _openCopyOfSchedule(scheduleId) {
-      // v1.16.2 — clone an existing schedule into the editor with a
+      // v1.17.0 — clone an existing schedule into the editor with a
       // null id (so save creates a new schedule, not overwriting the
       // source) and a name suffixed " (copy)" so the duplicate is
       // identifiable in lists before the user picks a better name.
@@ -1599,6 +1607,7 @@
       const qEnd = n.quiet_hours_end || "07:00";
       const enabled = n.enabled !== false; // default true
       const lowMoistureAlerts = n.low_moisture_alerts !== false; // default true
+      const notifyOnMissed = n.notify_on_missed !== false; // default true (v1.17)
       const tip = (text) =>
         `<span class="help-tip" title="${escapeAttr(text)}" aria-label="${escapeAttr(text)}">ⓘ</span>`;
 
@@ -1667,6 +1676,10 @@
         `<div><label>Start ${tip("24h, e.g. 22:00")}</label><input name="quiet_hours_start" type="time" value="${escapeAttr(qStart)}" /></div>` +
         `<div><label>End ${tip("24h, e.g. 07:00 — morning summary fires at this time")}</label><input name="quiet_hours_end" type="time" value="${escapeAttr(qEnd)}" /></div>` +
         `</div>` +
+        `<h3 class="section-title">Missed-run recovery</h3>` +
+        `<label class="enabled-check"><input type="checkbox" name="notify_on_missed"${
+          notifyOnMissed ? " checked" : ""
+        } /> Notify when a scheduled run is skipped ${tip("Whenever the system drops a scheduled run (conflict resolver pushes it past its 2h deferral cap, a moisture/wind/rain gate skips it, or HA was down at the firing minute), a notification with a 'Run now' action button is sent. Tap the button to run the zone with its original planned duration. Only works on the Home Assistant Companion mobile app — other notify targets get plain text.")}</label>` +
         `<h3 class="section-title">Daily low-moisture summary</h3>` +
         `<label class="enabled-check"><input type="checkbox" name="low_moisture_alerts"${
           lowMoistureAlerts ? " checked" : ""
@@ -1710,20 +1723,27 @@
         quiet_hours_end: data.get("quiet_hours_end") || "07:00",
         enabled: form.querySelector('input[name="enabled"]').checked,
       };
-      // low_moisture_alerts is a panel-side preference (stored in the
-      // notifications blob so it survives restarts).
+      // low_moisture_alerts + notify_on_missed are stored alongside
+      // the notification config but consumed by the coordinator, not
+      // the dispatcher itself. Sent as a second service call so the
+      // notify-targets validation above doesn't reject the whole
+      // payload if those fields are missing.
       const lowToggle = form.querySelector('input[name="low_moisture_alerts"]');
+      const missedToggle = form.querySelector('input[name="notify_on_missed"]');
       try {
         await this._hass.callService(
           "complete_irrigation",
           "set_notification_config",
           payload
         );
-        if (lowToggle) {
+        const extras = {};
+        if (lowToggle) extras.low_moisture_alerts = lowToggle.checked;
+        if (missedToggle) extras.notify_on_missed = missedToggle.checked;
+        if (Object.keys(extras).length > 0) {
           await this._hass.callService(
             "complete_irrigation",
             "set_notification_config",
-            { low_moisture_alerts: lowToggle.checked }
+            extras
           );
         }
         await this._fetchConfig();
@@ -1968,6 +1988,7 @@
         `<div class="page-header-right">${themeBtn}` +
         `<span class="version-pill">${PANEL_VERSION}</span></div></header>` +
         this._renderRainLockoutBanner() +
+        this._renderMissedRunsBanner() +
         this._renderWeatherBanner() +
         `<section>` +
         `<div class="section-title-row">` +
@@ -1983,6 +2004,39 @@
               .join("")}</div>`) +
         `</section>` +
         this._renderDayCalendar()
+      );
+    }
+
+    _renderMissedRunsBanner() {
+      // v1.17 — surface today's skipped runs on the Today screen so
+      // silent drops aren't hidden behind the History tab. Clicking the
+      // banner navigates to the History tab filtered to today's skips.
+      if (!Array.isArray(this._runHistory) || this._runHistory.length === 0) {
+        return "";
+      }
+      const now = new Date();
+      const todayStart = new Date(now);
+      todayStart.setHours(0, 0, 0, 0);
+      const startMs = todayStart.getTime();
+      let count = 0;
+      for (const r of this._runHistory) {
+        if (r.status !== "skipped") continue;
+        const ts = Date.parse(r.started_at);
+        if (!isFinite(ts) || ts < startMs) continue;
+        count++;
+      }
+      if (count === 0) return "";
+      const label = count === 1 ? "1 run skipped today" : `${count} runs skipped today`;
+      return (
+        `<div class="missed-runs-banner" data-action="go-to-history-skipped" ` +
+        `title="View today's skipped runs in the History tab" role="button" tabindex="0">` +
+        `<span style="font-size:18px">⚠️</span>` +
+        `<div style="flex:1">` +
+        `<div style="font-weight:600">${label}</div>` +
+        `<div style="font-size:12px;opacity:0.85">Tap to view details. If you enabled missed-run notifications, you should have received a "Run now?" alert on your phone.</div>` +
+        `</div>` +
+        `<span style="opacity:0.7">→</span>` +
+        `</div>`
       );
     }
 
@@ -4125,6 +4179,10 @@
         `.weather-cell-value{font-size:15px;font-weight:600;color:var(--ci-text);margin-top:2px}` +
         // Rain lockout banner
         `.rain-lockout-banner{background:#ffa726;color:#1c1c1c;padding:12px 16px;border-radius:12px;margin-bottom:16px;display:flex;align-items:center;gap:12px}` +
+        // v1.17 — softer yellow than rain-lockout (which is a warning)
+        // since missed runs are informational + actionable, not blocking.
+        `.missed-runs-banner{background:rgba(255,167,38,0.18);color:var(--ci-text);border:1px solid rgba(255,167,38,0.4);padding:10px 14px;border-radius:12px;margin-bottom:16px;display:flex;align-items:center;gap:12px;cursor:pointer;transition:filter 0.12s}` +
+        `.missed-runs-banner:hover{filter:brightness(1.05)}` +
         // Section title row + zone hide
         `.section-title-row{display:flex;align-items:center;justify-content:space-between;margin:16px 0 8px}` +
         `.section-title-row .section-title{margin:0}` +

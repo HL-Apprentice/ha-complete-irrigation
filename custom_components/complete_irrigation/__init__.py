@@ -63,6 +63,9 @@ class _SharedState:
 
     panel_registered: bool = False
     static_path_registered: bool = False
+    # v1.17 — guards against double-registering the action listener
+    # when multiple config entries call _async_register_run_missed_action_listener.
+    run_missed_listener_registered: bool = False
 
 
 def _shared(hass: HomeAssistant) -> _SharedState:
@@ -92,6 +95,71 @@ def find_coordinator(hass: HomeAssistant):
         if coord is not None:
             return coord
     return None
+
+
+def _async_register_run_missed_action_listener(hass: HomeAssistant, shared: _SharedState) -> None:
+    """v1.17 — listen for the user tapping "Run now" on a missed-run
+    notification (Companion app fires mobile_app_notification_action).
+
+    The action's data payload carries zone_entity_id + minutes + a
+    reference to the original SKIPPED History record, so the listener
+    just calls run_zone and adds a triggers.recovered_from breadcrumb
+    on the new run record.
+
+    Idempotent: only one listener is registered per HA session even
+    if multiple config entries set up.
+    """
+    if shared.run_missed_listener_registered:
+        return
+    shared.run_missed_listener_registered = True
+
+    from .coordinator import RUN_MISSED_ACTION
+
+    async def _on_action(event):
+        action = event.data.get("action")
+        if action != RUN_MISSED_ACTION:
+            return  # also catches the _DISMISS sibling action (no-op)
+        action_data = event.data.get("action_data") or {}
+        entity_id = action_data.get("zone_entity_id")
+        minutes = action_data.get("minutes")
+        if not entity_id or not minutes:
+            _LOGGER.warning("RUN_MISSED action without entity_id/minutes: %s", action_data)
+            return
+        _LOGGER.info(
+            "Recovering missed run for %s via notification action (%s min)",
+            entity_id,
+            minutes,
+        )
+        # Stash the recovery breadcrumb so the history record for the
+        # new run will reference the original missed record.
+        coord = find_coordinator(hass)
+        if coord is not None:
+            entry_data = None
+            for key, data in hass.data.get(DOMAIN, {}).items():
+                if key == _SHARED_KEY:
+                    continue
+                if data.get("coordinator") is coord:
+                    entry_data = data
+                    break
+            if entry_data is not None:
+                meta = entry_data.setdefault("pending_run_meta", {})
+                meta[entity_id] = {
+                    "schedule_id": action_data.get("schedule_id"),
+                    "schedule_name": action_data.get("schedule_name", "Recovered"),
+                    "requested_minutes": int(minutes),
+                    "triggers": {
+                        "recovered_from": action_data.get("missed_record_id"),
+                    },
+                    "zone_name": None,  # services.py will fill from state attrs
+                }
+        await hass.services.async_call(
+            DOMAIN,
+            "run_zone",
+            {"entity_id": entity_id, "minutes": int(minutes)},
+            blocking=False,
+        )
+
+    hass.bus.async_listen("mobile_app_notification_action", _on_action)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -158,6 +226,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     async_register_ws_commands(hass)
     async_register_ical_view(hass)
+
+    # v1.17 — listen for "Run now" taps from missed-run notifications.
+    # Idempotent: only registered once per HA session even if multiple
+    # config entries set up.
+    _async_register_run_missed_action_listener(hass, shared)
 
     # Static path serving the panel JS — idempotent across multiple
     # config entries (HA doesn't expose an unregister API, so we

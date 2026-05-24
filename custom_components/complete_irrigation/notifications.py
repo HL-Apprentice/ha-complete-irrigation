@@ -166,8 +166,18 @@ class NotificationDispatcher:
         category: str = CATEGORY_IMPORTANT,
         event_type: str | None = None,
         extra: dict[str, Any] | None = None,
+        actions: list[dict[str, Any]] | None = None,
     ) -> None:
-        """Dispatch a notification through the configured rules."""
+        """Dispatch a notification through the configured rules.
+
+        v1.17 — `actions` lets a caller attach inline action buttons
+        (e.g. "Run now") for mobile_app notify targets. Non-mobile
+        targets ignore actions and just get the message text. Format
+        per HA Companion docs:
+          [{"action": "STR_ID", "title": "Run now", "data": {...}}, ...]
+        The Companion app fires `mobile_app_notification_action` events
+        with `action` + `action_data` when buttons are tapped.
+        """
         from homeassistant.util import dt as dt_util
 
         payload = {
@@ -177,6 +187,7 @@ class NotificationDispatcher:
             "message": message,
             "extra": extra or {},
             "at": dt_util.now().isoformat(),
+            "actions": list(actions) if actions else [],
         }
 
         # Always fire the HA event for automation routing.
@@ -205,6 +216,7 @@ class NotificationDispatcher:
         targets = self._resolved_targets()
         if not targets:
             return
+        actions = payload.get("actions") or []
         for target in targets:
             # Each target like "notify.mobile_app_pete" → domain "notify",
             # service "mobile_app_pete". One bad entry doesn't stop the rest.
@@ -213,11 +225,24 @@ class NotificationDispatcher:
             except ValueError:
                 _LOGGER.warning("notify target must be 'notify.<service>', got %r", target)
                 continue
+            # Inline action buttons are HA-Companion-specific. Other
+            # notify targets get the plain title/message and ignore the
+            # extra data field (or treat it as additional metadata,
+            # depending on integration). We attach data.actions only
+            # when actions are present AND the target looks like a
+            # mobile_app one to avoid sending non-spec payloads to e.g.
+            # Telegram or Discord.
+            service_data: dict[str, Any] = {
+                "title": payload["title"],
+                "message": payload["message"],
+            }
+            if actions and service.startswith("mobile_app"):
+                service_data["data"] = {"actions": actions}
             try:
                 await self._hass.services.async_call(
                     domain,
                     service,
-                    {"title": payload["title"], "message": payload["message"]},
+                    service_data,
                     blocking=False,
                 )
             except Exception:
