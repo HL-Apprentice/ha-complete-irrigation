@@ -1,34 +1,62 @@
 #!/usr/bin/env python3
-"""Generate the integration's icon assets from the canonical Python
-spec below. Outputs:
+"""Generate the integration's icon assets from the canonical SVG.
 
-  assets/icon.png          — 256×256, transparent, for HACS branding
-  assets/icon@2x.png       — 512×512, transparent, for HACS @2x
-  assets/social-preview.png — 1280×640, dark backdrop, for GitHub OG
+  Source:  assets/icon.svg           (hand-editable vector)
+  Outputs: assets/icon.png            — 256×256, transparent, for HACS branding
+           assets/icon@2x.png         — 512×512, transparent, for HACS @2x
+           assets/social-preview.png  — 1280×640, dark backdrop, for GitHub OG
 
 Run from the repo root:  python3 scripts/build-icons.py
 
-Why Python and not the SVG via qlmanage: qlmanage rasterizes against
-a white background and doesn't honor SVG aspect ratios cleanly. PIL
-gives precise transparency + sizing control and re-runs deterministically.
+Pipeline:
+  1. cairosvg rasterizes assets/icon.svg at the requested pixel size.
+     Honors the SVG's bezier curves, gradients, and opacities exactly
+     (the prior Python-polygon approximation produced visible seams
+     where the top wedge met the bottom circle — v1.17.6 swapped to
+     cairosvg so the rendered icon matches the SVG design).
+  2. The social preview composites the rendered icon onto a dark
+     gradient backdrop with the integration name + tagline.
+
+cairosvg is in `pip install cairosvg`. If you don't have it, the
+script prints install instructions and exits without overwriting any
+existing PNGs.
 """
 
 from __future__ import annotations
 
+# macOS SIP strips DYLD_LIBRARY_PATH for /usr/bin/python3, so cairocffi
+# can't find Homebrew's libcairo through normal lib-search paths. Pre-
+# load the dylib explicitly via ctypes BEFORE importing cairosvg.
+import ctypes
+import io
+import sys
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+for cairo_path in (
+    "/opt/homebrew/lib/libcairo.2.dylib",  # Apple Silicon Homebrew
+    "/usr/local/lib/libcairo.2.dylib",  # Intel Homebrew
+    "/opt/local/lib/libcairo.2.dylib",  # MacPorts
+):
+    try:
+        ctypes.CDLL(cairo_path, ctypes.RTLD_GLOBAL)
+        break
+    except OSError:
+        continue
 
-ASSETS = Path(__file__).parent.parent / "assets"
+try:
+    import cairosvg
+    from PIL import Image, ImageDraw, ImageFont
+except ImportError as e:
+    print(f"Missing dependency ({e.name}). Install with:")
+    print("    pip3 install cairosvg pillow")
+    print("On macOS, also: brew install cairo")
+    sys.exit(1)
 
-# ── Color palette ──────────────────────────────────────────────────
-# Matches assets/icon.svg gradient stops. If you change these, also
-# update the SVG so the source-of-truth and the rendered PNG agree.
-TOP_LIGHT = (127, 205, 240, 255)  # #7fcdf0
-MID = (41, 182, 246, 255)  # #29b6f6
-DEEP = (2, 119, 189, 255)  # #0277bd
+REPO = Path(__file__).parent.parent
+SVG_SOURCE = REPO / "assets" / "icon.svg"
+ASSETS = REPO / "assets"
 
-# Social preview backdrop (gradient stops)
+# Social preview backdrop palette
 BG_TOP = (15, 24, 32)
 BG_BOTTOM = (28, 38, 48)
 TEXT_PRIMARY = (255, 255, 255)
@@ -36,100 +64,17 @@ TEXT_SECONDARY = (176, 196, 212)
 TEXT_ACCENT = (127, 205, 240)
 
 
-def _draw_drop(size: int) -> Image.Image:
-    """Render a classic water-drop at the given square pixel size with
-    a transparent background. The drop fills ~85% of the canvas with
-    even margin on all sides."""
-    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    # The drop silhouette mirrors the SVG path's outline:
-    # point at top, rounded base. Built via a triangle (top half) +
-    # circle (bottom half), then filtered to merge into one teardrop.
-    # Coordinates in 256-unit space then scaled.
-    s = size / 256.0
-    # Bottom circle: center (128, 162), radius 72
-    cx, cy, r = 128 * s, 162 * s, 72 * s
-    # Top apex
-    apex = (128 * s, 24 * s)
-    # Side tangent points (rough; the path looks smooth at this scale)
-    # We'll use a polygon for the upper teardrop wedge and a circle
-    # for the rounded base. PIL antialiases by upscaling-then-downscaling.
+def _render_svg_to_png(svg_path: Path, size: int) -> Image.Image:
+    """Rasterize an SVG to a square RGBA PIL image at `size` pixels.
 
-    # Upscale 4x for smoother edges, then downscale at the end.
-    scale = 4
-    up = Image.new("RGBA", (size * scale, size * scale), (0, 0, 0, 0))
-    udraw = ImageDraw.Draw(up)
-
-    def ux(v):
-        return v * scale
-
-    # Path approximation: a polygon for the top wedge + a filled ellipse
-    # for the bottom rounded part. Together they form the teardrop.
-    polygon = [
-        (ux(apex[0]), ux(apex[1])),
-        (ux((cx - r) + r * 0.18), ux(cy - r * 0.82)),
-        (ux(cx - r), ux(cy)),
-        (ux(cx + r), ux(cy)),
-        (ux((cx + r) - r * 0.18), ux(cy - r * 0.82)),
-    ]
-    udraw.polygon(polygon, fill=MID)
-    udraw.ellipse(
-        [
-            ux(cx - r),
-            ux(cy - r),
-            ux(cx + r),
-            ux(cy + r),
-        ],
-        fill=MID,
+    cairosvg preserves the SVG's transparency, gradients, and curves
+    exactly — no shape approximation."""
+    png_bytes = cairosvg.svg2png(
+        url=str(svg_path),
+        output_width=size,
+        output_height=size,
     )
-
-    # Down-sample for smooth edges
-    img = up.resize((size, size), Image.LANCZOS)
-
-    # Apply a vertical gradient over the drop's silhouette so it
-    # reads as 3D. Build a separate gradient image and mask it by
-    # the drop alpha.
-    grad = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    gdraw = ImageDraw.Draw(grad)
-    for y in range(size):
-        # 0 at top, 1 at bottom
-        t = y / (size - 1)
-        if t < 0.55:
-            # Blend TOP_LIGHT → MID
-            tt = t / 0.55
-            color = _lerp(TOP_LIGHT, MID, tt)
-        else:
-            # Blend MID → DEEP
-            tt = (t - 0.55) / 0.45
-            color = _lerp(MID, DEEP, tt)
-        gdraw.line([(0, y), (size, y)], fill=color)
-    # Mask gradient by drop alpha
-    drop_alpha = img.split()[3]
-    grad.putalpha(drop_alpha)
-
-    # Add the inner shine: an offset elliptical highlight, soft-blurred
-    shine = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    sdraw = ImageDraw.Draw(shine)
-    sdraw.ellipse(
-        [
-            int(81 * s),
-            int(106 * s),
-            int(127 * s),
-            int(170 * s),
-        ],
-        fill=(255, 255, 255, 130),
-    )
-    shine = shine.filter(ImageFilter.GaussianBlur(radius=size * 0.04))
-    # Mask the shine by the drop silhouette so it doesn't bleed outside
-    shine_alpha = Image.new("L", (size, size), 0)
-    shine_alpha.paste(shine.split()[3], (0, 0), drop_alpha)
-    shine.putalpha(shine_alpha)
-    grad = Image.alpha_composite(grad, shine)
-    return grad
-
-
-def _lerp(a, b, t):
-    """Linear-interpolate two RGBA tuples."""
-    return tuple(int(a[i] + (b[i] - a[i]) * t) for i in range(4))
+    return Image.open(io.BytesIO(png_bytes)).convert("RGBA")
 
 
 def _load_font(size: int) -> ImageFont.FreeTypeFont:
@@ -192,13 +137,22 @@ def _build_social_preview(icon: Image.Image) -> Image.Image:
 
 
 def main() -> None:
+    if not SVG_SOURCE.exists():
+        print(f"missing {SVG_SOURCE}")
+        sys.exit(1)
     ASSETS.mkdir(parents=True, exist_ok=True)
-    icon_512 = _draw_drop(512)
+
+    # Render the icon at 2x first (sharper source for the downscale +
+    # social preview composite).
+    icon_512 = _render_svg_to_png(SVG_SOURCE, 512)
     icon_512.save(ASSETS / "icon@2x.png", "PNG", optimize=True)
-    icon_256 = icon_512.resize((256, 256), Image.LANCZOS)
+
+    icon_256 = _render_svg_to_png(SVG_SOURCE, 256)
     icon_256.save(ASSETS / "icon.png", "PNG", optimize=True)
+
     social = _build_social_preview(icon_512)
     social.save(ASSETS / "social-preview.png", "PNG", optimize=True)
+
     print(f"wrote {ASSETS / 'icon.png'} (256×256)")
     print(f"wrote {ASSETS / 'icon@2x.png'} (512×512)")
     print(f"wrote {ASSETS / 'social-preview.png'} (1280×640)")

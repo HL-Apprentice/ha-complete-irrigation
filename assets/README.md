@@ -49,7 +49,34 @@ Reference docs: <https://www.home-assistant.io/docs/blog/2020-05-26-logos-custom
 python3 scripts/build-icons.py
 ```
 
-Produces all three PNGs from the canonical Python spec. If you want
-to change the color palette, edit the constants at the top of
-`scripts/build-icons.py` AND update `icon.svg` so both source-of-truth
-files stay in sync.
+Renders `icon.svg` to all three PNGs via cairosvg, preserving the
+SVG's bezier curves, gradients, and transparency exactly. If you
+want to change the icon design, edit `icon.svg` — that's the only
+source-of-truth — then re-run the script.
+
+### macOS dependency setup
+
+```bash
+brew install cairo                       # native libcairo (one-time)
+brew install python@3.12                 # SIP-free Python that can dlopen brew libs
+/opt/homebrew/bin/python3.12 -m pip install --user --break-system-packages \
+    cairosvg pillow
+/opt/homebrew/bin/python3.12 scripts/build-icons.py
+```
+
+Why brew's Python and not `/usr/bin/python3`: macOS SIP strips
+`DYLD_LIBRARY_PATH` from system Python, so cairocffi can't find
+Homebrew's libcairo. The build script pre-loads `libcairo.2.dylib`
+via ctypes as a backup, but the brew Python avoids the issue
+entirely.
+
+### Linux dependency setup
+
+```bash
+sudo apt install libcairo2          # or your distro's equivalent
+pip3 install cairosvg pillow
+python3 scripts/build-icons.py
+```
+
+cairosvg is the only renderer-related dep; pillow handles the
+social-preview composite (gradient + text + icon paste).
