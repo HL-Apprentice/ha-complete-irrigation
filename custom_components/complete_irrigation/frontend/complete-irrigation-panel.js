@@ -37,7 +37,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.17.1";
+  const PANEL_VERSION = "v1.17.2";
   const DEFAULT_MANUAL_MINUTES = 10;
   const MAX_MANUAL_MINUTES = 60;
   const MAX_SCHEDULE_MINUTES = 480; // 8 hours
@@ -219,6 +219,11 @@
       // tile show "4:52 left of 10 min" instead of just "4:52 left".
       this._localRunDurations = {};
       this._countdownTimer = null;
+      // v1.17.2 — minute-tick so the day calendar's "now" line drifts
+      // down automatically without waiting for an HA state change to
+      // trigger a re-render. Only active while the Today tab is open
+      // (set + cleared in connectedCallback / _navigateTo).
+      this._nowLineTimer = null;
 
       // Hidden zones (per-browser, persisted). Toggled from the Zones
       // tab only; Today simply filters them out of view.
@@ -315,6 +320,10 @@
       this.shadowRoot.addEventListener("change", this._onChange);
       this.shadowRoot.addEventListener("input", this._onInput);
       this._scheduleRender();
+      // v1.17.2 — Today is the initial section, so kick off the
+      // now-line tick now (won't double-up because _startNowLineTimer
+      // is idempotent).
+      if (this._currentSection === "today") this._startNowLineTimer();
     }
 
     disconnectedCallback() {
@@ -322,6 +331,23 @@
       this.shadowRoot.removeEventListener("submit", this._onSubmit);
       this.shadowRoot.removeEventListener("change", this._onChange);
       this.shadowRoot.removeEventListener("input", this._onInput);
+      this._stopNowLineTimer();
+    }
+
+    _startNowLineTimer() {
+      // v1.17.2 — re-render every minute so the day-cal-now line drifts
+      // down. Idempotent: no-op if already running.
+      if (this._nowLineTimer) return;
+      this._nowLineTimer = setInterval(() => {
+        if (this._currentSection === "today") this._scheduleRender();
+      }, 60000);
+    }
+
+    _stopNowLineTimer() {
+      if (this._nowLineTimer) {
+        clearInterval(this._nowLineTimer);
+        this._nowLineTimer = null;
+      }
     }
 
     _onClick(e) {
@@ -810,6 +836,9 @@
       // v1.17 — Today screen's missed-runs banner reads from run history,
       // so load it lazily on first Today open if not already cached.
       if (sectionId === "today" && !this._runHistoryLoaded) this._fetchRunHistory();
+      // v1.17.2 — keep the now-line drifting only while Today is open.
+      if (sectionId === "today") this._startNowLineTimer();
+      else this._stopNowLineTimer();
       // Today + Zones both rely on the cached PlannedRuns for their
       // calendar / strip rendering. Fetch lazily on first open and
       // again whenever schedules mutate (handled in _saveSchedule etc).
@@ -892,7 +921,7 @@
     }
 
     _openCopyOfSchedule(scheduleId) {
-      // v1.17.1 — clone an existing schedule into the editor with a
+      // v1.17.2 — clone an existing schedule into the editor with a
       // null id (so save creates a new schedule, not overwriting the
       // source) and a name suffixed " (copy)" so the duplicate is
       // identifiable in lists before the user picks a better name.
@@ -2885,8 +2914,14 @@
         })
         .join("");
 
+      // v1.17.2 — more visible now-line: 3px red line + a labeled chip
+      // pinned to the left edge showing the current time. The chip is
+      // a child of the line so positioning is automatic. Pulses every
+      // 2s so the eye catches it even on a dense calendar.
       const nowMarker = isToday
-        ? `<div class="day-cal-now" style="top:${nowMin}px" title="Now: ${fmtTime(nowMin)}"></div>`
+        ? `<div class="day-cal-now" style="top:${nowMin}px" title="Now: ${fmtTime(nowMin)}">` +
+          `<span class="day-cal-now-label">${fmtTime(nowMin)}</span>` +
+          `</div>`
         : "";
 
       const emptyHint =
@@ -4084,7 +4119,14 @@
         `.day-cal-pill:hover .day-cal-pill-meta{white-space:normal;overflow:visible}` +
         `.day-cal-pill:hover .day-cal-pill-zone{white-space:normal;overflow:visible}` +
         // Red "now" line — only shown on today.
-        `.day-cal-now{position:absolute;left:0;right:0;border-top:2px solid #db4437;z-index:2;pointer-events:none}` +
+        // v1.17.2 — enhanced "now" line with a left-edge labeled chip
+        // and a subtle pulse so it's obvious where the current time is
+        // on the day calendar. The line itself remains pointer-events:
+        // none so clicks pass through to underlying pills; the label
+        // chip can still be hovered for the title tooltip.
+        `.day-cal-now{position:absolute;left:0;right:0;border-top:3px solid #db4437;z-index:5;pointer-events:none;animation:day-cal-now-pulse 2.4s ease-in-out infinite}` +
+        `.day-cal-now-label{position:absolute;left:0;top:-9px;background:#db4437;color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:9px;font-variant-numeric:tabular-nums;letter-spacing:0.2px;box-shadow:0 1px 3px rgba(219,68,55,0.45);pointer-events:auto;cursor:help}` +
+        `@keyframes day-cal-now-pulse{0%{box-shadow:0 0 0 0 rgba(219,68,55,0.55)}70%{box-shadow:0 0 0 6px rgba(219,68,55,0)}100%{box-shadow:0 0 0 0 rgba(219,68,55,0)}}` +
         `.day-cal-empty-hint{position:absolute;top:24px;left:60px;right:8px;text-align:center;color:var(--ci-text-2);font-size:13px}` +
         // Run history tab
         // Notification target rows (v1.15) — replaces the textarea
