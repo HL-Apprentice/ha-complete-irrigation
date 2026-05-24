@@ -146,7 +146,7 @@ async def list_planned_runs(hass, connection, msg):
     The "skipped: cascade-cap" entries are returned too so the panel can
     show why a run isn't going to fire.
     """
-    from datetime import datetime, timedelta
+    from datetime import datetime, timedelta, timezone
 
     from homeassistant.util import dt as dt_util
 
@@ -159,6 +159,15 @@ async def list_planned_runs(hass, connection, msg):
         return
 
     def _parse(s, default):
+        # v1.17.4 — sibling bug to v1.17.1: panel sends ISO strings
+        # like "2026-05-24T13:00:00.000Z" which fromisoformat parses
+        # as UTC-aware. Passing that straight into next_runs() makes
+        # `from_dt.tzinfo = UTC`, and the planner localizes
+        # `start_time` to UTC instead of the user's local zone — same
+        # 7-hour offset bug as v1.17.1 fixed in _tick. ALWAYS convert
+        # to local here, regardless of input tz, so the planner's
+        # `datetime.combine(date, start_time, tzinfo=local)` produces
+        # the user-expected wall-clock fire times.
         if not s:
             return default
         try:
@@ -166,8 +175,8 @@ async def list_planned_runs(hass, connection, msg):
         except ValueError:
             return default
         if dt.tzinfo is None:
-            dt = dt_util.as_local(dt.replace(tzinfo=dt_util.DEFAULT_TIME_ZONE))
-        return dt
+            dt = dt.replace(tzinfo=timezone.utc)  # noqa: UP017 — keep py3.9 compat
+        return dt_util.as_local(dt)
 
     now = dt_util.now()
     from_dt = _parse(msg.get("from_dt"), now)

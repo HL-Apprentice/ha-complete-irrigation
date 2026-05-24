@@ -7,6 +7,7 @@ caller supplies `from_dt` and `until_dt`.
 
 from __future__ import annotations
 
+# ruff: noqa: UP017 — keep timezone.utc style for py3.9-compatible dev runners
 from datetime import date, datetime, time, timedelta, timezone
 
 from custom_components.complete_irrigation.run_planner import (
@@ -64,6 +65,35 @@ def test_planner_localizes_start_time_to_from_dt_tzinfo():
     # Same wall clock as configured, same tz as from_dt
     assert (fire.hour, fire.minute) == (14, 30)
     assert fire.utcoffset() == timedelta(hours=-7)
+
+
+# v1.17.4 — sibling regression for ws_api.list_planned_runs. The
+# WebSocket endpoint that feeds the day calendar display has its own
+# from_dt parsing path that was independently buggy — fixed in
+# coordinator._tick by v1.17.1, missed in ws_api.list_planned_runs
+# until v1.17.4. Pin the contract: if a caller passes from_dt as a
+# UTC-aware datetime (which JS toISOString() always does), the
+# planner still produces wall-clock-correct fire times AS LONG AS
+# the caller converted to local before passing in. This documents
+# the implicit caller contract that future ws / coordinator paths
+# must respect.
+def test_planner_with_utc_input_fires_at_utc_walltime_not_local():
+    """Defensive: confirms the bug condition. UTC-tz from_dt = UTC
+    fire times. Real-world callers MUST convert to local first; this
+    test documents what happens if they don't."""
+    utc = timezone.utc
+    from_dt = datetime(2026, 5, 18, 0, 0, 0, tzinfo=utc)
+    runs = next_runs(
+        [_sched(start_time=time(14, 30))],
+        from_dt=from_dt,
+        until_dt=from_dt + timedelta(days=1),
+    )
+    fire = runs[0].start_at
+    # Wall clock matches start_time but IN UTC — the bug condition.
+    # If a caller in MST sees this fire time and displays it as local,
+    # 14:30 UTC = 07:30 MST = the user-visible "off by 7 hours" bug.
+    assert (fire.hour, fire.minute) == (14, 30)
+    assert fire.utcoffset() == timedelta(0)
 
 
 def test_single_daily_schedule_over_14d_window_yields_14_runs():
@@ -205,7 +235,7 @@ def test_aware_datetimes_preserved_in_planned_runs():
     """When the caller passes tz-aware datetimes, generated PlannedRun
     start_at values must also be aware in the same tz — otherwise
     HA's comparisons throw 'naive vs aware' errors."""
-    aware_start = MONDAY_MIDNIGHT.replace(tzinfo=timezone.utc)  # noqa: UP017
+    aware_start = MONDAY_MIDNIGHT.replace(tzinfo=timezone.utc)
     aware_end = aware_start + timedelta(days=2)
     runs = next_runs([_sched()], from_dt=aware_start, until_dt=aware_end)
     assert len(runs) == 2
