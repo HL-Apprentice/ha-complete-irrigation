@@ -75,10 +75,16 @@ _STOP_ZONE_SCHEMA = vol.Schema(
     }
 )
 
+# v1.17.5 — dropped vol.Length(min=1). The mode-specific "weekdays
+# required when mode=weekdays" check happens at Schedule.__post_init__
+# (see _validate_weekdays_mode). Enforcing it at the schema layer
+# blocked legitimate updates to interval / interval_hours schedules:
+# the panel correctly sends `weekdays: []` for those modes and the
+# strict schema would 400 the request. Mirrors the permissive shape
+# already used in _ADD_SCHEDULE_SCHEMA.
 _WEEKDAYS_SCHEMA = vol.All(
     cv.ensure_list,
     [vol.All(vol.Coerce(int), vol.Range(min=0, max=6))],
-    vol.Length(min=1),
 )
 
 _ZONE_STEP_SCHEMA = vol.Schema(

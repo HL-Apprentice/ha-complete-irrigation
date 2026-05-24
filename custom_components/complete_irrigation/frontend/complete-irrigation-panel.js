@@ -37,7 +37,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.17.4";
+  const PANEL_VERSION = "v1.17.5";
   const DEFAULT_MANUAL_MINUTES = 10;
   const MAX_MANUAL_MINUTES = 60;
   const MAX_SCHEDULE_MINUTES = 480; // 8 hours
@@ -120,7 +120,7 @@
       start_date: "",
       end_date: "",
       repeat_annually: false,
-      // v1.17.4 — per-schedule weather-gate opt-outs
+      // v1.17.5 — per-schedule weather-gate opt-outs
       ignore_wind: false,
       ignore_hot_weather: false,
       ignore_rain_lockout: false,
@@ -223,7 +223,7 @@
       // tile show "4:52 left of 10 min" instead of just "4:52 left".
       this._localRunDurations = {};
       this._countdownTimer = null;
-      // v1.17.4 — minute-tick so the day calendar's "now" line drifts
+      // v1.17.5 — minute-tick so the day calendar's "now" line drifts
       // down automatically without waiting for an HA state change to
       // trigger a re-render. Only active while the Today tab is open
       // (set + cleared in connectedCallback / _navigateTo).
@@ -324,7 +324,7 @@
       this.shadowRoot.addEventListener("change", this._onChange);
       this.shadowRoot.addEventListener("input", this._onInput);
       this._scheduleRender();
-      // v1.17.4 — Today is the initial section, so kick off the
+      // v1.17.5 — Today is the initial section, so kick off the
       // now-line tick now (won't double-up because _startNowLineTimer
       // is idempotent).
       if (this._currentSection === "today") this._startNowLineTimer();
@@ -339,7 +339,7 @@
     }
 
     _startNowLineTimer() {
-      // v1.17.4 — re-render every minute so the day-cal-now line drifts
+      // v1.17.5 — re-render every minute so the day-cal-now line drifts
       // down. Idempotent: no-op if already running.
       if (this._nowLineTimer) return;
       this._nowLineTimer = setInterval(() => {
@@ -846,7 +846,7 @@
       // v1.17 — Today screen's missed-runs banner reads from run history,
       // so load it lazily on first Today open if not already cached.
       if (sectionId === "today" && !this._runHistoryLoaded) this._fetchRunHistory();
-      // v1.17.4 — keep the now-line drifting only while Today is open.
+      // v1.17.5 — keep the now-line drifting only while Today is open.
       if (sectionId === "today") this._startNowLineTimer();
       else this._stopNowLineTimer();
       // Today + Zones both rely on the cached PlannedRuns for their
@@ -934,7 +934,7 @@
     }
 
     _openCopyOfSchedule(scheduleId) {
-      // v1.17.4 — clone an existing schedule into the editor with a
+      // v1.17.5 — clone an existing schedule into the editor with a
       // null id (so save creates a new schedule, not overwriting the
       // source) and a name suffixed " (copy)" so the duplicate is
       // identifiable in lists before the user picks a better name.
@@ -1413,7 +1413,7 @@
         start_date: e.start_date || null,
         end_date: e.end_date || null,
         repeat_annually: !!e.repeat_annually,
-        // v1.17.4 — per-schedule weather-gate opt-outs
+        // v1.17.5 — per-schedule weather-gate opt-outs
         ignore_wind: !!e.ignore_wind,
         ignore_hot_weather: !!e.ignore_hot_weather,
         ignore_rain_lockout: !!e.ignore_rain_lockout,
@@ -2934,7 +2934,7 @@
         })
         .join("");
 
-      // v1.17.4 — more visible now-line: 3px red line + a labeled chip
+      // v1.17.5 — more visible now-line: 3px red line + a labeled chip
       // pinned to the left edge showing the current time. The chip is
       // a child of the line so positioning is automatic. Pulses every
       // 2s so the eye catches it even on a dense calendar.
@@ -3947,7 +3947,7 @@
         `<label class="enabled-check"><input type="checkbox" name="enabled"${
           e.enabled ? " checked" : ""
         } />Enabled ${tip("Toggle off to keep the schedule but stop it from firing. Useful while traveling.")}</label>` +
-        // v1.17.4 — per-schedule weather-gate opt-outs. Useful for
+        // v1.17.5 — per-schedule weather-gate opt-outs. Useful for
         // zones where the global gates don't make sense (e.g. a bird
         // bath fill: no spray drift to defer for wind, no
         // evapotranspiration to boost for hot weather, no point
@@ -4154,7 +4154,7 @@
         `.day-cal-pill:hover .day-cal-pill-meta{white-space:normal;overflow:visible}` +
         `.day-cal-pill:hover .day-cal-pill-zone{white-space:normal;overflow:visible}` +
         // Red "now" line — only shown on today.
-        // v1.17.4 — enhanced "now" line with a left-edge labeled chip
+        // v1.17.5 — enhanced "now" line with a left-edge labeled chip
         // and a subtle pulse so it's obvious where the current time is
         // on the day calendar. The line itself remains pointer-events:
         // none so clicks pass through to underlying pills; the label
