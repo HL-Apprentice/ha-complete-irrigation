@@ -1,0 +1,281 @@
+# Changelog
+
+All notable changes to this integration. The format loosely follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
+project uses [Semantic Versioning](https://semver.org/).
+
+## v1.17.2 — 2026-05-24
+
+### Improved
+
+- **Clearer "now" line on the day calendar.** Was a 2px red line with
+  hover-only tooltip; now a 3px line with a pinned `8:34 AM` label chip
+  on the left edge, a subtle 2.4s pulse for visibility, and an
+  auto-tick that re-renders Today every 60 s so the line drifts down
+  on its own (the tick runs only while Today is open and stops itself
+  on tab change / panel disconnect).
+
+## v1.17.1 — 2026-05-24
+
+### Fixed (critical)
+
+- **Scheduled runs fired ~UTC-offset hours early.** Coordinator's
+  `_tick` callback receives `now` from `async_track_time_interval` as
+  a UTC datetime. The pure-logic planner used `from_dt.tzinfo` to
+  localize each schedule's `start_time`, so a user-entered "14:30"
+  became "14:30 UTC" — which fires at 07:30 in MST/PDT (UTC−7),
+  exactly the 7-hour offset users reported. Fix: convert `now` to
+  local via `dt_util.as_local()` at the top of `_tick`, and convert
+  the persisted `_last_tick` on startup so post-fix restarts don't
+  reintroduce the offset. Bug has existed since v0.x; only became
+  visible when daytime-anchored schedules were created. Added
+  `test_planner_localizes_start_time_to_from_dt_tzinfo` regression
+  test (existing tests used naive datetimes and couldn't catch it).
+
+## v1.17.0 — 2026-05-23
+
+### Added
+
+- **Missed-run recovery via actionable "Run now?" notifications.**
+  When a scheduled run is skipped (conflict resolver, moisture / wind /
+  rain gate, or HA was down at the firing minute), the integration
+  sends a notification with a "Run now (X min)" action button. Tapping
+  it runs the zone with the schedule's original planned duration.
+  Mechanism: action payload packed into the Companion notification's
+  `data.actions`; `mobile_app_notification_action` event listener
+  catches the tap and calls `run_zone` with the original parameters.
+  Non-Companion notify targets (Telegram, etc.) get plain text — no
+  buttons but the notification still arrives. New
+  `notify_on_missed` setting (Notifications tab → toggle, default on).
+- **Restart-missed runs are now caught.** `_last_tick` persists to the
+  config blob every minute. On startup, if the saved tick is ≤5 min
+  old, the coordinator resumes from there instead of "now" — runs in
+  the gap get processed normally. Long outages (>5 min) still fall
+  back to "now" so a half-day outage doesn't burst-fire every missed
+  run.
+- **Today screen "N runs skipped today" banner.** Soft-yellow banner
+  at the top of Today when any of today's history records are SKIPPED.
+  Click → History tab pre-filtered to today's skips.
+
+## v1.16.2 — 2026-05-23
+
+### Added
+
+- **Copy button on each schedule row.** Edit / Copy / Delete. Copy
+  opens the editor pre-filled with a clone of the source: id cleared
+  (save creates a new schedule), name suffixed `" (copy)"`, all
+  fields copied (zone_steps, weekdays, mode, interval settings,
+  active period). Two-click flow for second daily runs.
+- **Conflict-resolver skips now recorded in History.** Previously the
+  tick loop just `_LOGGER.info`'d when the resolver dropped a run
+  (e.g. `skipped:cascade-cap`); now those drops also write a SKIPPED
+  record so they're visible in the History tab like any other skip.
+  Closes the gap that hid silent drops.
+
+## v1.16.1 — 2026-05-23
+
+### Fixed
+
+- **`_panel_version` no longer blocks the event loop.** Was reading
+  `manifest.json` synchronously during `async_setup_entry`, which
+  HA 2025+ flags as a blocking call. Replaced with
+  `async_get_integration(hass, DOMAIN).version` — no file I/O, just
+  a dict lookup against HA's loader cache.
+
+## v1.16.0 — 2026-05-23
+
+### Fixed (correctness)
+
+- **Frontend planner dedup via new WS endpoint.** Today calendar +
+  Zones strip re-implemented schedule expansion in JS, ignoring
+  `start_date`, `repeat_annually`, configurable `zone_buffer_seconds`,
+  and conflict resolution — so the panel could show runs that
+  wouldn't fire (or miss runs that would). New
+  `complete_irrigation/list_planned_runs` WS endpoint returns
+  server-side `next_runs() → resolve_conflicts()` output, cached
+  client-side by local date. Schedule mutations invalidate
+  automatically.
+
+### Refactored
+
+- `_fire_run` (158 lines) split into 3 gate-evaluator helpers
+  (`_evaluate_moisture_gate`, `_evaluate_wind_gate`,
+  `_evaluate_hot_weather_gate`).
+- `Schedule.__post_init__` (60 lines) split into per-mode validators.
+- 4 pure-logic helpers extracted from `coordinator.py` into new
+  `coordinator_logic.py` (shrinks the HA-coupled file).
+- `handle_run_zone` extracted `_notify_zone_failed` and
+  `_record_run_start_to_history`.
+- `conflict_resolver`: extracted shared `_apply_defer` (was
+  copy-pasted in 3 policies); `DEFAULT_CASCADE_CAP_MINUTES` derived
+  from `DEFAULT_CASCADE_CAP_HOURS` in const.py.
+- `set_general_config` switched from if-arm junk-drawer to
+  `_GENERAL_CONFIG_FIELDS` table.
+- `notifications.update_config` got an explicit allowlist + warning
+  on unknown keys.
+- `calendar.event` cached for 60 s — was running 30-day expansion on
+  every HA poll.
+- Inline imports promoted in `run_planner.py`; type annotations added.
+- `DEFAULT_ZONE_{MIN,TARGET,MAX}_PCT` constants in const.py.
+- Dead `due_runs` method + its tests removed.
+- `PANEL_VERSION` constant (was duplicated in 10+ render sites).
+- `fmtTimeOfDay` hoisted to module level (was inline-defined twice).
+- `_stateSignature` now tracks every per-zone bound sensor + global
+  weather sensors — Zones chips refresh on manually-bound sensors.
+- `_renderExtraStepRow` no longer regex-mutates rendered HTML.
+
+## v1.15.0 — 2026-05-23
+
+### Added
+
+- **Notification target editor.** Each notify target gets its own row
+  with a dropdown of available `notify.*` services. + Add target /
+  × remove. Stale targets (unloaded integrations) still appear with
+  "(not loaded)" label so they can be removed cleanly.
+- **Auto-discover sibling temp/humidity sensors.** When a zone's
+  bound moisture sensor has companion entities on the same device
+  (entity_ids differing only by "moisture" → "temperature" or
+  "humidity"), the climate chips appear automatically with a dashed
+  border + "(auto-detected)" tooltip. Vanishes once the user binds
+  temp/humidity explicitly in the Sensors editor.
+
+### Security (review batch — see below for context)
+
+- **S1**: iCal feed now `requires_auth=True` + `_ics_escape` strips
+  control chars, so user-controlled schedule names can't CRLF-inject
+  into the VCALENDAR seen by external calendar subscribers.
+- **S2**: WS commands `get_config` + `list_run_history` now
+  `@websocket_api.require_admin` — read-only HA users can no longer
+  dump notify_targets, sensor entity_ids, or 90 days of history.
+- **S3**: Panel registered with `require_admin=True`. Hardware control
+  (run/stop) and schedule edits are admin-only.
+- **S4**: `notify_targets` rejects anything not in the `notify.*`
+  domain (both voluptuous schema + dispatcher's coerce loop).
+  Prevents installing arbitrary `domain.service` callouts via
+  `set_notification_config`.
+- **S5**: Theme value injection into `<style>` sanitized — keys must
+  match `/^[a-zA-Z0-9_-]+$/`, values strip CSS-syntactic chars.
+- **S6**: run-history `triggers` keys escaped via `escapeHtml` in the
+  History table button label.
+- **S7**: Repository link gets `rel="noopener noreferrer"` (reverse
+  tab-nabbing) + `escapeAttr` on href.
+- **S8**: Dead `_renderTodaysTimeline` (which called undefined
+  `_renderTomorrowList`) removed entirely. 65 lines deleted.
+
+### Refactored
+
+- `Schedule.with_changes(**overrides)` helper — collapses the
+  field-by-field rebuild in `handle_set_schedule_enabled` /
+  `handle_update_schedule` from 30+ lines to ~5. Eliminates a real
+  bug class (adding a Schedule field, forgetting to copy in the
+  handler).
+- `_find_coordinator` deduped into `__init__.py.find_coordinator`.
+  ws_api / services / ical_view all use the single source of truth.
+
+## v1.14.1 — 2026-05-23
+
+### Added
+
+- **Daily-window cap for `interval_hours` schedules.** Optional "Stop
+  firing after" time. When set, the schedule fires every N hours
+  starting at `start_time` EACH DAY, capped at the stop-after time
+  (inclusive). E.g. "every 2h from 06:00 to 20:00" → 06, 08, 10, 12,
+  14, 16, 18, 20 each day; nothing overnight. When unset, legacy
+  continuous-across-days behavior preserved. New `interval_end_time`
+  field on `Schedule` (`time | None`).
+
+## v1.14.0 — 2026-05-23
+
+### Added
+
+- **Run History tab.** Every completed / skipped / aborted / manual
+  run recorded with: date/time, zone, schedule, requested vs actual
+  duration, status badge + reason, expandable triggers blob
+  (moisture readings, wind, hot-weather decisions).
+- New `custom_components/complete_irrigation/run_history.py` — pure
+  logic, 22 unit tests covering the lifecycle.
+- Persistent JSON store under HA's `.storage/`, 90-day rolling
+  retention, hard cap of 1000 records to keep WS payload reasonable.
+- Coordinator hooks: scheduled-run starts stash trigger metadata for
+  the service handler; skips record directly to history with full
+  reason.
+- `services.py`: `run_zone` records the start, auto-stop records
+  completion, external switch-off records abort, `stop_zone` records
+  abort with reason "user pressed Stop".
+- New WS command `complete_irrigation/list_run_history`.
+- New service `complete_irrigation.clear_run_history`.
+- Frontend: zone / schedule / status / date-range filters and
+  expandable triggers panel per row; auto-refresh after run_zone /
+  stop_zone when the History tab is currently open.
+
+## v1.13.5 — 2026-05-23
+
+### Added
+
+- **2-day calendar window** on the Today screen. Side-by-side columns
+  (today + tomorrow); ← / → shifts the window by one day; "Today"
+  snaps back. Mobile stacks them vertically.
+- **Hover-expand pills.** Mouse over any pill and it grows to ~78 px
+  with full zone + schedule name + meta visible instantly. Click
+  still opens the schedule editor.
+
+## v1.13.4 — 2026-05-23
+
+### Fixed
+
+- **Mobile: default sidebar to collapsed.** On phone-width viewports
+  (≤700 px), the panel's expanded sidebar was a `position: fixed`
+  overlay covering the whole main column — first-time mobile users
+  opened the app and saw only the sidebar. Now defaults `_collapsed`
+  to true when `matchMedia("(max-width: 700px)")` matches AND no
+  preference is stored. User toggles still persist.
+
+## v1.13.3 — 2026-05-23
+
+### Added
+
+- **Day calendar 24-hour time grid.** Today calendar became a true
+  time-grid (1 px = 1 min, 24 h tall, 600 px scrollable viewport)
+  instead of a list of rows. Solid 1 px line at the top of each
+  hour, 50%-opacity ::after pseudo at the half-hour. Each scheduled
+  run rendered as an absolutely-positioned `.day-cal-pill` at top =
+  `start_minutes`, height = `max(18, duration_minutes)`.
+
+## v1.13.2 — 2026-05-23
+
+### Fixed
+
+- **Multi-zone schedules show on every bound zone's 7-day strip.**
+  `_schedulesFiringOn` only matched the primary `zone_entity_id`;
+  now also matches `zone_steps[i].zone_entity_id`. Verified live:
+  both zones in a multi-zone schedule show 7/7 days with fires.
+
+## v1.13.1 — 2026-05-23
+
+### Added
+
+- **Vertical day calendar with prev/next navigation.** Replaces the
+  old horizontal timeline + tomorrow list on the Today screen.
+  Vertical list of the selected day's runs; ← / → buttons navigate
+  by day; "Today" button appears once offset ≠ 0; click any row to
+  edit the underlying schedule.
+
+---
+
+## Earlier releases
+
+For v1.12.x and earlier, see the [GitHub Releases](https://github.com/HL-Apprentice/ha-complete-irrigation/releases)
+page. Highlights from prior work:
+
+- **v1.12** — schedule active period (start_date / end_date /
+  repeat_annually)
+- **v1.11** — "every N hours" scheduling mode
+- **v1.10** — provenance tracking, configurable zone buffer, weekly
+  stats, snooze, deep-links
+- **v1.9** — sticky sidebar, dark theme readability, various fixes
+- **v1.8** — multi-zone schedules, HA theme picker
+- **v1.7-v1.6** — refinements + dark theme polish
+- **v1.5** — sidebar navigation
+- **v1.4** — interval scheduling mode, hours+minutes durations
+- **v1.3-v1.0** — initial release through Slice 17 (establishment +
+  iCal), full schedule engine + storage + CRUD services
