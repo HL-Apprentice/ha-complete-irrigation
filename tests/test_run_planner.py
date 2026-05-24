@@ -43,6 +43,29 @@ def test_empty_schedules_returns_empty():
     assert runs == []
 
 
+# v1.17.1 regression: when from_dt is tz-aware and from a non-UTC zone,
+# the planner must localize start_time to the SAME zone (not UTC). The
+# coordinator was passing UTC `now` from HA's interval tracker straight
+# into next_runs(), making "14:30" mean "14:30 UTC" which fires at the
+# local equivalent (07:30 in MST/PDT — exactly the 7-hour offset users
+# reported). The fix is in coordinator._tick (converts now to local),
+# but this test pins the planner contract: from_dt.tzinfo IS the tz of
+# the fired runs.
+def test_planner_localizes_start_time_to_from_dt_tzinfo():
+    mst = timezone(timedelta(hours=-7))  # America/Phoenix offset
+    from_dt = datetime(2026, 5, 18, 0, 0, 0, tzinfo=mst)
+    runs = next_runs(
+        [_sched(start_time=time(14, 30))],
+        from_dt=from_dt,
+        until_dt=from_dt + timedelta(days=1),
+    )
+    assert len(runs) == 1
+    fire = runs[0].start_at
+    # Same wall clock as configured, same tz as from_dt
+    assert (fire.hour, fire.minute) == (14, 30)
+    assert fire.utcoffset() == timedelta(hours=-7)
+
+
 def test_single_daily_schedule_over_14d_window_yields_14_runs():
     runs = next_runs(
         [_sched()],
