@@ -260,6 +260,10 @@ _SET_NOTIFICATION_CONFIG_SCHEMA = vol.Schema(
         # a notification with a "Run now" action button so the user
         # can recover the missed run with one tap.
         vol.Optional("notify_on_missed"): cv.boolean,
+        # v1.17.8 — when a scheduled run is cut short by an external
+        # actor (something other than our auto-stop turns the switch
+        # off), notify with "Run remainder" + "Open Logbook" actions.
+        vol.Optional("notify_on_aborted"): cv.boolean,
     }
 )
 
@@ -357,6 +361,67 @@ async def _notify_zone_failed(coord, friendly: str, message: str) -> None:
         title="Zone failed to start",
         category=CATEGORY_CRITICAL,
         event_type="zone_start_failed",
+    )
+
+
+async def _maybe_notify_cut_short(coord, record) -> None:
+    """v1.17.8 — actionable notification when a SCHEDULED run is cut
+    short by an external actor at <90% of planned duration.
+
+    Triggered from the _on_state_change listener in handle_run_zone.
+    Honors the `notify_on_aborted` setting (default true). Action
+    buttons:
+
+      • "Run remainder (N min)" — fires run_zone for the missing
+        duration (planned minus actual). Uses the same Companion-app
+        mobile_app_notification_action plumbing as v1.17.0.
+      • "Open Logbook" — opens HA Logbook filtered to this switch so
+        the user can see who/what turned it off (the actual fix path).
+    """
+    if record is None or coord is None or coord.notifier is None:
+        return
+    # Manual aborts and user-initiated Stops aren't surprises — don't notify.
+    if record.source != SOURCE_SCHEDULED:
+        return
+    if not record.reason or "externally" not in record.reason:
+        return
+    requested = int(record.requested_minutes or 0)
+    actual = int(record.actual_minutes or 0)
+    if requested <= 0:
+        return
+    # Only notify if the cut was significant (>10% of planned remaining).
+    if actual >= requested * 0.9:
+        return
+    notif_cfg = coord.config.get("notifications", {})
+    if not notif_cfg.get("notify_on_aborted", True):
+        return
+    remaining = max(0, requested - actual)
+    await coord.notifier.notify(
+        f"{record.schedule_name or 'Scheduled run'} ({record.zone_name}) was cut "
+        f"short — ran {actual} of {requested} min before something turned the "
+        f"switch off. Tap to run the remaining {remaining} min or check the "
+        f"Logbook for the cause.",
+        title="Irrigation: run cut short",
+        category="important",
+        event_type="run_cut_short",
+        actions=[
+            {
+                "action": "COMPLETE_IRRIGATION_RUN_REMAINDER",
+                "title": f"Run remainder ({remaining} min)",
+                "data": {
+                    "zone_entity_id": record.zone_entity_id,
+                    "minutes": remaining,
+                    "original_record_id": record.id,
+                    "schedule_id": record.schedule_id,
+                    "schedule_name": record.schedule_name,
+                },
+            },
+            {
+                "action": "URI",
+                "title": "Open Logbook",
+                "uri": f"/config/logs?entity_id={record.zone_entity_id}",
+            },
+        ],
     )
 
 
@@ -513,12 +578,19 @@ async def _async_register_services(hass: HomeAssistant) -> None:
                 _cancel_handles(entry_data, entity_id)
                 # External off — treat as abort with a generic reason.
                 if coord is not None:
-                    coord.run_history.abort_run(
+                    rec = coord.run_history.abort_run(
                         entity_id,
                         ended_at=dt_util.utcnow(),
                         reason="switch turned off externally",
                     )
                     hass.async_create_task(coord.async_save_run_history())
+                    # v1.17.8 — if a SCHEDULED run was cut short by an
+                    # external actor (not the user pressing Stop), the
+                    # user almost always wants to know. Fire an
+                    # actionable notification with "Run remainder" +
+                    # "Open Logbook" buttons. Skips short-by-design
+                    # cases: source=manual or actual >= 90% of planned.
+                    hass.async_create_task(_maybe_notify_cut_short(coord, rec))
                 _LOGGER.info(
                     "Manual run for %s ended externally — cancelled auto-stop",
                     entity_id,

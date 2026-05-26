@@ -92,6 +92,24 @@ def test_update_schedule_with_weekdays_in_weekdays_mode():
     assert result["weekdays"] == [0, 1, 2, 3, 4]
 
 
+def test_notification_schema_accepts_notify_on_aborted():
+    """v1.17.8 — `notify_on_aborted` joins the notifications config
+    blob alongside notify_on_missed + low_moisture_alerts. Validates
+    cleanly when the panel includes it in the save payload."""
+    from custom_components.complete_irrigation.services import (
+        _SET_NOTIFICATION_CONFIG_SCHEMA,
+    )
+
+    result = _SET_NOTIFICATION_CONFIG_SCHEMA(
+        {
+            "notify_on_aborted": False,
+            "notify_on_missed": True,
+        }
+    )
+    assert result["notify_on_aborted"] is False
+    assert result["notify_on_missed"] is True
+
+
 def test_add_schedule_with_interval_hours_and_empty_weekdays_unchanged():
     """ADD has always used a permissive weekdays validator. Pinned here
     to make sure we don't accidentally tighten it later."""
