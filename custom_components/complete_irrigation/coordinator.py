@@ -77,6 +77,9 @@ _MISSED_LOOKBACK_MIN = 5
 # v1.17 — Companion-notification action prefix. Used for both sending
 # the action and matching incoming mobile_app_notification_action events.
 RUN_MISSED_ACTION = "COMPLETE_IRRIGATION_RUN_MISSED"
+# v1.17.8 — fired when the user taps "Run remainder (N min)" on a
+# cut-short notification (see services.py _maybe_notify_cut_short).
+RUN_REMAINDER_ACTION = "COMPLETE_IRRIGATION_RUN_REMAINDER"
 
 
 def _storage_key(entry_id: str, suffix: str = "schedules") -> str:
