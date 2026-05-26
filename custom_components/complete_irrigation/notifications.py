@@ -106,11 +106,13 @@ class NotificationDispatcher:
         self.enabled: bool = True
         # Per-category mute (default: critical always on, others on)
         self.muted_categories: set[str] = set()
-        # Not used by the dispatcher itself — coordinator reads it from
-        # the persisted config blob. Held here only so update_config's
-        # allowlist accepts it without emitting a spurious warning when
-        # the coordinator splats the whole notifications config.
+        # Not used by the dispatcher itself — coordinator / services
+        # read these from the persisted config blob. Held here only so
+        # update_config's allowlist accepts them without emitting a
+        # spurious warning when the whole notifications blob is splatted.
         self.low_moisture_alerts: bool = True
+        self.notify_on_missed: bool = True  # v1.17
+        self.notify_on_aborted: bool = True  # v1.17.8
 
     # Explicit allowlist of attrs settable via update_config. setattr-based
     # fallback was too permissive — a typo like `notify_targest` would
@@ -125,6 +127,8 @@ class NotificationDispatcher:
             "enabled",
             "muted_categories",
             "low_moisture_alerts",
+            "notify_on_missed",  # v1.17 — accepted, read by coordinator not dispatcher
+            "notify_on_aborted",  # v1.17.8 — same shape, read in services.py
         }
     )
 

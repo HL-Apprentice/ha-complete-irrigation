@@ -113,25 +113,27 @@ def _async_register_run_missed_action_listener(hass: HomeAssistant, shared: _Sha
         return
     shared.run_missed_listener_registered = True
 
-    from .coordinator import RUN_MISSED_ACTION
+    from .coordinator import RUN_MISSED_ACTION, RUN_REMAINDER_ACTION
 
     async def _on_action(event):
         action = event.data.get("action")
-        if action != RUN_MISSED_ACTION:
-            return  # also catches the _DISMISS sibling action (no-op)
+        if action not in (RUN_MISSED_ACTION, RUN_REMAINDER_ACTION):
+            return  # also catches DISMISS / unrelated actions (no-op)
         action_data = event.data.get("action_data") or {}
         entity_id = action_data.get("zone_entity_id")
         minutes = action_data.get("minutes")
         if not entity_id or not minutes:
-            _LOGGER.warning("RUN_MISSED action without entity_id/minutes: %s", action_data)
+            _LOGGER.warning("%s action without entity_id/minutes: %s", action, action_data)
             return
+        kind = "missed run" if action == RUN_MISSED_ACTION else "remainder"
         _LOGGER.info(
-            "Recovering missed run for %s via notification action (%s min)",
+            "Recovering %s for %s via notification action (%s min)",
+            kind,
             entity_id,
             minutes,
         )
         # Stash the recovery breadcrumb so the history record for the
-        # new run will reference the original missed record.
+        # new run will reference the original missed/cut-short record.
         coord = find_coordinator(hass)
         if coord is not None:
             entry_data = None
@@ -143,12 +145,17 @@ def _async_register_run_missed_action_listener(hass: HomeAssistant, shared: _Sha
                     break
             if entry_data is not None:
                 meta = entry_data.setdefault("pending_run_meta", {})
+                # original_record_id (cut-short) or missed_record_id (missed)
+                source_record = action_data.get("original_record_id") or action_data.get(
+                    "missed_record_id"
+                )
                 meta[entity_id] = {
                     "schedule_id": action_data.get("schedule_id"),
                     "schedule_name": action_data.get("schedule_name", "Recovered"),
                     "requested_minutes": int(minutes),
                     "triggers": {
-                        "recovered_from": action_data.get("missed_record_id"),
+                        "recovered_from": source_record,
+                        "recovery_kind": kind,
                     },
                     "zone_name": None,  # services.py will fill from state attrs
                 }
