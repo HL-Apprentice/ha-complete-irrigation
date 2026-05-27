@@ -281,6 +281,12 @@ _SET_GENERAL_CONFIG_SCHEMA = vol.Schema(
         # When set, the panel renders zones in this order; zones added
         # later via the config flow are appended below this list.
         vol.Optional("zone_order"): vol.All(cv.ensure_list, [cv.entity_id]),
+        # v1.17.11 — when true, every data-mutating / hardware-actuating
+        # service call (run_zone, stop_zone, add/update/delete_schedule,
+        # etc.) requires the calling user to be an HA admin. Default
+        # false so existing scripts/automations running as non-admin
+        # contexts don't suddenly start failing.
+        vol.Optional("admin_only_services"): cv.boolean,
     }
 )
 
@@ -293,6 +299,7 @@ _GENERAL_CONFIG_FIELDS: dict[str, Any] = {
     "zone_buffer_seconds": lambda v: v,
     "weekly_reminder_snoozed_until": lambda v: v.isoformat() if v else None,
     "zone_order": lambda v: list(v),
+    "admin_only_services": bool,  # v1.17.11
 }
 
 
@@ -335,6 +342,46 @@ def _find_entry_data(hass: HomeAssistant, entity_id: str) -> dict[str, Any] | No
         if entity_id in data.get("zones", []):
             return data
     return None
+
+
+async def _require_admin_if_configured(hass: HomeAssistant, call) -> bool:
+    """v1.17.11 — opt-in admin gate for hardware/CRUD service calls.
+
+    When `admin_only_services` is true in the coordinator config,
+    rejects calls whose `call.context.user_id` resolves to a non-admin
+    HA user. System-initiated calls (no user_id — e.g. the integration's
+    own RUN_MISSED / RUN_REMAINDER notification action handlers calling
+    run_zone internally) always pass through; the gate is for user-
+    originated calls from the panel UI, Developer Tools, or scripts
+    running under a user context.
+
+    Returns True if the call should proceed, False if it was rejected
+    (and a warning was logged). Handlers should early-return on False.
+
+    Default off so existing setups with non-admin scripts/automations
+    don't suddenly break. Users with shared HA installs flip it on in
+    Settings → Restrict services to admin users.
+    """
+    from . import find_coordinator
+
+    coord = find_coordinator(hass)
+    if coord is None:
+        return True  # no coordinator → can't enforce; fail open
+    if not coord.config.get("admin_only_services"):
+        return True  # feature disabled
+    user_id = getattr(call.context, "user_id", None)
+    if not user_id:
+        return True  # system / no-user context (action handlers, automations)
+    user = await hass.auth.async_get_user(user_id)
+    if user and user.is_admin:
+        return True
+    _LOGGER.warning(
+        "Rejected %s.%s call from non-admin user %s (admin_only_services=on)",
+        call.domain,
+        call.service,
+        user_id,
+    )
+    return False
 
 
 def _cancel_handles(entry_data: dict[str, Any], entity_id: str) -> None:
@@ -460,6 +507,8 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         return  # already registered
 
     async def handle_run_zone(call: ServiceCall) -> None:
+        if not await _require_admin_if_configured(hass, call):
+            return
         data = _RUN_ZONE_SCHEMA(dict(call.data))
         entity_id: str = data["entity_id"]
         try:
@@ -611,6 +660,8 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         )
 
     async def handle_stop_zone(call: ServiceCall) -> None:
+        if not await _require_admin_if_configured(hass, call):
+            return
         data = _STOP_ZONE_SCHEMA(dict(call.data))
         entity_id: str = data["entity_id"]
 
@@ -644,6 +695,8 @@ async def _async_register_services(hass: HomeAssistant) -> None:
     # ── Schedule CRUD ──────────────────────────────────────────────
 
     async def handle_add_schedule(call: ServiceCall) -> None:
+        if not await _require_admin_if_configured(hass, call):
+            return
         data = _ADD_SCHEDULE_SCHEMA(dict(call.data))
         coord = _find_coordinator(hass)
         if coord is None:
@@ -688,6 +741,8 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         _LOGGER.info("Added schedule %s (%s) mode=%s", schedule.id, schedule.name, schedule.mode)
 
     async def handle_update_schedule(call: ServiceCall) -> None:
+        if not await _require_admin_if_configured(hass, call):
+            return
         data = _UPDATE_SCHEDULE_SCHEMA(dict(call.data))
         coord = _find_coordinator(hass)
         if coord is None:
@@ -736,6 +791,8 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         _LOGGER.info("Updated schedule %s", merged.id)
 
     async def handle_delete_schedule(call: ServiceCall) -> None:
+        if not await _require_admin_if_configured(hass, call):
+            return
         data = _DELETE_SCHEDULE_SCHEMA(dict(call.data))
         coord = _find_coordinator(hass)
         if coord is None:
@@ -745,6 +802,8 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             _LOGGER.info("Deleted schedule %s", data["schedule_id"])
 
     async def handle_set_schedule_enabled(call: ServiceCall) -> None:
+        if not await _require_admin_if_configured(hass, call):
+            return
         data = _SET_SCHEDULE_ENABLED_SCHEMA(dict(call.data))
         coord = _find_coordinator(hass)
         if coord is None:
@@ -788,6 +847,8 @@ async def _async_register_services(hass: HomeAssistant) -> None:
     # ── Weather + per-zone moisture configuration ──────────────────
 
     async def handle_set_weather_config(call: ServiceCall) -> None:
+        if not await _require_admin_if_configured(hass, call):
+            return
         data = _SET_WEATHER_CONFIG_SCHEMA(dict(call.data))
         coord = _find_coordinator(hass)
         if coord is None:
@@ -813,6 +874,8 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         _LOGGER.info("Weather config updated: %s", data)
 
     async def handle_set_zone_moisture(call: ServiceCall) -> None:
+        if not await _require_admin_if_configured(hass, call):
+            return
         data = _SET_ZONE_MOISTURE_SCHEMA(dict(call.data))
         coord = _find_coordinator(hass)
         if coord is None:
@@ -825,6 +888,8 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         _LOGGER.info("Zone moisture config updated for %s: %s", zone_id, data)
 
     async def handle_clear_rain_lockout(call: ServiceCall) -> None:
+        if not await _require_admin_if_configured(hass, call):
+            return
         coord = _find_coordinator(hass)
         if coord is None:
             return
@@ -851,6 +916,8 @@ async def _async_register_services(hass: HomeAssistant) -> None:
     )
 
     async def handle_set_notification_config(call: ServiceCall) -> None:
+        if not await _require_admin_if_configured(hass, call):
+            return
         data = _SET_NOTIFICATION_CONFIG_SCHEMA(dict(call.data))
         coord = _find_coordinator(hass)
         if coord is None or coord.notifier is None:
@@ -861,6 +928,8 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         _LOGGER.info("Notification config updated: %s", data)
 
     async def handle_test_notification(call: ServiceCall) -> None:
+        if not await _require_admin_if_configured(hass, call):
+            return
         data = _TEST_NOTIFICATION_SCHEMA(dict(call.data))
         coord = _find_coordinator(hass)
         if coord is None or coord.notifier is None:
@@ -888,6 +957,8 @@ async def _async_register_services(hass: HomeAssistant) -> None:
     )
 
     async def handle_set_conflict_policy(call: ServiceCall) -> None:
+        if not await _require_admin_if_configured(hass, call):
+            return
         data = _SET_CONFLICT_POLICY_SCHEMA(dict(call.data))
         coord = _find_coordinator(hass)
         if coord is None:
@@ -909,6 +980,8 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         Each entry in _GENERAL_CONFIG_FIELDS describes how to persist
         one accepted key. v1.16: loop-driven so a new field is a 2-line
         table edit instead of another `if` arm."""
+        if not await _require_admin_if_configured(hass, call):
+            return
         data = _SET_GENERAL_CONFIG_SCHEMA(dict(call.data))
         coord = _find_coordinator(hass)
         if coord is None:
@@ -927,6 +1000,8 @@ async def _async_register_services(hass: HomeAssistant) -> None:
     )
 
     async def handle_start_establishment(call: ServiceCall) -> None:
+        if not await _require_admin_if_configured(hass, call):
+            return
         from datetime import date, time, timedelta
 
         data = _START_ESTABLISHMENT_SCHEMA(dict(call.data))
@@ -976,6 +1051,8 @@ async def _async_register_services(hass: HomeAssistant) -> None:
     )
 
     async def handle_clear_run_history(_call: ServiceCall) -> None:
+        if not await _require_admin_if_configured(hass, _call):
+            return
         coord = _find_coordinator(hass)
         if coord is None:
             return

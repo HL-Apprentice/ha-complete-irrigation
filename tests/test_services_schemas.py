@@ -92,6 +92,20 @@ def test_update_schedule_with_weekdays_in_weekdays_mode():
     assert result["weekdays"] == [0, 1, 2, 3, 4]
 
 
+def test_general_config_schema_accepts_admin_only_services():
+    """v1.17.11 — `admin_only_services` is the opt-in flag that gates
+    every hardware/CRUD service handler on caller's admin status."""
+    from custom_components.complete_irrigation.services import (
+        _SET_GENERAL_CONFIG_SCHEMA,
+    )
+
+    result = _SET_GENERAL_CONFIG_SCHEMA({"admin_only_services": True})
+    assert result["admin_only_services"] is True
+
+    result = _SET_GENERAL_CONFIG_SCHEMA({"admin_only_services": False})
+    assert result["admin_only_services"] is False
+
+
 def test_notification_schema_accepts_notify_on_aborted():
     """v1.17.8 — `notify_on_aborted` joins the notifications config
     blob alongside notify_on_missed + low_moisture_alerts. Validates
