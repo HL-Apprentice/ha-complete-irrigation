@@ -35,6 +35,11 @@ def _find_coordinator(hass: HomeAssistant):
     return find_coordinator(hass)
 
 
+# v1.17.10 — admin-only. The panel is admin-only (v1.15.0 S3) but the
+# WS commands behind it were callable by any authenticated HA user.
+# Closes the consistency gap so non-admin / read-only users can't
+# enumerate schedules via Developer Tools or a custom dashboard card.
+@websocket_api.require_admin
 @websocket_api.websocket_command({vol.Required("type"): WS_TYPE_LIST_SCHEDULES})
 @websocket_api.async_response
 async def list_schedules(hass, connection, msg):
@@ -68,6 +73,8 @@ async def get_config(hass, connection, msg):
     connection.send_result(msg["id"], payload)
 
 
+# v1.17.10 — admin-only (see comment above list_schedules).
+@websocket_api.require_admin
 @websocket_api.websocket_command({vol.Required("type"): WS_TYPE_GET_ACTIVE_RUNS})
 @websocket_api.async_response
 async def get_active_runs(hass, connection, msg):
@@ -123,6 +130,10 @@ async def list_run_history(hass, connection, msg):
     connection.send_result(msg["id"], {"records": records})
 
 
+# v1.17.10 — admin-only. Added in v1.16.0 (after the v1.15.0 review)
+# and missed the require_admin guard the sibling commands got. Closes
+# that regression.
+@websocket_api.require_admin
 @websocket_api.websocket_command(
     {
         vol.Required("type"): WS_TYPE_LIST_PLANNED_RUNS,
