@@ -92,6 +92,17 @@ def test_update_schedule_with_weekdays_in_weekdays_mode():
     assert result["weekdays"] == [0, 1, 2, 3, 4]
 
 
+def test_run_schedule_schema_requires_schedule_id():
+    """v1.17.13 — run_schedule needs exactly one field: schedule_id."""
+    from custom_components.complete_irrigation.services import _RUN_SCHEDULE_SCHEMA
+
+    # Valid
+    assert _RUN_SCHEDULE_SCHEMA({"schedule_id": "abc123"}) == {"schedule_id": "abc123"}
+    # Missing required field
+    with pytest.raises(vol.Invalid):
+        _RUN_SCHEDULE_SCHEMA({})
+
+
 def test_general_config_schema_accepts_admin_only_services():
     """v1.17.11 — `admin_only_services` is the opt-in flag that gates
     every hardware/CRUD service handler on caller's admin status."""
