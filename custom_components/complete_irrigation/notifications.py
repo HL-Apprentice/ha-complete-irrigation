@@ -217,6 +217,11 @@ class NotificationDispatcher:
             self._queue.append(payload)
 
     async def _push_now(self, payload: dict[str, Any]) -> None:
+        # Local import — module-load coupling: pure-logic tests for
+        # this file would otherwise need HA installed to even read the
+        # source. Function-scope import preserves test isolation.
+        from homeassistant.exceptions import ServiceNotFound
+
         targets = self._resolved_targets()
         if not targets:
             return
@@ -248,6 +253,20 @@ class NotificationDispatcher:
                     service,
                     service_data,
                     blocking=False,
+                )
+            except ServiceNotFound:
+                # v1.17.14 — distinguish user-config drift (target was
+                # configured but the underlying integration is no
+                # longer installed / loaded) from a genuine notification
+                # failure. The former is a configuration issue the
+                # user can fix; warn-level keeps HA's logs clean.
+                # Genuine delivery failures (network, integration
+                # error) still log at ERROR via the broad except below.
+                _LOGGER.warning(
+                    "Notify target %s is not a registered service. Remove it "
+                    "from Settings → Notifications, or install / restore "
+                    "the integration that provides it.",
+                    target,
                 )
             except Exception:
                 _LOGGER.exception("Failed to push notification via %s", target)
