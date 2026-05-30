@@ -542,3 +542,18 @@ test_notification:
 clear_run_history:
   name: Clear run history
   description: Delete every run-history record. Cannot be undone.
+
+run_schedule:
+  name: Run schedule now
+  description: >
+    Execute a schedule's full run sequence on demand. Multi-zone schedules
+    fire each zone in order with the configured inter-zone buffer between
+    steps. Bypasses moisture / wind / hot-weather / rain-lockout gates
+    (manual override semantics — the user clicked Run, they meant it).
+  fields:
+    schedule_id:
+      name: Schedule ID
+      description: The id of the schedule to run (from complete_irrigation/list_schedules).
+      required: true
+      selector:
+        text:
