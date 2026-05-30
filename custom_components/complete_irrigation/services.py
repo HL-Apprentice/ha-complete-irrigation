@@ -42,6 +42,7 @@ _LOGGER = logging.getLogger(__name__)
 
 SERVICE_RUN_ZONE = "run_zone"
 SERVICE_STOP_ZONE = "stop_zone"
+SERVICE_RUN_SCHEDULE = "run_schedule"  # v1.17.13 — "Run schedule now" button
 SERVICE_CLEAR_RUN_HISTORY = "clear_run_history"
 SERVICE_ADD_SCHEDULE = "add_schedule"
 SERVICE_UPDATE_SCHEDULE = "update_schedule"
@@ -194,6 +195,8 @@ _UPDATE_SCHEDULE_SCHEMA = vol.Schema(
 )
 
 _DELETE_SCHEDULE_SCHEMA = vol.Schema({vol.Required("schedule_id"): cv.string})
+
+_RUN_SCHEDULE_SCHEMA = vol.Schema({vol.Required("schedule_id"): cv.string})
 
 _SET_SCHEDULE_ENABLED_SCHEMA = vol.Schema(
     {
@@ -801,6 +804,71 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             await coord.async_save()
             _LOGGER.info("Deleted schedule %s", data["schedule_id"])
 
+    async def handle_run_schedule(call: ServiceCall) -> None:
+        """v1.17.13 — execute a schedule's full run sequence on demand.
+
+        Powered by the "Run" button on each schedule row in the panel.
+        Bypasses moisture / wind / hot-weather / rain-lockout gates
+        (manual override semantics: the user clicked Run, they meant
+        it). Conflict resolver is NOT consulted since this is a
+        user-initiated immediate action — the underlying run_zone
+        service replaces any in-progress run on the same zone.
+
+        Multi-zone schedules fire zone-by-zone with the user's
+        configured inter-zone buffer (zone_buffer_seconds, default 30s)
+        between steps. Each step's auto-stop timer in handle_run_zone
+        cuts that zone before the next one starts.
+        """
+        if not await _require_admin_if_configured(hass, call):
+            return
+        data = _RUN_SCHEDULE_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None:
+            return
+        sched = coord.schedule_store.get(data["schedule_id"])
+        if sched is None:
+            _LOGGER.warning("run_schedule: no such schedule %s", data["schedule_id"])
+            return
+
+        buffer_s = int(coord.config.get("zone_buffer_seconds", 30))
+        steps = sched.all_steps()
+        cumulative_offset = 0
+
+        for step in steps:
+            entity_id = step.zone_entity_id
+            minutes = int(step.duration_minutes)
+            if cumulative_offset == 0:
+                # Fire the first step immediately
+                await hass.services.async_call(
+                    DOMAIN,
+                    SERVICE_RUN_ZONE,
+                    {"entity_id": entity_id, "minutes": minutes},
+                    blocking=False,
+                )
+            else:
+                # Schedule subsequent steps via async_call_later.
+                # Default-arg pattern captures eid/mins by value (not by
+                # reference) so each closure fires its own step.
+                async def _fire_step(_now=None, eid=entity_id, mins=minutes):
+                    await hass.services.async_call(
+                        DOMAIN,
+                        SERVICE_RUN_ZONE,
+                        {"entity_id": eid, "minutes": mins},
+                        blocking=False,
+                    )
+
+                async_call_later(hass, cumulative_offset, _fire_step)
+            cumulative_offset += minutes * 60 + buffer_s
+
+        total_min = (cumulative_offset - buffer_s) // 60
+        _LOGGER.info(
+            "Run schedule %s (%s) on demand: %d zone(s) over ~%d min",
+            sched.id,
+            sched.name,
+            len(steps),
+            total_min,
+        )
+
     async def handle_set_schedule_enabled(call: ServiceCall) -> None:
         if not await _require_admin_if_configured(hass, call):
             return
@@ -842,6 +910,12 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         SERVICE_SET_SCHEDULE_ENABLED,
         handle_set_schedule_enabled,
         schema=_SET_SCHEDULE_ENABLED_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_RUN_SCHEDULE,
+        handle_run_schedule,
+        schema=_RUN_SCHEDULE_SCHEMA,
     )
 
     # ── Weather + per-zone moisture configuration ──────────────────
@@ -1073,6 +1147,7 @@ def _async_unregister_services(hass: HomeAssistant) -> None:
     for svc in (
         SERVICE_RUN_ZONE,
         SERVICE_STOP_ZONE,
+        SERVICE_RUN_SCHEDULE,
         SERVICE_CLEAR_RUN_HISTORY,
         SERVICE_ADD_SCHEDULE,
         SERVICE_UPDATE_SCHEDULE,
