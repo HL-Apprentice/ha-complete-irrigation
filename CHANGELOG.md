@@ -4,6 +4,127 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.18.0 — 2026-05-30
+
+### Added
+
+- **Schedule color-coding.** Each schedule can be assigned a color from
+  a 12-swatch palette in the editor. Surfaces: left-edge stripe on the
+  Schedules tab, tinted pills on the day calendar. Color flows to the
+  calendar via the `list_planned_runs` WS endpoint. `Schedule.color`
+  field (hex string or None).
+- **Fail-closed moisture option.** Per-zone "Skip run if no moisture
+  reading" toggle (Sensors editor). When on, a scheduled run is
+  skipped if *every* moisture sensor for the zone is offline, instead
+  of watering blind. Default off (legacy fail-open). Individual
+  offline sensors were already excluded from the combined reading;
+  this governs the all-dark case.
+
+## v1.17.14 — 2026-05-30
+
+### Fixed
+
+- **Missing notify target logs at WARNING, not ERROR.** When a
+  configured `notify.<service>` no longer exists (uninstalled
+  integration), `_push_now` now catches `ServiceNotFound` and logs a
+  helpful warning instead of an ERROR traceback. Genuine delivery
+  failures still log ERROR.
+
+## v1.17.13 — 2026-05-30
+
+### Added
+
+- **"▶ Run" button on each schedule row.** Executes the schedule's
+  full run sequence on demand (multi-zone chains fire zone-by-zone
+  with the inter-zone buffer). Bypasses weather gates (manual
+  override). New `run_schedule` service. Honors the admin-only-services
+  guard.
+
+## v1.17.12 — 2026-05-24
+
+### Fixed
+
+- **Sticky Cancel/Save in modals actually visible.** v1.17.9 set
+  `bottom: -24px` on the sticky footer, which pushed it 24px *below*
+  the visible scroll viewport — buttons went offscreen on tall modals
+  (Schedule editor). Now `bottom: 0` + `padding-bottom: 0` on the
+  modal. Applies to every modal.
+
+## v1.17.11 — 2026-05-24
+
+### Security
+
+- **Opt-in admin-only services (G3).** New `admin_only_services` flag
+  (Settings → Security, default off). When on, all 15 hardware /
+  CRUD service handlers require an admin caller; system-initiated
+  calls (our own notification action handlers) always pass through.
+
+## v1.17.10 — 2026-05-24
+
+### Security
+
+- **Admin-only guard on 3 WS commands (G1+G2).** `list_planned_runs`
+  (added v1.16.0, missed the guard), `list_schedules`, and
+  `get_active_runs` are now `@require_admin` — consistent with the
+  admin-only panel.
+
+## v1.17.9 — 2026-05-24
+
+### Fixed
+
+- **Tall modals scroll.** `.modal` capped at 90vh with internal
+  scroll. (Sticky-footer positioning was corrected in v1.17.12.)
+
+## v1.17.8 — 2026-05-23
+
+### Added
+
+- **Cut-short notifications.** When a scheduled run is turned off
+  externally at <90% of planned duration, send a notification with
+  "Run remainder" + "Open Logbook" actions. New `notify_on_aborted`
+  toggle.
+
+## v1.17.7 — 2026-05-23
+
+### Added
+
+- **Live search above each sensor list** (soil / temperature /
+  humidity) in the Sensors editor. Filters by friendly name + entity
+  id as you type; no re-render so checkbox state + focus persist.
+
+## v1.17.6 — 2026-05-23
+
+### Fixed
+
+- **Info-bubble (ⓘ) tooltips work on touch + show instantly.**
+  Replaced the native `title` attribute (delayed on desktop, silent
+  on touch) with a custom popover shown on hover / focus / tap.
+
+## v1.17.5 — 2026-05-23
+
+### Fixed
+
+- **update_schedule accepts empty weekdays** for interval /
+  interval_hours modes. The strict `vol.Length(min=1)` blocked editing
+  non-weekdays schedules (e.g. saving Bird Bath with the new
+  ignore-gates toggles).
+
+## v1.17.4 — 2026-05-23
+
+### Fixed
+
+- **WS `list_planned_runs` had the same UTC bug as v1.17.1.** The day
+  calendar display showed schedules at the wrong time even after the
+  coordinator firing was fixed. Now converts to local before planning.
+
+## v1.17.3 — 2026-05-23
+
+### Added
+
+- **Per-schedule "ignore weather gates" toggles** (`ignore_wind`,
+  `ignore_hot_weather`, `ignore_rain_lockout`). Useful for fixed-fill
+  zones like a bird bath. Default off.
+
 ## v1.17.2 — 2026-05-24
 
 ### Improved
