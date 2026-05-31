@@ -37,15 +37,47 @@ A Home Assistant custom integration for complete, sensor-driven irrigation contr
 
 ## Hardware support
 
-| Controller integration | Auto-detected |
-|---|---|
-| Rachio (official) / `rachio_local` | ✅ |
-| Hunter Hydrawise | ✅ |
-| RainMachine | ✅ |
-| Orbit B-Hyve | ✅ |
-| OpenSprinkler | ✅ |
-| ESPHome / DIY relay boards | ✅ via manual switch selection |
-| Any HA-installed irrigation integration | ✅ via manual switch selection |
+| Controller integration | Auto-detected | Setup note |
+|---|---|---|
+| Rachio (official) / `rachio_local` | ✅ | ⚠️ **See Rachio note below** |
+| Hunter Hydrawise | ✅ | — |
+| RainMachine | ✅ | — |
+| Orbit B-Hyve | ✅ | — |
+| OpenSprinkler | ✅ | — |
+| ESPHome / DIY relay boards | ✅ via manual switch selection | — |
+| Any HA-installed irrigation integration | ✅ via manual switch selection | — |
+
+### ⚠️ Rachio: set the manual run-time ≥ your longest schedule
+
+**If you use Rachio, do this once or your runs will be cut short.**
+
+Rachio zones are **not dumb on/off relays** — each zone has its own
+runtime. When this integration turns a zone on (via `switch.turn_on`),
+the HA Rachio integration starts that zone for its configured
+**manual run duration**, and Rachio's own hardware stops the zone when
+that duration elapses. The HA Rachio integration **defaults this to 10
+minutes** (`DEFAULT_MANUAL_RUN_MINS = 10`).
+
+If your Complete Irrigation schedule is longer than Rachio's manual
+duration, **Rachio stops the zone first** — and the run shows in
+History as *"aborted — switch turned off externally"* at exactly the
+Rachio cap (e.g. 10 min) regardless of your schedule's duration.
+
+**Fix:**
+
+1. Settings → Devices & Services → **Rachio** integration card → **Configure**
+2. Set **"Run time"** (manual zone run duration, minutes) to a value
+   **≥ your longest Complete Irrigation schedule** — e.g. `60`.
+3. Submit.
+
+Once Rachio's manual duration is longer than every schedule, **this
+integration's own auto-stop timer always fires first** and stops each
+zone at its scheduled duration. Rachio just acts as the relay; this
+integration is the authoritative timekeeper.
+
+> This is *not* related to Rachio's own schedules — deleting or
+> disabling those does **not** change the manual run duration. The two
+> settings are independent.
 
 ## Sensor support
 
@@ -65,7 +97,7 @@ A Home Assistant custom integration for complete, sensor-driven irrigation contr
    - Step 2: Confirm which switches are irrigation zones
 6. The **💧 Irrigation** panel appears in your HA sidebar.
 
-> **Upgrading?** The panel JS URL is version-stamped (`?v=1.7.0`), so browsers will auto-fetch the new file after a HACS upgrade — no hard refresh needed.
+> **Upgrading?** The panel JS URL is version-stamped (`?v=<version>`), so browsers will auto-fetch the new file after a HACS upgrade — no hard refresh needed.
 
 ## Quick start
 
