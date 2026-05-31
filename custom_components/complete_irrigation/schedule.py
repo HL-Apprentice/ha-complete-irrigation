@@ -133,6 +133,12 @@ class Schedule:
     ignore_wind: bool = False
     ignore_hot_weather: bool = False
     ignore_rain_lockout: bool = False
+    # v1.18 — optional color for visual identification. A hex string
+    # like "#1e88e5" (validated against SCHEDULE_COLOR_PALETTE at the
+    # service boundary, but the model accepts any "#rrggbb" string) or
+    # None = no color (UI falls back to the default accent). Surfaces:
+    # schedule-row left stripe, day-calendar pill tint.
+    color: str | None = None
 
     def __post_init__(self) -> None:
         # Validation split into small focused helpers — keeps each rule
@@ -267,6 +273,7 @@ class Schedule:
             "ignore_wind": self.ignore_wind,
             "ignore_hot_weather": self.ignore_hot_weather,
             "ignore_rain_lockout": self.ignore_rain_lockout,
+            "color": self.color,
         }
 
     @classmethod
@@ -306,6 +313,7 @@ class Schedule:
             ignore_wind=bool(data.get("ignore_wind", False)),
             ignore_hot_weather=bool(data.get("ignore_hot_weather", False)),
             ignore_rain_lockout=bool(data.get("ignore_rain_lockout", False)),
+            color=data.get("color") or None,
         )
 
 

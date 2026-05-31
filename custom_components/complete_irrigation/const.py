@@ -96,6 +96,26 @@ DEFAULT_ZONE_MIN_PCT = 21
 DEFAULT_ZONE_TARGET_PCT = 31
 DEFAULT_ZONE_MAX_PCT = 40
 
+# v1.18 — 12-color preset palette for schedule color-coding. Hex values
+# chosen for good contrast on both the light and dark panel themes and
+# distinct from each other for colorblind-reasonable separation. The
+# panel restricts the picker to these; the model accepts any of them
+# (or None = no color / use the default accent).
+SCHEDULE_COLOR_PALETTE = (
+    "#e53935",  # red
+    "#fb8c00",  # orange
+    "#fdd835",  # yellow
+    "#43a047",  # green
+    "#00acc1",  # cyan
+    "#1e88e5",  # blue
+    "#3949ab",  # indigo
+    "#8e24aa",  # purple
+    "#d81b60",  # pink
+    "#6d4c41",  # brown
+    "#546e7a",  # blue-grey
+    "#00897b",  # teal
+)
+
 # Hot weather adjustment defaults (in user's unit; converted internally).
 DEFAULT_HOT_WEATHER_F = 100
 DEFAULT_HOT_WEATHER_BOOST_PCT = 25
