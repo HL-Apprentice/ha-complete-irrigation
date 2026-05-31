@@ -98,6 +98,22 @@ _ZONE_STEP_SCHEMA = vol.Schema(
 )
 
 
+def _validate_hex_color(value):
+    """v1.18 — accept a "#rrggbb" hex color or None/empty (= no color).
+
+    Kept lenient on the exact value (any well-formed 6-digit hex) so a
+    future palette change doesn't reject schedules created under the
+    old palette; the panel restricts the picker to SCHEDULE_COLOR_PALETTE."""
+    if value in (None, ""):
+        return None
+    if not isinstance(value, str):
+        raise vol.Invalid("color must be a '#rrggbb' string or null")
+    v = value.strip().lower()
+    if len(v) != 7 or v[0] != "#" or any(c not in "0123456789abcdef" for c in v[1:]):
+        raise vol.Invalid(f"color must be a '#rrggbb' hex string, got {value!r}")
+    return v
+
+
 def _no_control_chars(value: str) -> str:
     """v1.15 — reject control characters in user strings.
 
@@ -159,6 +175,7 @@ _ADD_SCHEDULE_SCHEMA = vol.Schema(
         vol.Optional("ignore_wind", default=False): cv.boolean,
         vol.Optional("ignore_hot_weather", default=False): cv.boolean,
         vol.Optional("ignore_rain_lockout", default=False): cv.boolean,
+        vol.Optional("color"): _validate_hex_color,  # v1.18
         # Multi-zone: optional list of {zone_entity_id, duration_minutes}.
         # First step must equal zone_entity_id + duration_minutes.
         vol.Optional("zone_steps", default=[]): vol.All(
@@ -190,6 +207,7 @@ _UPDATE_SCHEDULE_SCHEMA = vol.Schema(
         vol.Optional("ignore_wind"): cv.boolean,
         vol.Optional("ignore_hot_weather"): cv.boolean,
         vol.Optional("ignore_rain_lockout"): cv.boolean,
+        vol.Optional("color"): _validate_hex_color,  # v1.18
         vol.Optional("zone_steps"): vol.All(cv.ensure_list, [_ZONE_STEP_SCHEMA]),
     }
 )
@@ -238,6 +256,10 @@ _SET_ZONE_MOISTURE_SCHEMA = vol.Schema(
         vol.Optional("temperature_entities"): vol.All(cv.ensure_list, [cv.entity_id]),
         vol.Optional("humidity_entities"): vol.All(cv.ensure_list, [cv.entity_id]),
         vol.Optional("category"): cv.string,
+        # v1.18 — fail-closed: skip a scheduled run when NO moisture
+        # reading is available for this zone (all sensors offline /
+        # unavailable). Default off = legacy fail-open (water anyway).
+        vol.Optional("require_moisture_reading"): cv.boolean,
     }
 )
 
@@ -733,6 +755,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             ignore_wind=data.get("ignore_wind", False),
             ignore_hot_weather=data.get("ignore_hot_weather", False),
             ignore_rain_lockout=data.get("ignore_rain_lockout", False),
+            color=data.get("color"),
             # PRD #60 — provenance marker so calendar.py / establishment
             # can identify their own entries when #59 two-way calendar
             # edit lands. Anything coming through the service (panel,
@@ -775,6 +798,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             "ignore_wind",
             "ignore_hot_weather",
             "ignore_rain_lockout",
+            "color",
         ):
             if key in data:
                 overrides[key] = data[key]

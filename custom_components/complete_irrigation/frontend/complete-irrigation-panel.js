@@ -37,7 +37,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.17.14";
+  const PANEL_VERSION = "v1.18.0";
   const DEFAULT_MANUAL_MINUTES = 10;
   const MAX_MANUAL_MINUTES = 60;
   const MAX_SCHEDULE_MINUTES = 480; // 8 hours
@@ -67,6 +67,15 @@
   ];
 
   const WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+  // v1.18 — schedule color palette. Mirrors SCHEDULE_COLOR_PALETTE in
+  // const.py. The editor renders one swatch per entry plus a "none"
+  // option; the row stripe + calendar pill tint read schedule.color.
+  const SCHEDULE_COLORS = [
+    "#e53935", "#fb8c00", "#fdd835", "#43a047",
+    "#00acc1", "#1e88e5", "#3949ab", "#8e24aa",
+    "#d81b60", "#6d4c41", "#546e7a", "#00897b",
+  ];
 
   // HA's `weather.*` entity state → user-facing emoji + label. Covers every
   // condition string in the HA weather component docs. Unknown strings
@@ -120,10 +129,12 @@
       start_date: "",
       end_date: "",
       repeat_annually: false,
-      // v1.17.14 — per-schedule weather-gate opt-outs
+      // v1.18.0 — per-schedule weather-gate opt-outs
       ignore_wind: false,
       ignore_hot_weather: false,
       ignore_rain_lockout: false,
+      // v1.18 — optional color for visual identification. "" = none.
+      color: "",
       // Multi-zone: additional zones after the primary. Each is
       // {zone_entity_id, duration_minutes}. Empty = single-zone schedule.
       // The primary (top-level zone_entity_id + duration_minutes) is
@@ -223,7 +234,7 @@
       // tile show "4:52 left of 10 min" instead of just "4:52 left".
       this._localRunDurations = {};
       this._countdownTimer = null;
-      // v1.17.14 — minute-tick so the day calendar's "now" line drifts
+      // v1.18.0 — minute-tick so the day calendar's "now" line drifts
       // down automatically without waiting for an HA state change to
       // trigger a re-render. Only active while the Today tab is open
       // (set + cleared in connectedCallback / _navigateTo).
@@ -324,7 +335,7 @@
       this.shadowRoot.addEventListener("change", this._onChange);
       this.shadowRoot.addEventListener("input", this._onInput);
       this._scheduleRender();
-      // v1.17.14 — Today is the initial section, so kick off the
+      // v1.18.0 — Today is the initial section, so kick off the
       // now-line tick now (won't double-up because _startNowLineTimer
       // is idempotent).
       if (this._currentSection === "today") this._startNowLineTimer();
@@ -339,7 +350,7 @@
     }
 
     _startNowLineTimer() {
-      // v1.17.14 — re-render every minute so the day-cal-now line drifts
+      // v1.18.0 — re-render every minute so the day-cal-now line drifts
       // down. Idempotent: no-op if already running.
       if (this._nowLineTimer) return;
       this._nowLineTimer = setInterval(() => {
@@ -357,7 +368,7 @@
     _onClick(e) {
       const path = e.composedPath ? e.composedPath() : [];
 
-      // v1.17.14 — info-bubble popover toggle.
+      // v1.18.0 — info-bubble popover toggle.
       // Touch devices have no hover, so tapping the ⓘ bubble has to
       // toggle the popup explicitly. We also close any open popup when
       // the click lands anywhere else (the path-doesn't-contain-help-tip
@@ -414,6 +425,12 @@
           return this._deleteSchedule(node.dataset.scheduleId);
         if (action === "run-schedule")
           return this._runSchedule(node.dataset.scheduleId, node.dataset.scheduleName);
+        if (action === "pick-schedule-color") {
+          // v1.18 — set the editor's color + re-render so the selected
+          // swatch updates. dataset.color === "" means clear.
+          this._scheduleEditor.color = node.dataset.color || "";
+          return this._renderNow();
+        }
         if (action === "toggle-schedule")
           return this._toggleSchedule(
             node.dataset.scheduleId,
@@ -671,6 +688,10 @@
           this._sensorEditor[field] = Array.from(set);
           return;
         }
+        if (t.name === "require_moisture_reading") {
+          this._sensorEditor.require_moisture_reading = t.checked; // v1.18
+          return;
+        }
         if (
           t.name === "combine_mode" ||
           t.name === "category" ||
@@ -733,7 +754,7 @@
       // triggered by other changes don't blow away unsaved edits).
       const t = e.target;
       if (!t) return;
-      // v1.17.14 — live filter the sensor checkbox list as the user
+      // v1.18.0 — live filter the sensor checkbox list as the user
       // types. Pure DOM operation; no re-render so checkbox state +
       // input focus + cursor position stay put while typing.
       if (t.dataset && t.dataset.action === "filter-sensor-list") {
@@ -897,7 +918,7 @@
       // v1.17 — Today screen's missed-runs banner reads from run history,
       // so load it lazily on first Today open if not already cached.
       if (sectionId === "today" && !this._runHistoryLoaded) this._fetchRunHistory();
-      // v1.17.14 — keep the now-line drifting only while Today is open.
+      // v1.18.0 — keep the now-line drifting only while Today is open.
       if (sectionId === "today") this._startNowLineTimer();
       else this._stopNowLineTimer();
       // Today + Zones both rely on the cached PlannedRuns for their
@@ -975,6 +996,7 @@
         ignore_wind: !!found.ignore_wind,
         ignore_hot_weather: !!found.ignore_hot_weather,
         ignore_rain_lockout: !!found.ignore_rain_lockout,
+        color: found.color || "",
         extra_steps: extra.map((s) => ({
           zone_entity_id: s.zone_entity_id,
           duration_minutes: s.duration_minutes,
@@ -985,7 +1007,7 @@
     }
 
     _openCopyOfSchedule(scheduleId) {
-      // v1.17.14 — clone an existing schedule into the editor with a
+      // v1.18.0 — clone an existing schedule into the editor with a
       // null id (so save creates a new schedule, not overwriting the
       // source) and a name suffixed " (copy)" so the duplicate is
       // identifiable in lists before the user picks a better name.
@@ -1014,6 +1036,7 @@
         ignore_wind: !!found.ignore_wind,
         ignore_hot_weather: !!found.ignore_hot_weather,
         ignore_rain_lockout: !!found.ignore_rain_lockout,
+        color: found.color || "",
         extra_steps: extra.map((s) => ({
           zone_entity_id: s.zone_entity_id,
           duration_minutes: s.duration_minutes,
@@ -1208,6 +1231,7 @@
             duration_minutes: r.duration_minutes,
             schedule_name: r.schedule_name,
             schedule_id: r.schedule_id,
+            color: r.color || null, // v1.18 — schedule color for pill tint
           });
         }
         // Sort each day's bucket by start time
@@ -1464,10 +1488,12 @@
         start_date: e.start_date || null,
         end_date: e.end_date || null,
         repeat_annually: !!e.repeat_annually,
-        // v1.17.14 — per-schedule weather-gate opt-outs
+        // v1.18.0 — per-schedule weather-gate opt-outs
         ignore_wind: !!e.ignore_wind,
         ignore_hot_weather: !!e.ignore_hot_weather,
         ignore_rain_lockout: !!e.ignore_rain_lockout,
+        // v1.18 — color ("" → null clears it on the server)
+        color: e.color ? e.color : null,
       };
       if (mode === "weekdays") {
         payload.weekdays = e.weekdays;
@@ -1535,7 +1561,7 @@
     }
 
     async _runSchedule(scheduleId, scheduleName) {
-      // v1.17.14 — "Run" button on each schedule row. Confirms before
+      // v1.18.0 — "Run" button on each schedule row. Confirms before
       // firing since this triggers physical irrigation hardware. The
       // backend service handles multi-zone chaining (staggered
       // run_zone calls with the configured inter-zone buffer).
@@ -1746,8 +1772,8 @@
       const enabled = n.enabled !== false; // default true
       const lowMoistureAlerts = n.low_moisture_alerts !== false; // default true
       const notifyOnMissed = n.notify_on_missed !== false; // default true (v1.17)
-      const notifyOnAborted = n.notify_on_aborted !== false; // default true (v1.17.14)
-      // v1.17.14 — render the info bubble with a custom popover instead
+      const notifyOnAborted = n.notify_on_aborted !== false; // default true (v1.18.0)
+      // v1.18.0 — render the info bubble with a custom popover instead
       // of the native `title` attribute. The native tooltip is delayed
       // ~1.5s on desktop AND silently does NOTHING on touch devices.
       // The custom popover shows immediately on hover, on tap (touch
@@ -1927,7 +1953,7 @@
       const c = this._config || {};
       const themeLabel =
         this._theme === "dark" ? "Dark" : this._theme === "light" ? "Light" : "Auto (follow HA)";
-      // v1.17.14 — render the info bubble with a custom popover instead
+      // v1.18.0 — render the info bubble with a custom popover instead
       // of the native `title` attribute. The native tooltip is delayed
       // ~1.5s on desktop AND silently does NOTHING on touch devices.
       // The custom popover shows immediately on hover, on tap (touch
@@ -2002,7 +2028,7 @@
         `<button class="btn btn-secondary" type="button" data-action="weekly-snooze-30">Snooze 30 days</button>` +
         `</div>` +
         `</section>` +
-        // v1.17.14 — admin-only services. Opt-in security hardening
+        // v1.18.0 — admin-only services. Opt-in security hardening
         // for setups with non-admin HA users. The panel itself is
         // already admin-only (v1.15.0 S3) but the underlying services
         // default to "any authenticated user". Flipping this on makes
@@ -2078,7 +2104,7 @@
     }
 
     async _saveAdminOnlyServices(form) {
-      // v1.17.14 — opt-in gate on hardware/CRUD service calls. Default
+      // v1.18.0 — opt-in gate on hardware/CRUD service calls. Default
       // off; flipping on requires admin context for run_zone / stop_zone
       // / schedule CRUD / etc. See coordinator-side _require_admin_if_configured.
       const checked = !!form.querySelector('input[name="admin_only_services"]')?.checked;
@@ -3064,8 +3090,15 @@
           const hoverTitle = `${r.schedule_name} → ${r.zone_name}`;
           const hoverWhen = `${fmtTime(r.start_minutes)} – ${fmtTime(endMin)} (${r.duration_minutes} min)`;
           const hoverHint = "Click to edit schedule";
+          // v1.18 — tint by schedule color (skip when past/live so those
+          // status colors stay readable). Inline style overrides the
+          // default .day-cal-pill accent background.
+          const colorStyle =
+            r.color && !cls.includes("past") && !cls.includes("live")
+              ? `;background:${r.color}`
+              : "";
           return (
-            `<div class="${cls}" style="top:${top}px;height:${height}px" ` +
+            `<div class="${cls}" style="top:${top}px;height:${height}px${colorStyle}" ` +
             `data-action="open-schedule-edit" data-schedule-id="${escapeAttr(r.schedule_id)}" ` +
             `data-hover-title="${escapeAttr(hoverTitle)}" ` +
             `data-hover-when="${escapeAttr(hoverWhen)}" ` +
@@ -3080,7 +3113,7 @@
         })
         .join("");
 
-      // v1.17.14 — more visible now-line: 3px red line + a labeled chip
+      // v1.18.0 — more visible now-line: 3px red line + a labeled chip
       // pinned to the left edge showing the current time. The chip is
       // a child of the line so positioning is automatic. Pulses every
       // 2s so the eye catches it even on a dense calendar.
@@ -3405,6 +3438,7 @@
         category: zoneCfg.category || "",
         temperature_entities: [...(zoneCfg.temperature_entities || [])],
         humidity_entities: [...(zoneCfg.humidity_entities || [])],
+        require_moisture_reading: !!zoneCfg.require_moisture_reading, // v1.18
       };
       this._sensorModalOpen = true;
       this._renderNow();
@@ -3428,7 +3462,7 @@
         .map((s) => s.entity_id)
         .sort();
 
-      // v1.17.14 — render the info bubble with a custom popover instead
+      // v1.18.0 — render the info bubble with a custom popover instead
       // of the native `title` attribute. The native tooltip is delayed
       // ~1.5s on desktop AND silently does NOTHING on touch devices.
       // The custom popover shows immediately on hover, on tap (touch
@@ -3472,6 +3506,10 @@
         `<div><label>Target % ${tip("Aim for this moisture.")}</label><input name="target_pct" type="number" min="0" max="100" step="1" value="${e.target_pct}" /></div>` +
         `<div><label>Max % ${tip("Above this — skip the run.")}</label><input name="max_pct" type="number" min="0" max="100" step="1" value="${e.max_pct}" /></div>` +
         `</div>` +
+        // v1.18 — fail-closed toggle
+        `<label class="enabled-check"><input type="checkbox" name="require_moisture_reading"${
+          e.require_moisture_reading ? " checked" : ""
+        } /> Skip run if no moisture reading ${tip("When ON: if every moisture sensor for this zone is offline / unavailable at run time, the scheduled run is SKIPPED instead of watering blind (fail-closed). When OFF (default): the run proceeds normally if sensors are dark (fail-open). Note: individual offline sensors are always excluded from the combined reading — this only governs what happens when NONE are reporting.")}</label>` +
         `<label>Plant category ${tip("Pick a category to see typical moisture ranges. The min/target/max above stay independent — you can change them after picking.")}</label>` +
         `<select name="category">` +
         `<option value=""${e.category ? "" : " selected"}>—</option>` +
@@ -3527,7 +3565,7 @@
     }
 
     _renderSensorCheckRows(entityIds, selected, inputName) {
-      // v1.17.14 — extracted helper so the moisture + climate paths share
+      // v1.18.0 — extracted helper so the moisture + climate paths share
       // one row-rendering shape. Adds `data-search-text` per row holding
       // a lowercased "friendly + entity_id" blob the search input can
       // filter against without re-rendering the whole modal.
@@ -3549,7 +3587,7 @@
     }
 
     _renderSensorPickerWithSearch(rowsHtml, kindKey, emptyMessage) {
-      // v1.17.14 — wrap a sensor checklist with a search input. The
+      // v1.18.0 — wrap a sensor checklist with a search input. The
       // input's data-action="filter-sensor-list" is caught by _onInput;
       // it walks the sibling .sensor-pick-list and hides any row whose
       // data-search-text doesn't contain the lowercased query. Pure
@@ -3593,6 +3631,7 @@
           ...(e.category ? { category: e.category } : {}),
           temperature_entities: e.temperature_entities,
           humidity_entities: e.humidity_entities,
+          require_moisture_reading: !!e.require_moisture_reading, // v1.18
         });
         this._closeAllModals();
         await this._fetchConfig();
@@ -3618,7 +3657,7 @@
     _renderEstablishmentModal() {
       const e = this._establishmentEditor;
       if (!e) return "";
-      // v1.17.14 — render the info bubble with a custom popover instead
+      // v1.18.0 — render the info bubble with a custom popover instead
       // of the native `title` attribute. The native tooltip is delayed
       // ~1.5s on desktop AND silently does NOTHING on touch devices.
       // The custom popover shows immediately on hover, on tap (touch
@@ -3698,7 +3737,7 @@
             .sort()
         : [];
 
-      // v1.17.14 — render the info bubble with a custom popover instead
+      // v1.18.0 — render the info bubble with a custom popover instead
       // of the native `title` attribute. The native tooltip is delayed
       // ~1.5s on desktop AND silently does NOTHING on touch devices.
       // The custom popover shows immediately on hover, on tap (touch
@@ -3918,8 +3957,12 @@
           ? `${Math.floor(dur / 60)}h ${dur % 60 ? String(dur % 60).padStart(2, "0") + "m" : ""}`.trim()
           : `${dur}m`;
       const enabledClass = s.enabled ? "enabled" : "disabled";
+      // v1.18 — left-edge color stripe when a color is set.
+      const stripeStyle = s.color
+        ? ` style="border-left:4px solid ${escapeAttr(s.color)};padding-left:12px"`
+        : "";
       return (
-        `<article class="schedule-row ${enabledClass}">` +
+        `<article class="schedule-row ${enabledClass}"${stripeStyle}>` +
         `<div class="schedule-row-main">` +
         `<div class="schedule-name">${escapeHtml(s.name)}${
           s.enabled ? "" : " (disabled)"
@@ -3929,7 +3972,7 @@
         `</div>` +
         `</div>` +
         `<div class="schedule-row-actions">` +
-        // v1.17.14 — "Run" button executes the schedule's full run
+        // v1.18.0 — "Run" button executes the schedule's full run
         // sequence on demand. Placed leftmost in the actions group so
         // it's the most prominent control. Visually distinct via
         // .btn-schedule-run (green accent) to separate "trigger
@@ -4004,7 +4047,7 @@
           }/>${label}</label>`
       ).join("");
 
-      // v1.17.14 — render the info bubble with a custom popover instead
+      // v1.18.0 — render the info bubble with a custom popover instead
       // of the native `title` attribute. The native tooltip is delayed
       // ~1.5s on desktop AND silently does NOTHING on touch devices.
       // The custom popover shows immediately on hover, on tap (touch
@@ -4094,6 +4137,16 @@
         `<h3>${e.id ? "Edit Schedule" : "New Schedule"}</h3>` +
         `<label>Name ${tip("A friendly label, e.g. 'Morning Front Lawn'. Used in notifications and the calendar.")}</label>` +
         `<input name="name" type="text" value="${escapeAttr(e.name)}" required autofocus />` +
+        // v1.18 — color picker. Swatches set _scheduleEditor.color via
+        // the "pick-schedule-color" action; the "None" chip clears it.
+        `<label>Color ${tip("Optional. Color-codes this schedule's left-edge stripe on the Schedules tab and its pills on the day calendar — useful for telling zones/areas apart at a glance.")}</label>` +
+        `<div class="color-swatches">` +
+        `<button type="button" class="color-swatch color-swatch-none${e.color ? "" : " selected"}" data-action="pick-schedule-color" data-color="" title="No color">✕</button>` +
+        SCHEDULE_COLORS.map(
+          (c) =>
+            `<button type="button" class="color-swatch${e.color === c ? " selected" : ""}" data-action="pick-schedule-color" data-color="${escapeAttr(c)}" style="background:${c}" title="${escapeAttr(c)}"></button>`
+        ).join("") +
+        `</div>` +
         `<label>Zone ${tip("Which switch entity this schedule controls. Comes from the zones picked at integration setup.")}</label>` +
         `<select name="zone_entity_id" required>${
           zoneOpts || `<option value="">No zones configured</option>`
@@ -4167,7 +4220,7 @@
         `<label class="enabled-check"><input type="checkbox" name="enabled"${
           e.enabled ? " checked" : ""
         } />Enabled ${tip("Toggle off to keep the schedule but stop it from firing. Useful while traveling.")}</label>` +
-        // v1.17.14 — per-schedule weather-gate opt-outs. Useful for
+        // v1.18.0 — per-schedule weather-gate opt-outs. Useful for
         // zones where the global gates don't make sense (e.g. a bird
         // bath fill: no spray drift to defer for wind, no
         // evapotranspiration to boost for hot weather, no point
@@ -4319,18 +4372,24 @@
         `.btn-stop:hover{background:#db4437;filter:brightness(1.08)}` +
         `.btn-primary:hover{background:var(--ci-accent);filter:brightness(1.08)}` +
         `.btn-secondary{background:transparent}` +
-        // v1.17.14 — Run-schedule button on each schedule row. Green
+        // v1.18.0 — Run-schedule button on each schedule row. Green
         // accent separates "trigger hardware" from neutral config
         // actions (Edit / Copy / Disable). NOT width:100% — sits in
         // the action row alongside the others.
         `.btn-schedule-run{background:#43a047;border-color:#43a047;color:#fff;font-weight:600}` +
         `.btn-schedule-run:hover{background:#43a047;filter:brightness(1.08)}` +
+        // v1.18 — schedule color picker swatches in the editor.
+        `.color-swatches{display:flex;flex-wrap:wrap;gap:8px;margin:4px 0 10px}` +
+        `.color-swatch{width:28px;height:28px;border-radius:50%;border:2px solid var(--ci-border);cursor:pointer;padding:0;position:relative;transition:transform 0.1s}` +
+        `.color-swatch:hover{transform:scale(1.12)}` +
+        `.color-swatch.selected{border-color:var(--ci-text);box-shadow:0 0 0 2px var(--ci-accent)}` +
+        `.color-swatch-none{background:var(--ci-hover);color:var(--ci-text-2);font-size:13px;display:inline-flex;align-items:center;justify-content:center}` +
         `.btn-small{padding:6px 10px;font-size:12px}` +
         `.empty{background:var(--ci-card);border:1px dashed var(--ci-border);border-radius:12px;padding:24px;text-align:center;color:var(--ci-text-2)}` +
         `.placeholder{background:var(--ci-card);border:1px solid var(--ci-border);border-radius:12px;padding:24px}` +
         // Modal
         `.modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:99}` +
-        // v1.17.14 — modal cap at 90vh + internal scroll, with the
+        // v1.18.0 — modal cap at 90vh + internal scroll, with the
         // sticky .modal-actions footer below providing the visible
         // bottom edge. padding-bottom is 0 because .modal-actions
         // bridges through the modal's left/right padding (negative
@@ -4352,7 +4411,7 @@
         // Same shape for textareas anywhere in the panel (Notifications uses one)
         `.weather-form textarea{width:100%;min-width:0;padding:8px 10px;border:1px solid var(--ci-border);border-radius:6px;font-size:14px;background:var(--ci-input-bg);color:inherit;font-family:inherit;box-sizing:border-box;resize:vertical}` +
         `.modal .hint{margin:6px 0 16px;font-size:11px;color:var(--ci-text-2)}` +
-        // v1.17.14 — sticky footer pinned to the modal's visible
+        // v1.18.0 — sticky footer pinned to the modal's visible
         // bottom. bottom: 0 sticks at the scroll-viewport edge
         // (NOT -24px — that put it offscreen). Negative left/right
         // margins extend through .modal's horizontal padding so the
@@ -4401,7 +4460,7 @@
         `.day-cal-pill:hover .day-cal-pill-meta{white-space:normal;overflow:visible}` +
         `.day-cal-pill:hover .day-cal-pill-zone{white-space:normal;overflow:visible}` +
         // Red "now" line — only shown on today.
-        // v1.17.14 — enhanced "now" line with a left-edge labeled chip
+        // v1.18.0 — enhanced "now" line with a left-edge labeled chip
         // and a subtle pulse so it's obvious where the current time is
         // on the day calendar. The line itself remains pointer-events:
         // none so clicks pass through to underlying pills; the label
@@ -4490,7 +4549,7 @@
         `.weekday-check{display:inline-flex;align-items:center;gap:4px;padding:6px 10px;border:1px solid var(--ci-border);border-radius:6px;cursor:pointer;font-size:12px;color:var(--ci-text);margin:0}` +
         `.weekday-check input{margin-right:4px}` +
         `.enabled-check{display:inline-flex;align-items:center;gap:6px;margin-top:14px;color:var(--ci-text);font-size:13px}` +
-        // v1.17.14 — info-bubble + custom popover. Native `title` was
+        // v1.18.0 — info-bubble + custom popover. Native `title` was
         // delayed on desktop and silent on touch; the popover here
         // shows immediately on :hover, on keyboard :focus, and on
         // click/tap (panel toggles .help-tip-open via _onClick).
@@ -4583,7 +4642,7 @@
         `.sensor-label{min-width:80px;color:var(--ci-text-2);font-weight:500}` +
         `.sensor-bound code{font-size:11px;background:var(--ci-hover);padding:1px 4px;border-radius:3px}` +
         `.sensor-pick-list{max-height:280px;overflow-y:auto;border:1px solid var(--ci-border);border-radius:6px;padding:6px;margin-bottom:6px}` +
-        // v1.17.14 — search input above each sensor checklist. Live filters
+        // v1.18.0 — search input above each sensor checklist. Live filters
         // rows by entity name + entity_id as the user types. Sits flush
         // with the list (shared border-radius look via stacking).
         `.sensor-picker{margin-bottom:10px}` +
@@ -4637,7 +4696,7 @@
         // (95vh - 24px) to maximize content visibility on narrow screens.
         // Sticky footer's negative margin re-tuned to match the 16px
         // mobile padding.
-        // v1.17.14 — mobile modal: same scroll/sticky pattern as
+        // v1.18.0 — mobile modal: same scroll/sticky pattern as
         // desktop, retuned for 16px padding. padding-bottom:0 so the
         // sticky .modal-actions edge-to-edge override sits flush.
         `.modal{min-width:0;width:calc(100vw - 24px);max-width:calc(100vw - 24px);max-height:calc(100vh - 24px);padding:16px 16px 0}` +

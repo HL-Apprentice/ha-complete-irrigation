@@ -201,6 +201,10 @@ async def list_planned_runs(hass, connection, msg):
     )
     resolved = resolve_conflicts(raw, POLICY_DEFER_NEW)
 
+    # v1.18 — attach each schedule's color so the day calendar can tint
+    # pills. Build a {schedule_id: color} map once rather than per-run.
+    color_by_id = {s.id: s.color for s in coord.schedule_store.all()}
+
     runs = [
         {
             "zone_entity_id": r.zone_entity_id,
@@ -209,6 +213,7 @@ async def list_planned_runs(hass, connection, msg):
             "schedule_id": r.schedule_id,
             "schedule_name": r.schedule_name,
             "reason": r.reason,
+            "color": color_by_id.get(r.schedule_id),
         }
         for r in resolved
     ]

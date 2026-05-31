@@ -115,6 +115,7 @@ def test_schedule_to_dict_has_expected_shape():
         "ignore_wind": False,
         "ignore_hot_weather": False,
         "ignore_rain_lockout": False,
+        "color": None,
     }
 
 
@@ -616,6 +617,17 @@ def test_schedule_ignore_flags_roundtrip():
     assert rebuilt.ignore_wind is True
     assert rebuilt.ignore_hot_weather is True
     assert rebuilt.ignore_rain_lockout is True
+
+
+def test_schedule_color_defaults_none_and_roundtrips():
+    # v1.18 — optional color field
+    assert _good_schedule().color is None
+    s = _good_schedule(color="#1e88e5")
+    rebuilt = Schedule.from_dict(s.to_dict())
+    assert rebuilt == s
+    assert rebuilt.color == "#1e88e5"
+    # with_changes preserves it
+    assert s.with_changes(enabled=False).color == "#1e88e5"
 
 
 def test_schedule_ignore_flags_with_changes_preserves():

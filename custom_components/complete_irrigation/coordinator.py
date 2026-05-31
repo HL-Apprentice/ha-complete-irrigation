@@ -785,6 +785,17 @@ class ScheduleCoordinator:
             "decision": "no_reading" if current is None else "ok",
         }
         if current is None:
+            # v1.18 — fail-closed option. When require_moisture_reading is
+            # set on this zone and NO sensor produced a value (all offline
+            # / unavailable / non-numeric), skip the run rather than
+            # watering blind. Default off → legacy fail-open behavior
+            # (water anyway when sensors are dark).
+            if zone_cfg.get("require_moisture_reading"):
+                triggers["moisture"]["decision"] = "skip_no_reading"
+                return adjusted_minutes, (
+                    "no moisture reading available and require_moisture_reading is on "
+                    f"(sensors: {', '.join(moisture_entities)})"
+                )
             return adjusted_minutes, None
         decision = evaluate_moisture(
             current=current,
