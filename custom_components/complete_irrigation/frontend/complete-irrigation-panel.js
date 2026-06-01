@@ -37,7 +37,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.18.1";
+  const PANEL_VERSION = "v1.18.2";
   const DEFAULT_MANUAL_MINUTES = 10;
   const MAX_MANUAL_MINUTES = 60;
   const MAX_SCHEDULE_MINUTES = 480; // 8 hours
@@ -129,7 +129,7 @@
       start_date: "",
       end_date: "",
       repeat_annually: false,
-      // v1.18.1 — per-schedule weather-gate opt-outs
+      // v1.18.2 — per-schedule weather-gate opt-outs
       ignore_wind: false,
       ignore_hot_weather: false,
       ignore_rain_lockout: false,
@@ -234,7 +234,7 @@
       // tile show "4:52 left of 10 min" instead of just "4:52 left".
       this._localRunDurations = {};
       this._countdownTimer = null;
-      // v1.18.1 — minute-tick so the day calendar's "now" line drifts
+      // v1.18.2 — minute-tick so the day calendar's "now" line drifts
       // down automatically without waiting for an HA state change to
       // trigger a re-render. Only active while the Today tab is open
       // (set + cleared in connectedCallback / _navigateTo).
@@ -335,7 +335,7 @@
       this.shadowRoot.addEventListener("change", this._onChange);
       this.shadowRoot.addEventListener("input", this._onInput);
       this._scheduleRender();
-      // v1.18.1 — Today is the initial section, so kick off the
+      // v1.18.2 — Today is the initial section, so kick off the
       // now-line tick now (won't double-up because _startNowLineTimer
       // is idempotent).
       if (this._currentSection === "today") this._startNowLineTimer();
@@ -350,7 +350,7 @@
     }
 
     _startNowLineTimer() {
-      // v1.18.1 — re-render every minute so the day-cal-now line drifts
+      // v1.18.2 — re-render every minute so the day-cal-now line drifts
       // down. Idempotent: no-op if already running.
       if (this._nowLineTimer) return;
       this._nowLineTimer = setInterval(() => {
@@ -368,7 +368,7 @@
     _onClick(e) {
       const path = e.composedPath ? e.composedPath() : [];
 
-      // v1.18.1 — info-bubble popover toggle.
+      // v1.18.2 — info-bubble popover toggle.
       // Touch devices have no hover, so tapping the ⓘ bubble has to
       // toggle the popup explicitly. We also close any open popup when
       // the click lands anywhere else (the path-doesn't-contain-help-tip
@@ -754,7 +754,7 @@
       // triggered by other changes don't blow away unsaved edits).
       const t = e.target;
       if (!t) return;
-      // v1.18.1 — live filter the sensor checkbox list as the user
+      // v1.18.2 — live filter the sensor checkbox list as the user
       // types. Pure DOM operation; no re-render so checkbox state +
       // input focus + cursor position stay put while typing.
       if (t.dataset && t.dataset.action === "filter-sensor-list") {
@@ -918,7 +918,7 @@
       // v1.17 — Today screen's missed-runs banner reads from run history,
       // so load it lazily on first Today open if not already cached.
       if (sectionId === "today" && !this._runHistoryLoaded) this._fetchRunHistory();
-      // v1.18.1 — keep the now-line drifting only while Today is open.
+      // v1.18.2 — keep the now-line drifting only while Today is open.
       if (sectionId === "today") this._startNowLineTimer();
       else this._stopNowLineTimer();
       // Today + Zones both rely on the cached PlannedRuns for their
@@ -1007,7 +1007,7 @@
     }
 
     _openCopyOfSchedule(scheduleId) {
-      // v1.18.1 — clone an existing schedule into the editor with a
+      // v1.18.2 — clone an existing schedule into the editor with a
       // null id (so save creates a new schedule, not overwriting the
       // source) and a name suffixed " (copy)" so the duplicate is
       // identifiable in lists before the user picks a better name.
@@ -1488,7 +1488,7 @@
         start_date: e.start_date || null,
         end_date: e.end_date || null,
         repeat_annually: !!e.repeat_annually,
-        // v1.18.1 — per-schedule weather-gate opt-outs
+        // v1.18.2 — per-schedule weather-gate opt-outs
         ignore_wind: !!e.ignore_wind,
         ignore_hot_weather: !!e.ignore_hot_weather,
         ignore_rain_lockout: !!e.ignore_rain_lockout,
@@ -1561,7 +1561,7 @@
     }
 
     async _runSchedule(scheduleId, scheduleName) {
-      // v1.18.1 — "Run" button on each schedule row. Confirms before
+      // v1.18.2 — "Run" button on each schedule row. Confirms before
       // firing since this triggers physical irrigation hardware. The
       // backend service handles multi-zone chaining (staggered
       // run_zone calls with the configured inter-zone buffer).
@@ -1772,8 +1772,8 @@
       const enabled = n.enabled !== false; // default true
       const lowMoistureAlerts = n.low_moisture_alerts !== false; // default true
       const notifyOnMissed = n.notify_on_missed !== false; // default true (v1.17)
-      const notifyOnAborted = n.notify_on_aborted !== false; // default true (v1.18.1)
-      // v1.18.1 — render the info bubble with a custom popover instead
+      const notifyOnAborted = n.notify_on_aborted !== false; // default true (v1.18.2)
+      // v1.18.2 — render the info bubble with a custom popover instead
       // of the native `title` attribute. The native tooltip is delayed
       // ~1.5s on desktop AND silently does NOTHING on touch devices.
       // The custom popover shows immediately on hover, on tap (touch
@@ -1953,7 +1953,7 @@
       const c = this._config || {};
       const themeLabel =
         this._theme === "dark" ? "Dark" : this._theme === "light" ? "Light" : "Auto (follow HA)";
-      // v1.18.1 — render the info bubble with a custom popover instead
+      // v1.18.2 — render the info bubble with a custom popover instead
       // of the native `title` attribute. The native tooltip is delayed
       // ~1.5s on desktop AND silently does NOTHING on touch devices.
       // The custom popover shows immediately on hover, on tap (touch
@@ -2028,7 +2028,7 @@
         `<button class="btn btn-secondary" type="button" data-action="weekly-snooze-30">Snooze 30 days</button>` +
         `</div>` +
         `</section>` +
-        // v1.18.1 — admin-only services. Opt-in security hardening
+        // v1.18.2 — admin-only services. Opt-in security hardening
         // for setups with non-admin HA users. The panel itself is
         // already admin-only (v1.15.0 S3) but the underlying services
         // default to "any authenticated user". Flipping this on makes
@@ -2104,7 +2104,7 @@
     }
 
     async _saveAdminOnlyServices(form) {
-      // v1.18.1 — opt-in gate on hardware/CRUD service calls. Default
+      // v1.18.2 — opt-in gate on hardware/CRUD service calls. Default
       // off; flipping on requires admin context for run_zone / stop_zone
       // / schedule CRUD / etc. See coordinator-side _require_admin_if_configured.
       const checked = !!form.querySelector('input[name="admin_only_services"]')?.checked;
@@ -2735,7 +2735,7 @@
             zone.available ? "" : " disabled"
           }>▶ Run Now</button>`;
 
-      // v1.18.1 — moisture min/avg/max at a glance (Today screen).
+      // v1.18.2 — moisture min/avg/max at a glance (Today screen).
       const cfg = this._config?.zones?.[zone.entityId] || {};
       const moistureStats = this._renderZoneMoistureStats(cfg);
 
@@ -2754,7 +2754,7 @@
     }
 
     _renderZoneMoistureStats(zoneCfg) {
-      // v1.18.1 — compact moisture summary for the Today zone tile.
+      // v1.18.2 — compact moisture summary for the Today zone tile.
       // Shows avg / min / max of the live readings across the zone's
       // bound moisture sensors. Single-sensor zones show just the
       // value (min = avg = max). No sensors → nothing rendered.
@@ -3154,7 +3154,7 @@
         })
         .join("");
 
-      // v1.18.1 — more visible now-line: 3px red line + a labeled chip
+      // v1.18.2 — more visible now-line: 3px red line + a labeled chip
       // pinned to the left edge showing the current time. The chip is
       // a child of the line so positioning is automatic. Pulses every
       // 2s so the eye catches it even on a dense calendar.
@@ -3503,7 +3503,7 @@
         .map((s) => s.entity_id)
         .sort();
 
-      // v1.18.1 — render the info bubble with a custom popover instead
+      // v1.18.2 — render the info bubble with a custom popover instead
       // of the native `title` attribute. The native tooltip is delayed
       // ~1.5s on desktop AND silently does NOTHING on touch devices.
       // The custom popover shows immediately on hover, on tap (touch
@@ -3606,7 +3606,7 @@
     }
 
     _renderSensorCheckRows(entityIds, selected, inputName) {
-      // v1.18.1 — extracted helper so the moisture + climate paths share
+      // v1.18.2 — extracted helper so the moisture + climate paths share
       // one row-rendering shape. Adds `data-search-text` per row holding
       // a lowercased "friendly + entity_id" blob the search input can
       // filter against without re-rendering the whole modal.
@@ -3628,7 +3628,7 @@
     }
 
     _renderSensorPickerWithSearch(rowsHtml, kindKey, emptyMessage) {
-      // v1.18.1 — wrap a sensor checklist with a search input. The
+      // v1.18.2 — wrap a sensor checklist with a search input. The
       // input's data-action="filter-sensor-list" is caught by _onInput;
       // it walks the sibling .sensor-pick-list and hides any row whose
       // data-search-text doesn't contain the lowercased query. Pure
@@ -3698,7 +3698,7 @@
     _renderEstablishmentModal() {
       const e = this._establishmentEditor;
       if (!e) return "";
-      // v1.18.1 — render the info bubble with a custom popover instead
+      // v1.18.2 — render the info bubble with a custom popover instead
       // of the native `title` attribute. The native tooltip is delayed
       // ~1.5s on desktop AND silently does NOTHING on touch devices.
       // The custom popover shows immediately on hover, on tap (touch
@@ -3778,7 +3778,7 @@
             .sort()
         : [];
 
-      // v1.18.1 — render the info bubble with a custom popover instead
+      // v1.18.2 — render the info bubble with a custom popover instead
       // of the native `title` attribute. The native tooltip is delayed
       // ~1.5s on desktop AND silently does NOTHING on touch devices.
       // The custom popover shows immediately on hover, on tap (touch
@@ -4013,7 +4013,7 @@
         `</div>` +
         `</div>` +
         `<div class="schedule-row-actions">` +
-        // v1.18.1 — "Run" button executes the schedule's full run
+        // v1.18.2 — "Run" button executes the schedule's full run
         // sequence on demand. Placed leftmost in the actions group so
         // it's the most prominent control. Visually distinct via
         // .btn-schedule-run (green accent) to separate "trigger
@@ -4088,7 +4088,7 @@
           }/>${label}</label>`
       ).join("");
 
-      // v1.18.1 — render the info bubble with a custom popover instead
+      // v1.18.2 — render the info bubble with a custom popover instead
       // of the native `title` attribute. The native tooltip is delayed
       // ~1.5s on desktop AND silently does NOTHING on touch devices.
       // The custom popover shows immediately on hover, on tap (touch
@@ -4261,7 +4261,7 @@
         `<label class="enabled-check"><input type="checkbox" name="enabled"${
           e.enabled ? " checked" : ""
         } />Enabled ${tip("Toggle off to keep the schedule but stop it from firing. Useful while traveling.")}</label>` +
-        // v1.18.1 — per-schedule weather-gate opt-outs. Useful for
+        // v1.18.2 — per-schedule weather-gate opt-outs. Useful for
         // zones where the global gates don't make sense (e.g. a bird
         // bath fill: no spray drift to defer for wind, no
         // evapotranspiration to boost for hot weather, no point
@@ -4384,7 +4384,7 @@
         `.zone-tile{background:var(--ci-card);border:1px solid var(--ci-border);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:6px}` +
         `.zone-tile header{display:flex;align-items:center;gap:10px}` +
         `.zone-tile h4{margin:0;font-size:15px;font-weight:600}` +
-        // v1.18.1 — moisture stats line on the Today zone tile
+        // v1.18.2 — moisture stats line on the Today zone tile
         `.zone-moisture{font-size:13px;color:var(--ci-text);display:flex;align-items:baseline;gap:4px;flex-wrap:wrap;cursor:help}` +
         `.zone-moisture strong{font-weight:700}` +
         `.zone-moisture-band{font-size:11px;color:var(--ci-text-2)}` +
@@ -4419,7 +4419,7 @@
         `.btn-stop:hover{background:#db4437;filter:brightness(1.08)}` +
         `.btn-primary:hover{background:var(--ci-accent);filter:brightness(1.08)}` +
         `.btn-secondary{background:transparent}` +
-        // v1.18.1 — Run-schedule button on each schedule row. Green
+        // v1.18.2 — Run-schedule button on each schedule row. Green
         // accent separates "trigger hardware" from neutral config
         // actions (Edit / Copy / Disable). NOT width:100% — sits in
         // the action row alongside the others.
@@ -4436,7 +4436,7 @@
         `.placeholder{background:var(--ci-card);border:1px solid var(--ci-border);border-radius:12px;padding:24px}` +
         // Modal
         `.modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:99}` +
-        // v1.18.1 — modal cap at 90vh + internal scroll, with the
+        // v1.18.2 — modal cap at 90vh + internal scroll, with the
         // sticky .modal-actions footer below providing the visible
         // bottom edge. padding-bottom is 0 because .modal-actions
         // bridges through the modal's left/right padding (negative
@@ -4458,7 +4458,7 @@
         // Same shape for textareas anywhere in the panel (Notifications uses one)
         `.weather-form textarea{width:100%;min-width:0;padding:8px 10px;border:1px solid var(--ci-border);border-radius:6px;font-size:14px;background:var(--ci-input-bg);color:inherit;font-family:inherit;box-sizing:border-box;resize:vertical}` +
         `.modal .hint{margin:6px 0 16px;font-size:11px;color:var(--ci-text-2)}` +
-        // v1.18.1 — sticky footer pinned to the modal's visible
+        // v1.18.2 — sticky footer pinned to the modal's visible
         // bottom. bottom: 0 sticks at the scroll-viewport edge
         // (NOT -24px — that put it offscreen). Negative left/right
         // margins extend through .modal's horizontal padding so the
@@ -4507,7 +4507,7 @@
         `.day-cal-pill:hover .day-cal-pill-meta{white-space:normal;overflow:visible}` +
         `.day-cal-pill:hover .day-cal-pill-zone{white-space:normal;overflow:visible}` +
         // Red "now" line — only shown on today.
-        // v1.18.1 — enhanced "now" line with a left-edge labeled chip
+        // v1.18.2 — enhanced "now" line with a left-edge labeled chip
         // and a subtle pulse so it's obvious where the current time is
         // on the day calendar. The line itself remains pointer-events:
         // none so clicks pass through to underlying pills; the label
@@ -4596,7 +4596,7 @@
         `.weekday-check{display:inline-flex;align-items:center;gap:4px;padding:6px 10px;border:1px solid var(--ci-border);border-radius:6px;cursor:pointer;font-size:12px;color:var(--ci-text);margin:0}` +
         `.weekday-check input{margin-right:4px}` +
         `.enabled-check{display:inline-flex;align-items:center;gap:6px;margin-top:14px;color:var(--ci-text);font-size:13px}` +
-        // v1.18.1 — info-bubble + custom popover. Native `title` was
+        // v1.18.2 — info-bubble + custom popover. Native `title` was
         // delayed on desktop and silent on touch; the popover here
         // shows immediately on :hover, on keyboard :focus, and on
         // click/tap (panel toggles .help-tip-open via _onClick).
@@ -4689,7 +4689,7 @@
         `.sensor-label{min-width:80px;color:var(--ci-text-2);font-weight:500}` +
         `.sensor-bound code{font-size:11px;background:var(--ci-hover);padding:1px 4px;border-radius:3px}` +
         `.sensor-pick-list{max-height:280px;overflow-y:auto;border:1px solid var(--ci-border);border-radius:6px;padding:6px;margin-bottom:6px}` +
-        // v1.18.1 — search input above each sensor checklist. Live filters
+        // v1.18.2 — search input above each sensor checklist. Live filters
         // rows by entity name + entity_id as the user types. Sits flush
         // with the list (shared border-radius look via stacking).
         `.sensor-picker{margin-bottom:10px}` +
@@ -4697,6 +4697,13 @@
         `.sensor-pick-search:focus{outline:none;border-color:var(--ci-accent);box-shadow:0 0 0 2px rgba(127,205,240,0.18)}` +
         `.sensor-pick-no-match{padding:14px;text-align:center;color:var(--ci-text-2);font-size:12px}` +
         `.sensor-pick{display:flex;align-items:flex-start;gap:8px;padding:6px;border-radius:4px;cursor:pointer;font-size:13px}` +
+        // v1.18.2 — the sensor search filter sets row.hidden=true to
+        // filter rows, but `.sensor-pick{display:flex}` (an author rule)
+        // overrode the UA `[hidden]{display:none}` rule, so hidden rows
+        // stayed visible and the filter appeared dead. This higher-
+        // specificity rule (class + attribute = 0,2,0 beats 0,1,0)
+        // restores the hide. Same guard for the no-match placeholder.
+        `.sensor-pick[hidden]{display:none}` +
         `.sensor-pick:hover{background:var(--ci-hover)}` +
         `.sensor-pick code{font-size:10px;color:var(--ci-text-2)}` +
         `.rain-pick-list{max-height:280px;overflow-y:auto;border:1px solid var(--ci-border,rgba(0,0,0,0.12));border-radius:6px;padding:6px;margin-bottom:8px}` +
@@ -4743,7 +4750,7 @@
         // (95vh - 24px) to maximize content visibility on narrow screens.
         // Sticky footer's negative margin re-tuned to match the 16px
         // mobile padding.
-        // v1.18.1 — mobile modal: same scroll/sticky pattern as
+        // v1.18.2 — mobile modal: same scroll/sticky pattern as
         // desktop, retuned for 16px padding. padding-bottom:0 so the
         // sticky .modal-actions edge-to-edge override sits flush.
         `.modal{min-width:0;width:calc(100vw - 24px);max-width:calc(100vw - 24px);max-height:calc(100vh - 24px);padding:16px 16px 0}` +
