@@ -4,6 +4,20 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.18.4 — 2026-05-31
+
+### Added
+
+- **Per-zone "Ignore moisture for watering decisions" toggle** (Sensors
+  editor). When on, the moisture gate is a no-op for that zone: no
+  saturated-skip, no runtime boost/reduction, and "Skip run if no
+  moisture reading" is moot. Sensors stay bound, so the Zones-tab chips
+  and Today tile keep showing live readings — now with a "· gate off"
+  badge (and the low-moisture red flag is suppressed, since the gate
+  won't act on it). History records `moisture: {disabled_by_config}`
+  in the triggers blob so bypassed gates stay auditable. New
+  `moisture_disabled` field on `set_zone_moisture`.
+
 ## v1.18.3 — 2026-05-31
 
 ### Fixed
