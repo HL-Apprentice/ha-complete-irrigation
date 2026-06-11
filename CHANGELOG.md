@@ -4,6 +4,39 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.18.3 — 2026-05-31
+
+### Fixed
+
+- **Mobile: page no longer snaps to the top while reading.** Every
+  render rebuilds the shadow DOM via `innerHTML`, resetting all scroll
+  containers to 0. Background renders (HA state updates, the 60s
+  now-line tick on Today) were yanking scrolled users back to the top
+  — most visible on mobile. Now: (a) scroll positions of `main`, the
+  day-calendar columns, modals, and other internal scrollers are
+  captured before each render and restored after; (b) background
+  renders are deferred while the user is actively scrolling so
+  momentum isn't killed mid-flick; (c) tab switches still land at the
+  top (restore is keyed to the section in the DOM).
+
+## v1.18.2 — 2026-05-31
+
+### Fixed
+
+- **Sensor search filter actually hides rows.** The v1.17.7 filter set
+  `row.hidden = true`, but the author rule `.sensor-pick{display:flex}`
+  overrode the UA `[hidden]{display:none}` rule, so rows never hid.
+  Added `.sensor-pick[hidden]{display:none}`.
+
+## v1.18.1 — 2026-05-30
+
+### Added
+
+- **Moisture min/avg/max on the Today zone tiles.** Multi-sensor
+  zones: `💧 33% avg · 22 min · 41 max · 3 sensors`; single-sensor:
+  `💧 33% (min 21%)`. Red when avg is below the zone's configured
+  `min_pct`. Hover shows the per-sensor breakdown.
+
 ## v1.18.0 — 2026-05-30
 
 ### Added
