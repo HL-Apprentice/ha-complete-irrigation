@@ -260,6 +260,11 @@ _SET_ZONE_MOISTURE_SCHEMA = vol.Schema(
         # reading is available for this zone (all sensors offline /
         # unavailable). Default off = legacy fail-open (water anyway).
         vol.Optional("require_moisture_reading"): cv.boolean,
+        # v1.18.4 — ignore moisture entirely for watering decisions on
+        # this zone. Sensors stay bound (chips / tile stats still show
+        # live readings) but the moisture gate becomes a no-op: no
+        # saturated-skip, no runtime adjustment. Default off.
+        vol.Optional("moisture_disabled"): cv.boolean,
     }
 )
 

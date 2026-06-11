@@ -760,6 +760,15 @@ class ScheduleCoordinator:
         if not moisture_entities:
             return adjusted_minutes, None
 
+        # v1.18.4 — per-zone moisture opt-out. Sensors stay bound for
+        # display, but the gate is a no-op: no saturated-skip, no
+        # runtime adjustment, and require_moisture_reading is moot.
+        # Recorded in triggers so History shows the gate was
+        # deliberately bypassed rather than silently absent.
+        if zone_cfg.get("moisture_disabled"):
+            triggers["moisture"] = {"disabled_by_config": True}
+            return adjusted_minutes, None
+
         readings: list[float] = []
         for ent in moisture_entities:
             state = self._hass.states.get(ent)
