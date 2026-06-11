@@ -34,7 +34,7 @@
     custom: "Custom: pick your own min/target/max thresholds based on your soil + plant type.",
   };
   const ELEMENT_NAME = "complete-irrigation-panel";
-  // v1.18.4 — scroll containers whose positions must survive an
+  // v1.19.0 — scroll containers whose positions must survive an
   // innerHTML rebuild. `main` is the page scroller; the rest scroll
   // internally. Used by _captureScrollPositions/_restoreScrollPositions.
   const SCROLL_SELECTORS = [
@@ -48,7 +48,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.18.4";
+  const PANEL_VERSION = "v1.19.0";
   const DEFAULT_MANUAL_MINUTES = 10;
   const MAX_MANUAL_MINUTES = 60;
   const MAX_SCHEDULE_MINUTES = 480; // 8 hours
@@ -140,7 +140,7 @@
       start_date: "",
       end_date: "",
       repeat_annually: false,
-      // v1.18.4 — per-schedule weather-gate opt-outs
+      // v1.19.0 — per-schedule weather-gate opt-outs
       ignore_wind: false,
       ignore_hot_weather: false,
       ignore_rain_lockout: false,
@@ -245,7 +245,7 @@
       // tile show "4:52 left of 10 min" instead of just "4:52 left".
       this._localRunDurations = {};
       this._countdownTimer = null;
-      // v1.18.4 — minute-tick so the day calendar's "now" line drifts
+      // v1.19.0 — minute-tick so the day calendar's "now" line drifts
       // down automatically without waiting for an HA state change to
       // trigger a re-render. Only active while the Today tab is open
       // (set + cleared in connectedCallback / _navigateTo).
@@ -265,7 +265,7 @@
       this._onChange = this._onChange.bind(this);
       this._onInput = this._onInput.bind(this);
 
-      // v1.18.4 — scroll-position preservation across renders. _render()
+      // v1.19.0 — scroll-position preservation across renders. _render()
       // rebuilds the whole shadow DOM via innerHTML, which resets every
       // scroll container to the top. Background renders (hass updates,
       // the 60s now-line tick) were yanking mobile users back to the
@@ -358,12 +358,12 @@
       this.shadowRoot.addEventListener("submit", this._onSubmit);
       this.shadowRoot.addEventListener("change", this._onChange);
       this.shadowRoot.addEventListener("input", this._onInput);
-      // v1.18.4 — scroll events don't bubble, but they DO run the
+      // v1.19.0 — scroll events don't bubble, but they DO run the
       // capture phase, so a capture listener on the shadow root sees
       // scrolls from every descendant (main, day-cal-grid, modals…).
       this.shadowRoot.addEventListener("scroll", this._onAnyScroll, true);
       this._scheduleRender();
-      // v1.18.4 — Today is the initial section, so kick off the
+      // v1.19.0 — Today is the initial section, so kick off the
       // now-line tick now (won't double-up because _startNowLineTimer
       // is idempotent).
       if (this._currentSection === "today") this._startNowLineTimer();
@@ -390,7 +390,7 @@
     }
 
     _startNowLineTimer() {
-      // v1.18.4 — re-render every minute so the day-cal-now line drifts
+      // v1.19.0 — re-render every minute so the day-cal-now line drifts
       // down. Idempotent: no-op if already running.
       if (this._nowLineTimer) return;
       this._nowLineTimer = setInterval(() => {
@@ -408,7 +408,7 @@
     _onClick(e) {
       const path = e.composedPath ? e.composedPath() : [];
 
-      // v1.18.4 — info-bubble popover toggle.
+      // v1.19.0 — info-bubble popover toggle.
       // Touch devices have no hover, so tapping the ⓘ bubble has to
       // toggle the popup explicitly. We also close any open popup when
       // the click lands anywhere else (the path-doesn't-contain-help-tip
@@ -726,6 +726,21 @@
           if (t.checked) set.add(t.value);
           else set.delete(t.value);
           this._sensorEditor[field] = Array.from(set);
+          // v1.19 — show/remove the row's "in avg" toggle without a
+          // full re-render (which would wipe the search filter text).
+          if (t.name === "moisture_entity") {
+            this._syncMoistureUseToggle(t.closest(".sensor-pick"), t.value, t.checked);
+          }
+          return;
+        }
+        if (t.name === "moisture_exclude") {
+          // v1.19 — "in avg" mini-checkbox. CHECKED = include in the
+          // analysis (default); UNCHECKED = display-only, add to the
+          // excluded list.
+          const set = new Set(this._sensorEditor.moisture_excluded || []);
+          if (t.checked) set.delete(t.value);
+          else set.add(t.value);
+          this._sensorEditor.moisture_excluded = Array.from(set);
           return;
         }
         if (t.name === "require_moisture_reading") {
@@ -733,7 +748,11 @@
           return;
         }
         if (t.name === "moisture_disabled") {
-          this._sensorEditor.moisture_disabled = t.checked; // v1.18.4
+          this._sensorEditor.moisture_disabled = t.checked; // v1.19.0
+          return;
+        }
+        if (t.name === "auto_soak_enabled") {
+          this._sensorEditor.auto_soak_enabled = t.checked; // v1.19
           return;
         }
         if (
@@ -741,7 +760,10 @@
           t.name === "category" ||
           t.name === "min_pct" ||
           t.name === "target_pct" ||
-          t.name === "max_pct"
+          t.name === "max_pct" ||
+          t.name === "soak_run_minutes" ||
+          t.name === "soak_wait_minutes" ||
+          t.name === "soak_max_cycles"
         ) {
           this._sensorEditor[t.name] = t.value;
           // Live-update the category info hint without a full re-render
@@ -798,7 +820,7 @@
       // triggered by other changes don't blow away unsaved edits).
       const t = e.target;
       if (!t) return;
-      // v1.18.4 — live filter the sensor checkbox list as the user
+      // v1.19.0 — live filter the sensor checkbox list as the user
       // types. Pure DOM operation; no re-render so checkbox state +
       // input focus + cursor position stay put while typing.
       if (t.dataset && t.dataset.action === "filter-sensor-list") {
@@ -923,7 +945,7 @@
       // updates. User-triggered renders bypass via _renderNow().
       requestAnimationFrame(() => {
         this._renderScheduled = false;
-        // v1.18.4 — don't rebuild the DOM out from under an active
+        // v1.19.0 — don't rebuild the DOM out from under an active
         // scroll. A background render mid-flick kills the momentum
         // (the element being scrolled is destroyed) even when the
         // position is restored afterward. Defer until the user has
@@ -987,7 +1009,7 @@
     }
 
     _safeRender() {
-      // v1.18.4 — innerHTML rebuild resets every scroll container to
+      // v1.19.0 — innerHTML rebuild resets every scroll container to
       // the top. Save positions before, restore after, so background
       // renders (hass updates, the 60s now-line tick) are invisible
       // to a user who has scrolled down the page.
@@ -1021,7 +1043,7 @@
       // v1.17 — Today screen's missed-runs banner reads from run history,
       // so load it lazily on first Today open if not already cached.
       if (sectionId === "today" && !this._runHistoryLoaded) this._fetchRunHistory();
-      // v1.18.4 — keep the now-line drifting only while Today is open.
+      // v1.19.0 — keep the now-line drifting only while Today is open.
       if (sectionId === "today") this._startNowLineTimer();
       else this._stopNowLineTimer();
       // Today + Zones both rely on the cached PlannedRuns for their
@@ -1110,7 +1132,7 @@
     }
 
     _openCopyOfSchedule(scheduleId) {
-      // v1.18.4 — clone an existing schedule into the editor with a
+      // v1.19.0 — clone an existing schedule into the editor with a
       // null id (so save creates a new schedule, not overwriting the
       // source) and a name suffixed " (copy)" so the duplicate is
       // identifiable in lists before the user picks a better name.
@@ -1591,7 +1613,7 @@
         start_date: e.start_date || null,
         end_date: e.end_date || null,
         repeat_annually: !!e.repeat_annually,
-        // v1.18.4 — per-schedule weather-gate opt-outs
+        // v1.19.0 — per-schedule weather-gate opt-outs
         ignore_wind: !!e.ignore_wind,
         ignore_hot_weather: !!e.ignore_hot_weather,
         ignore_rain_lockout: !!e.ignore_rain_lockout,
@@ -1664,7 +1686,7 @@
     }
 
     async _runSchedule(scheduleId, scheduleName) {
-      // v1.18.4 — "Run" button on each schedule row. Confirms before
+      // v1.19.0 — "Run" button on each schedule row. Confirms before
       // firing since this triggers physical irrigation hardware. The
       // backend service handles multi-zone chaining (staggered
       // run_zone calls with the configured inter-zone buffer).
@@ -1875,8 +1897,8 @@
       const enabled = n.enabled !== false; // default true
       const lowMoistureAlerts = n.low_moisture_alerts !== false; // default true
       const notifyOnMissed = n.notify_on_missed !== false; // default true (v1.17)
-      const notifyOnAborted = n.notify_on_aborted !== false; // default true (v1.18.4)
-      // v1.18.4 — render the info bubble with a custom popover instead
+      const notifyOnAborted = n.notify_on_aborted !== false; // default true (v1.19.0)
+      // v1.19.0 — render the info bubble with a custom popover instead
       // of the native `title` attribute. The native tooltip is delayed
       // ~1.5s on desktop AND silently does NOTHING on touch devices.
       // The custom popover shows immediately on hover, on tap (touch
@@ -2056,7 +2078,7 @@
       const c = this._config || {};
       const themeLabel =
         this._theme === "dark" ? "Dark" : this._theme === "light" ? "Light" : "Auto (follow HA)";
-      // v1.18.4 — render the info bubble with a custom popover instead
+      // v1.19.0 — render the info bubble with a custom popover instead
       // of the native `title` attribute. The native tooltip is delayed
       // ~1.5s on desktop AND silently does NOTHING on touch devices.
       // The custom popover shows immediately on hover, on tap (touch
@@ -2131,7 +2153,7 @@
         `<button class="btn btn-secondary" type="button" data-action="weekly-snooze-30">Snooze 30 days</button>` +
         `</div>` +
         `</section>` +
-        // v1.18.4 — admin-only services. Opt-in security hardening
+        // v1.19.0 — admin-only services. Opt-in security hardening
         // for setups with non-admin HA users. The panel itself is
         // already admin-only (v1.15.0 S3) but the underlying services
         // default to "any authenticated user". Flipping this on makes
@@ -2207,7 +2229,7 @@
     }
 
     async _saveAdminOnlyServices(form) {
-      // v1.18.4 — opt-in gate on hardware/CRUD service calls. Default
+      // v1.19.0 — opt-in gate on hardware/CRUD service calls. Default
       // off; flipping on requires admin context for run_zone / stop_zone
       // / schedule CRUD / etc. See coordinator-side _require_admin_if_configured.
       const checked = !!form.querySelector('input[name="admin_only_services"]')?.checked;
@@ -2838,7 +2860,7 @@
             zone.available ? "" : " disabled"
           }>▶ Run Now</button>`;
 
-      // v1.18.4 — moisture min/avg/max at a glance (Today screen).
+      // v1.19.0 — moisture min/avg/max at a glance (Today screen).
       const cfg = this._config?.zones?.[zone.entityId] || {};
       const moistureStats = this._renderZoneMoistureStats(cfg);
 
@@ -2857,36 +2879,54 @@
     }
 
     _renderZoneMoistureStats(zoneCfg) {
-      // v1.18.4 — compact moisture summary for the Today zone tile.
+      // v1.19.0 — compact moisture summary for the Today zone tile.
       // Shows avg / min / max of the live readings across the zone's
       // bound moisture sensors. Single-sensor zones show just the
       // value (min = avg = max). No sensors → nothing rendered.
       const moistures = this._readPercentSensors(zoneCfg.moisture_entities || []);
       if (moistures.length === 0) return "";
-      const vals = moistures.map((m) => m.value);
+      // v1.19 — per-sensor analysis opt-out: stats reflect what the
+      // gate / auto-soak actually act on (in-analysis sensors only);
+      // excluded sensors stay visible in the tooltip, marked.
+      const excludedSet = new Set(zoneCfg.moisture_excluded || []);
+      const inAnalysis = moistures.filter((m) => !excludedSet.has(m.entity_id));
+      const statsSource = inAnalysis.length > 0 ? inAnalysis : moistures;
+      const allExcluded = inAnalysis.length === 0;
+      const vals = statsSource.map((m) => m.value);
       const min = Math.min(...vals);
       const max = Math.max(...vals);
       const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
-      // v1.18.4 — when the moisture gate is disabled for this zone the
+      // v1.19.0 — when the moisture gate is disabled for this zone the
       // readings are display-only: never flag "low" (the gate won't act
       // on it) and say so in the line + tooltip.
       const gateOff = !!zoneCfg.moisture_disabled;
       // Low when the gate would consider this dry (avg below configured min).
       const minPct = zoneCfg.min_pct;
-      const low = !gateOff && minPct != null && avg < minPct;
+      const low = !gateOff && !allExcluded && minPct != null && avg < minPct;
       const cls = `zone-moisture${low ? " zone-moisture-low" : ""}`;
       const tip =
-        moistures.map((m) => `${m.friendly}: ${m.value.toFixed(1)}%`).join("\n") +
-        (gateOff ? "\n\n(display only — moisture is ignored for watering decisions)" : "");
+        moistures
+          .map(
+            (m) =>
+              `${m.friendly}: ${m.value.toFixed(1)}%` +
+              (excludedSet.has(m.entity_id) ? " (excluded from analysis)" : "")
+          )
+          .join("\n") +
+        (gateOff ? "\n\n(display only — moisture is ignored for watering decisions)" : "") +
+        (allExcluded && !gateOff
+          ? "\n\n(all sensors excluded from analysis — readings shown but not acted on)"
+          : "");
       const offBadge = gateOff
         ? `<span class="zone-moisture-band"> · gate off</span>`
+        : allExcluded
+        ? `<span class="zone-moisture-band"> · not used</span>`
         : "";
 
-      if (moistures.length === 1) {
+      if (statsSource.length === 1) {
         return (
           `<div class="${cls}" title="${escapeAttr(tip)}">` +
           `💧 ${avg.toFixed(0)}%` +
-          (!gateOff && minPct != null
+          (!gateOff && !allExcluded && minPct != null
             ? `<span class="zone-moisture-band"> (min ${minPct}%)</span>`
             : "") +
           offBadge +
@@ -2897,7 +2937,7 @@
         `<div class="${cls}" title="${escapeAttr(tip)}">` +
         `💧 <strong>${avg.toFixed(0)}%</strong> avg` +
         `<span class="zone-moisture-band"> · ${min.toFixed(0)} min · ${max.toFixed(0)} max` +
-        ` · ${moistures.length} sensors</span>` +
+        ` · ${statsSource.length} sensors</span>` +
         offBadge +
         `</div>`
       );
@@ -2979,13 +3019,25 @@
       const moistureIds = zoneCfg.moisture_entities || [];
       const moistures = this._readPercentSensors(moistureIds);
       if (moistures.length > 0) {
-        const combined = this._combineReadings(moistures, zoneCfg.combine_mode);
+        // v1.19 — combine from in-analysis sensors only; excluded ones
+        // stay in the tooltip, marked.
+        const exSet = new Set(zoneCfg.moisture_excluded || []);
+        const inAnalysis = moistures.filter((m) => !exSet.has(m.entity_id));
+        const source = inAnalysis.length > 0 ? inAnalysis : moistures;
+        const combined = this._combineReadings(source, zoneCfg.combine_mode);
         const minPct = zoneCfg.min_pct;
-        const low = minPct != null && combined !== null && combined < minPct;
+        const low =
+          inAnalysis.length > 0 && minPct != null && combined !== null && combined < minPct;
         chips.push(
           `<span class="zone-chip${low ? " zone-chip-low" : ""}" title="${escapeAttr(
-            moistures.map((m) => `${m.friendly}: ${m.value.toFixed(1)}%`).join("\n")
-          )}">💧 ${combined.toFixed(0)}%${moistures.length > 1 ? ` (${moistures.length})` : ""}</span>`
+            moistures
+              .map(
+                (m) =>
+                  `${m.friendly}: ${m.value.toFixed(1)}%` +
+                  (exSet.has(m.entity_id) ? " (excluded from analysis)" : "")
+              )
+              .join("\n")
+          )}">💧 ${combined.toFixed(0)}%${source.length > 1 ? ` (${source.length})` : ""}</span>`
         );
       }
 
@@ -3268,7 +3320,7 @@
         })
         .join("");
 
-      // v1.18.4 — more visible now-line: 3px red line + a labeled chip
+      // v1.19.0 — more visible now-line: 3px red line + a labeled chip
       // pinned to the left edge showing the current time. The chip is
       // a child of the line so positioning is automatic. Pulses every
       // 2s so the eye catches it even on a dense calendar.
@@ -3594,7 +3646,12 @@
         temperature_entities: [...(zoneCfg.temperature_entities || [])],
         humidity_entities: [...(zoneCfg.humidity_entities || [])],
         require_moisture_reading: !!zoneCfg.require_moisture_reading, // v1.18
-        moisture_disabled: !!zoneCfg.moisture_disabled, // v1.18.4
+        moisture_disabled: !!zoneCfg.moisture_disabled, // v1.19.0
+        moisture_excluded: [...(zoneCfg.moisture_excluded || [])], // v1.19
+        auto_soak_enabled: !!zoneCfg.auto_soak_enabled, // v1.19
+        soak_run_minutes: zoneCfg.soak_run_minutes ?? 10,
+        soak_wait_minutes: zoneCfg.soak_wait_minutes ?? 30,
+        soak_max_cycles: zoneCfg.soak_max_cycles ?? 4,
       };
       this._sensorModalOpen = true;
       this._renderNow();
@@ -3618,7 +3675,7 @@
         .map((s) => s.entity_id)
         .sort();
 
-      // v1.18.4 — render the info bubble with a custom popover instead
+      // v1.19.0 — render the info bubble with a custom popover instead
       // of the native `title` attribute. The native tooltip is delayed
       // ~1.5s on desktop AND silently does NOTHING on touch devices.
       // The custom popover shows immediately on hover, on tap (touch
@@ -3636,6 +3693,7 @@
         moistureList,
         e.moisture_entities,
         "moisture_entity",
+        e.moisture_excluded || [], // v1.19 — enables the "in avg" toggle
       );
 
       return (
@@ -3666,10 +3724,20 @@
         `<label class="enabled-check"><input type="checkbox" name="require_moisture_reading"${
           e.require_moisture_reading ? " checked" : ""
         } /> Skip run if no moisture reading ${tip("When ON: if every moisture sensor for this zone is offline / unavailable at run time, the scheduled run is SKIPPED instead of watering blind (fail-closed). When OFF (default): the run proceeds normally if sensors are dark (fail-open). Note: individual offline sensors are always excluded from the combined reading — this only governs what happens when NONE are reporting.")}</label>` +
-        // v1.18.4 — ignore moisture for watering decisions
+        // v1.19.0 — ignore moisture for watering decisions
         `<label class="enabled-check"><input type="checkbox" name="moisture_disabled"${
           e.moisture_disabled ? " checked" : ""
         } /> Ignore moisture for watering decisions ${tip("When ON: this zone's moisture readings are display-only. Schedules run at their full configured duration — no saturated-skip, no runtime boost or reduction, and 'Skip run if no moisture reading' is ignored too. The sensors stay bound, so the Zones tab chips and Today tile still show live readings. Useful when a sensor is misbehaving or you want fixed watering times for a while without unbinding everything.")}</label>` +
+        // v1.19 — auto-soak recovery
+        `<h3 class="section-title">Auto-soak recovery ${tip("Closed-loop low-moisture fix: when this zone's moisture (from the sensors marked 'in avg') drops below Min %, run for the set minutes, wait for the water to soak in, re-read the sensors, and repeat until moisture is back above Min % — or the cycle cap is hit, in which case you're notified and the zone won't retry for 6 hours (so a stuck-low sensor can't water all day). Paused during rain lockout. Disabled while 'Ignore moisture' is on.")}</h3>` +
+        `<label class="enabled-check"><input type="checkbox" name="auto_soak_enabled"${
+          e.auto_soak_enabled ? " checked" : ""
+        } /> Water automatically when below Min %</label>` +
+        `<div class="row-3">` +
+        `<div><label>Run (min) ${tip("Length of each watering burst. Short bursts + soak pauses absorb better than one long run.")}</label><input name="soak_run_minutes" type="number" min="1" max="60" step="1" value="${e.soak_run_minutes}" /></div>` +
+        `<div><label>Soak wait (min) ${tip("Pause between bursts so water percolates down to the sensor depth before re-reading. 30 min suits most soils; clay needs longer.")}</label><input name="soak_wait_minutes" type="number" min="5" max="240" step="1" value="${e.soak_wait_minutes}" /></div>` +
+        `<div><label>Max cycles ${tip("Safety cap. If moisture is still below Min % after this many run/soak rounds, stop, notify you, and wait 6 hours before trying again.")}</label><input name="soak_max_cycles" type="number" min="1" max="10" step="1" value="${e.soak_max_cycles}" /></div>` +
+        `</div>` +
         `<label>Plant category ${tip("Pick a category to see typical moisture ranges. The min/target/max above stay independent — you can change them after picking.")}</label>` +
         `<select name="category">` +
         `<option value=""${e.category ? "" : " selected"}>—</option>` +
@@ -3724,30 +3792,83 @@
       );
     }
 
-    _renderSensorCheckRows(entityIds, selected, inputName) {
-      // v1.18.4 — extracted helper so the moisture + climate paths share
+    _syncMoistureUseToggle(row, eid, selected) {
+      // v1.19 — surgical add/remove of the "in avg" control when the
+      // user (de)selects a moisture sensor, so the modal doesn't need a
+      // full re-render (which would wipe the search filter + focus).
+      if (!row) return;
+      const existing = row.querySelector(".sensor-pick-use");
+      if (!selected) {
+        if (existing) existing.remove();
+        // Deselected sensors can't stay excluded — keep state clean.
+        const set = new Set(this._sensorEditor.moisture_excluded || []);
+        set.delete(eid);
+        this._sensorEditor.moisture_excluded = Array.from(set);
+        return;
+      }
+      if (existing) return;
+      const label = document.createElement("label");
+      label.className = "sensor-pick-use";
+      label.title =
+        "Checked: this sensor's reading counts in the combine/average used " +
+        "for watering decisions. Unchecked: display-only — still shown on " +
+        "chips and tiles, but ignored by the moisture gate and auto-soak.";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.name = "moisture_exclude";
+      cb.value = eid;
+      cb.checked = true; // newly selected sensors default to in-analysis
+      label.appendChild(cb);
+      label.appendChild(document.createTextNode(" in avg"));
+      row.appendChild(label);
+    }
+
+    _renderSensorCheckRows(entityIds, selected, inputName, excludedList) {
+      // v1.19.0 — extracted helper so the moisture + climate paths share
       // one row-rendering shape. Adds `data-search-text` per row holding
       // a lowercased "friendly + entity_id" blob the search input can
       // filter against without re-rendering the whole modal.
+      //
+      // v1.19 — when `excludedList` is provided (moisture list only),
+      // each SELECTED row also gets an "in avg" mini-checkbox. Unchecked
+      // = the sensor's reading is shown everywhere but excluded from the
+      // combine/average the gate and auto-soak act on. The row becomes a
+      // <div> with the main checkbox in its own <label> so the two
+      // controls don't activate each other.
+      const withExclude = Array.isArray(excludedList);
       return entityIds
         .map((eid) => {
           const friendly = this._hass.states[eid]?.attributes?.friendly_name || eid;
           const checked = selected.includes(eid);
           const searchText = `${friendly} ${eid}`.toLowerCase();
-          return (
-            `<label class="sensor-pick" data-search-text="${escapeAttr(searchText)}">` +
+          const body =
             `<input type="checkbox" name="${inputName}" value="${escapeAttr(eid)}"${
               checked ? " checked" : ""
             } />` +
             `<span><strong>${escapeHtml(friendly)}</strong><br />` +
-            `<code>${escapeHtml(eid)}</code></span></label>`
+            `<code>${escapeHtml(eid)}</code></span>`;
+          if (!withExclude) {
+            return `<label class="sensor-pick" data-search-text="${escapeAttr(searchText)}">${body}</label>`;
+          }
+          const inAnalysis = !excludedList.includes(eid);
+          const useToggle = checked
+            ? `<label class="sensor-pick-use" title="Checked: this sensor's reading counts in the combine/average used for watering decisions. Unchecked: display-only — still shown on chips and tiles, but ignored by the moisture gate and auto-soak. For sensors that read consistently wrong.">` +
+              `<input type="checkbox" name="moisture_exclude" value="${escapeAttr(eid)}"${
+                inAnalysis ? " checked" : ""
+              } /> in avg</label>`
+            : "";
+          return (
+            `<div class="sensor-pick" data-search-text="${escapeAttr(searchText)}">` +
+            `<label class="sensor-pick-main">${body}</label>` +
+            useToggle +
+            `</div>`
           );
         })
         .join("");
     }
 
     _renderSensorPickerWithSearch(rowsHtml, kindKey, emptyMessage) {
-      // v1.18.4 — wrap a sensor checklist with a search input. The
+      // v1.19.0 — wrap a sensor checklist with a search input. The
       // input's data-action="filter-sensor-list" is caught by _onInput;
       // it walks the sibling .sensor-pick-list and hides any row whose
       // data-search-text doesn't contain the lowercased query. Pure
@@ -3780,6 +3901,32 @@
         // Single sensor — default to 'primary' (just use it as-is)
         e.combine_mode = "primary";
       }
+      // v1.19 — prune exclusions to currently-selected sensors and
+      // sanity-check: at least one selected sensor must stay in the
+      // analysis (excluding ALL of them = use the per-zone "ignore
+      // moisture" toggle instead, which says what it means).
+      const excluded = (e.moisture_excluded || []).filter((eid) =>
+        e.moisture_entities.includes(eid)
+      );
+      if (excluded.length >= e.moisture_entities.length && !e.moisture_disabled) {
+        return alert(
+          'Every selected sensor is excluded from the analysis ("in avg" unchecked).\n\n' +
+            "Keep at least one sensor in the average, or use the " +
+            '"Ignore moisture for watering decisions" toggle below instead.'
+        );
+      }
+      // v1.19 — soak field validation
+      const soakRun = parseInt(e.soak_run_minutes, 10);
+      const soakWait = parseInt(e.soak_wait_minutes, 10);
+      const soakCycles = parseInt(e.soak_max_cycles, 10);
+      if (e.auto_soak_enabled) {
+        if (!soakRun || soakRun < 1 || soakRun > 60)
+          return alert("Auto-soak run time must be 1–60 minutes.");
+        if (!soakWait || soakWait < 5 || soakWait > 240)
+          return alert("Auto-soak wait time must be 5–240 minutes.");
+        if (!soakCycles || soakCycles < 1 || soakCycles > 10)
+          return alert("Auto-soak max cycles must be 1–10.");
+      }
       try {
         await this._hass.callService("complete_irrigation", "set_zone_moisture", {
           zone_entity_id: e.zone_entity_id,
@@ -3792,7 +3939,12 @@
           temperature_entities: e.temperature_entities,
           humidity_entities: e.humidity_entities,
           require_moisture_reading: !!e.require_moisture_reading, // v1.18
-          moisture_disabled: !!e.moisture_disabled, // v1.18.4
+          moisture_disabled: !!e.moisture_disabled, // v1.19.0
+          moisture_excluded: excluded, // v1.19
+          auto_soak_enabled: !!e.auto_soak_enabled, // v1.19
+          ...(Number.isFinite(soakRun) ? { soak_run_minutes: soakRun } : {}),
+          ...(Number.isFinite(soakWait) ? { soak_wait_minutes: soakWait } : {}),
+          ...(Number.isFinite(soakCycles) ? { soak_max_cycles: soakCycles } : {}),
         });
         this._closeAllModals();
         await this._fetchConfig();
@@ -3818,7 +3970,7 @@
     _renderEstablishmentModal() {
       const e = this._establishmentEditor;
       if (!e) return "";
-      // v1.18.4 — render the info bubble with a custom popover instead
+      // v1.19.0 — render the info bubble with a custom popover instead
       // of the native `title` attribute. The native tooltip is delayed
       // ~1.5s on desktop AND silently does NOTHING on touch devices.
       // The custom popover shows immediately on hover, on tap (touch
@@ -3898,7 +4050,7 @@
             .sort()
         : [];
 
-      // v1.18.4 — render the info bubble with a custom popover instead
+      // v1.19.0 — render the info bubble with a custom popover instead
       // of the native `title` attribute. The native tooltip is delayed
       // ~1.5s on desktop AND silently does NOTHING on touch devices.
       // The custom popover shows immediately on hover, on tap (touch
@@ -4133,7 +4285,7 @@
         `</div>` +
         `</div>` +
         `<div class="schedule-row-actions">` +
-        // v1.18.4 — "Run" button executes the schedule's full run
+        // v1.19.0 — "Run" button executes the schedule's full run
         // sequence on demand. Placed leftmost in the actions group so
         // it's the most prominent control. Visually distinct via
         // .btn-schedule-run (green accent) to separate "trigger
@@ -4208,7 +4360,7 @@
           }/>${label}</label>`
       ).join("");
 
-      // v1.18.4 — render the info bubble with a custom popover instead
+      // v1.19.0 — render the info bubble with a custom popover instead
       // of the native `title` attribute. The native tooltip is delayed
       // ~1.5s on desktop AND silently does NOTHING on touch devices.
       // The custom popover shows immediately on hover, on tap (touch
@@ -4381,7 +4533,7 @@
         `<label class="enabled-check"><input type="checkbox" name="enabled"${
           e.enabled ? " checked" : ""
         } />Enabled ${tip("Toggle off to keep the schedule but stop it from firing. Useful while traveling.")}</label>` +
-        // v1.18.4 — per-schedule weather-gate opt-outs. Useful for
+        // v1.19.0 — per-schedule weather-gate opt-outs. Useful for
         // zones where the global gates don't make sense (e.g. a bird
         // bath fill: no spray drift to defer for wind, no
         // evapotranspiration to boost for hot weather, no point
@@ -4504,7 +4656,7 @@
         `.zone-tile{background:var(--ci-card);border:1px solid var(--ci-border);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:6px}` +
         `.zone-tile header{display:flex;align-items:center;gap:10px}` +
         `.zone-tile h4{margin:0;font-size:15px;font-weight:600}` +
-        // v1.18.4 — moisture stats line on the Today zone tile
+        // v1.19.0 — moisture stats line on the Today zone tile
         `.zone-moisture{font-size:13px;color:var(--ci-text);display:flex;align-items:baseline;gap:4px;flex-wrap:wrap;cursor:help}` +
         `.zone-moisture strong{font-weight:700}` +
         `.zone-moisture-band{font-size:11px;color:var(--ci-text-2)}` +
@@ -4539,7 +4691,7 @@
         `.btn-stop:hover{background:#db4437;filter:brightness(1.08)}` +
         `.btn-primary:hover{background:var(--ci-accent);filter:brightness(1.08)}` +
         `.btn-secondary{background:transparent}` +
-        // v1.18.4 — Run-schedule button on each schedule row. Green
+        // v1.19.0 — Run-schedule button on each schedule row. Green
         // accent separates "trigger hardware" from neutral config
         // actions (Edit / Copy / Disable). NOT width:100% — sits in
         // the action row alongside the others.
@@ -4556,7 +4708,7 @@
         `.placeholder{background:var(--ci-card);border:1px solid var(--ci-border);border-radius:12px;padding:24px}` +
         // Modal
         `.modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:99}` +
-        // v1.18.4 — modal cap at 90vh + internal scroll, with the
+        // v1.19.0 — modal cap at 90vh + internal scroll, with the
         // sticky .modal-actions footer below providing the visible
         // bottom edge. padding-bottom is 0 because .modal-actions
         // bridges through the modal's left/right padding (negative
@@ -4578,7 +4730,7 @@
         // Same shape for textareas anywhere in the panel (Notifications uses one)
         `.weather-form textarea{width:100%;min-width:0;padding:8px 10px;border:1px solid var(--ci-border);border-radius:6px;font-size:14px;background:var(--ci-input-bg);color:inherit;font-family:inherit;box-sizing:border-box;resize:vertical}` +
         `.modal .hint{margin:6px 0 16px;font-size:11px;color:var(--ci-text-2)}` +
-        // v1.18.4 — sticky footer pinned to the modal's visible
+        // v1.19.0 — sticky footer pinned to the modal's visible
         // bottom. bottom: 0 sticks at the scroll-viewport edge
         // (NOT -24px — that put it offscreen). Negative left/right
         // margins extend through .modal's horizontal padding so the
@@ -4627,7 +4779,7 @@
         `.day-cal-pill:hover .day-cal-pill-meta{white-space:normal;overflow:visible}` +
         `.day-cal-pill:hover .day-cal-pill-zone{white-space:normal;overflow:visible}` +
         // Red "now" line — only shown on today.
-        // v1.18.4 — enhanced "now" line with a left-edge labeled chip
+        // v1.19.0 — enhanced "now" line with a left-edge labeled chip
         // and a subtle pulse so it's obvious where the current time is
         // on the day calendar. The line itself remains pointer-events:
         // none so clicks pass through to underlying pills; the label
@@ -4716,7 +4868,7 @@
         `.weekday-check{display:inline-flex;align-items:center;gap:4px;padding:6px 10px;border:1px solid var(--ci-border);border-radius:6px;cursor:pointer;font-size:12px;color:var(--ci-text);margin:0}` +
         `.weekday-check input{margin-right:4px}` +
         `.enabled-check{display:inline-flex;align-items:center;gap:6px;margin-top:14px;color:var(--ci-text);font-size:13px}` +
-        // v1.18.4 — info-bubble + custom popover. Native `title` was
+        // v1.19.0 — info-bubble + custom popover. Native `title` was
         // delayed on desktop and silent on touch; the popover here
         // shows immediately on :hover, on keyboard :focus, and on
         // click/tap (panel toggles .help-tip-open via _onClick).
@@ -4809,7 +4961,7 @@
         `.sensor-label{min-width:80px;color:var(--ci-text-2);font-weight:500}` +
         `.sensor-bound code{font-size:11px;background:var(--ci-hover);padding:1px 4px;border-radius:3px}` +
         `.sensor-pick-list{max-height:280px;overflow-y:auto;border:1px solid var(--ci-border);border-radius:6px;padding:6px;margin-bottom:6px}` +
-        // v1.18.4 — search input above each sensor checklist. Live filters
+        // v1.19.0 — search input above each sensor checklist. Live filters
         // rows by entity name + entity_id as the user types. Sits flush
         // with the list (shared border-radius look via stacking).
         `.sensor-picker{margin-bottom:10px}` +
@@ -4817,7 +4969,7 @@
         `.sensor-pick-search:focus{outline:none;border-color:var(--ci-accent);box-shadow:0 0 0 2px rgba(127,205,240,0.18)}` +
         `.sensor-pick-no-match{padding:14px;text-align:center;color:var(--ci-text-2);font-size:12px}` +
         `.sensor-pick{display:flex;align-items:flex-start;gap:8px;padding:6px;border-radius:4px;cursor:pointer;font-size:13px}` +
-        // v1.18.4 — the sensor search filter sets row.hidden=true to
+        // v1.19.0 — the sensor search filter sets row.hidden=true to
         // filter rows, but `.sensor-pick{display:flex}` (an author rule)
         // overrode the UA `[hidden]{display:none}` rule, so hidden rows
         // stayed visible and the filter appeared dead. This higher-
@@ -4825,6 +4977,12 @@
         // restores the hide. Same guard for the no-match placeholder.
         `.sensor-pick[hidden]{display:none}` +
         `.sensor-pick:hover{background:var(--ci-hover)}` +
+        // v1.19 — moisture rows are <div>s holding the main label plus
+        // an optional "in avg" mini-toggle (analysis opt-out). The main
+        // label grows; the toggle hugs the right edge.
+        `.sensor-pick-main{display:flex;align-items:flex-start;gap:8px;flex:1;min-width:0;cursor:pointer}` +
+        `.sensor-pick-use{display:flex;align-items:center;gap:4px;font-size:11px;color:var(--ci-text-2);white-space:nowrap;cursor:pointer;flex-shrink:0;padding-left:8px}` +
+        `.sensor-pick-use:hover{color:var(--ci-text)}` +
         `.sensor-pick code{font-size:10px;color:var(--ci-text-2)}` +
         `.rain-pick-list{max-height:280px;overflow-y:auto;border:1px solid var(--ci-border,rgba(0,0,0,0.12));border-radius:6px;padding:6px;margin-bottom:8px}` +
         `.rain-pick{display:flex;align-items:flex-start;gap:8px;padding:8px;border-radius:4px;cursor:pointer;font-size:13px}` +
@@ -4870,7 +5028,7 @@
         // (95vh - 24px) to maximize content visibility on narrow screens.
         // Sticky footer's negative margin re-tuned to match the 16px
         // mobile padding.
-        // v1.18.4 — mobile modal: same scroll/sticky pattern as
+        // v1.19.0 — mobile modal: same scroll/sticky pattern as
         // desktop, retuned for 16px padding. padding-bottom:0 so the
         // sticky .modal-actions edge-to-edge override sits flush.
         `.modal{min-width:0;width:calc(100vw - 24px);max-width:calc(100vw - 24px);max-height:calc(100vh - 24px);padding:16px 16px 0}` +

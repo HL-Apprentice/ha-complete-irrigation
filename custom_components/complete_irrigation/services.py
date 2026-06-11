@@ -265,6 +265,21 @@ _SET_ZONE_MOISTURE_SCHEMA = vol.Schema(
         # live readings) but the moisture gate becomes a no-op: no
         # saturated-skip, no runtime adjustment. Default off.
         vol.Optional("moisture_disabled"): cv.boolean,
+        # v1.19 — per-sensor analysis opt-out. Entities listed here stay
+        # bound for DISPLAY (chips, tile stats, tooltips) but are
+        # excluded from the combine/average used by the moisture gate
+        # and auto-soak. For sensors that consistently read wrong and
+        # skew the math.
+        vol.Optional("moisture_excluded"): vol.All(cv.ensure_list, [cv.entity_id]),
+        # v1.19 — auto-soak recovery. When enabled and the zone's
+        # effective moisture drops below min_pct: run soak_run_minutes,
+        # wait soak_wait_minutes for absorption, re-read, repeat until
+        # moisture >= min_pct or soak_max_cycles is hit (then notify +
+        # 6h cooldown so a stuck-low sensor can't water forever).
+        vol.Optional("auto_soak_enabled"): cv.boolean,
+        vol.Optional("soak_run_minutes"): vol.All(vol.Coerce(int), vol.Range(min=1, max=60)),
+        vol.Optional("soak_wait_minutes"): vol.All(vol.Coerce(int), vol.Range(min=5, max=240)),
+        vol.Optional("soak_max_cycles"): vol.All(vol.Coerce(int), vol.Range(min=1, max=10)),
     }
 )
 

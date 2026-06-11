@@ -117,6 +117,47 @@ def test_zone_moisture_schema_accepts_moisture_disabled():
     assert "moisture_disabled" not in result
 
 
+def test_zone_moisture_schema_accepts_v119_fields():
+    """v1.19 — per-sensor analysis exclusion + auto-soak recovery."""
+    from custom_components.complete_irrigation.services import (
+        _SET_ZONE_MOISTURE_SCHEMA,
+    )
+
+    result = _SET_ZONE_MOISTURE_SCHEMA(
+        {
+            "zone_entity_id": "switch.garden",
+            "moisture_entities": ["sensor.a_moisture", "sensor.b_moisture"],
+            "moisture_excluded": ["sensor.b_moisture"],
+            "auto_soak_enabled": True,
+            "soak_run_minutes": 10,
+            "soak_wait_minutes": 30,
+            "soak_max_cycles": 4,
+        }
+    )
+    assert result["moisture_excluded"] == ["sensor.b_moisture"]
+    assert result["auto_soak_enabled"] is True
+    assert result["soak_run_minutes"] == 10
+    assert result["soak_wait_minutes"] == 30
+    assert result["soak_max_cycles"] == 4
+
+
+def test_zone_moisture_schema_rejects_out_of_range_soak_fields():
+    from custom_components.complete_irrigation.services import (
+        _SET_ZONE_MOISTURE_SCHEMA,
+    )
+
+    base = {
+        "zone_entity_id": "switch.garden",
+        "moisture_entities": ["sensor.a_moisture"],
+    }
+    with pytest.raises(vol.Invalid):
+        _SET_ZONE_MOISTURE_SCHEMA({**base, "soak_run_minutes": 0})
+    with pytest.raises(vol.Invalid):
+        _SET_ZONE_MOISTURE_SCHEMA({**base, "soak_wait_minutes": 2})
+    with pytest.raises(vol.Invalid):
+        _SET_ZONE_MOISTURE_SCHEMA({**base, "soak_max_cycles": 99})
+
+
 def test_run_schedule_schema_requires_schedule_id():
     """v1.17.13 — run_schedule needs exactly one field: schedule_id."""
     from custom_components.complete_irrigation.services import _RUN_SCHEDULE_SCHEMA

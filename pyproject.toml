@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "complete_irrigation"
-version = "1.18.4"
+version = "1.19.0"
 description = "Home Assistant custom integration for complete irrigation control"
 readme = "README.md"
 license = { text = "MIT" }

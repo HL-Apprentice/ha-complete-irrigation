@@ -74,6 +74,15 @@ TICK_SECONDS = 60
 # burst-fire every missed run, which floods the irrigation system.
 _MISSED_LOOKBACK_MIN = 5
 
+# v1.19 — auto-soak defaults + give-up cooldown. After soak_max_cycles
+# fail to raise moisture above min_pct, the zone won't re-attempt for
+# this long (and the user is notified) — the brake that stops a
+# stuck-low sensor from watering all day.
+_SOAK_DEFAULT_RUN_MIN = 10
+_SOAK_DEFAULT_WAIT_MIN = 30
+_SOAK_DEFAULT_MAX_CYCLES = 4
+_SOAK_GIVE_UP_COOLDOWN_MIN = 360
+
 # v1.17 — Companion-notification action prefix. Used for both sending
 # the action and matching incoming mobile_app_notification_action events.
 RUN_MISSED_ACTION = "COMPLETE_IRRIGATION_RUN_MISSED"
@@ -169,6 +178,14 @@ class ScheduleCoordinator:
         # Run history (v1.14): every completed / skipped / aborted run.
         # Loaded in async_setup, pruned at load + on each tick boundary.
         self._run_history: RunHistoryStore = RunHistoryStore()
+        # v1.19 — auto-soak controller state (in-memory; abandoned on
+        # restart, which is safe: the in-flight run's auto-stop handles
+        # the valve and a fresh below-min reading restarts the loop).
+        # _soak_state[zone_id] = {"phase": "running"|"soaking",
+        #                          "cycle": int, "until": datetime}
+        # _soak_cooldown[zone_id] = datetime — no re-attempts until then
+        self._soak_state: dict[str, dict] = {}
+        self._soak_cooldown: dict[str, Any] = {}
 
     @property
     def schedule_store(self) -> ScheduleStore:
@@ -521,6 +538,11 @@ class ScheduleCoordinator:
         # internally and we'd rather not block the tick on disk I/O.
         self._hass.async_create_task(self.async_save_config())
 
+        # v1.19 — drive the auto-soak state machines (guards rain
+        # lockout internally; runs even when the schedule path below
+        # early-returns during lockout).
+        await self._tick_auto_soak(now)
+
         # v1.17.3 — if locked out, only schedules with
         # ignore_rain_lockout=True still fire. Others wait for the
         # lockout to expire. last_tick still advances either way so
@@ -743,6 +765,186 @@ class ScheduleCoordinator:
 
     # ── Per-gate evaluators (extracted from _fire_run in v1.16) ──
 
+    def _zone_moisture_reading(self, zone_cfg: dict):
+        """v1.19 — shared moisture read for the gate AND auto-soak.
+
+        Applies the per-sensor analysis opt-out: entities listed in
+        `moisture_excluded` stay bound for display but are filtered out
+        before combining. Returns (combined_pct_or_None, analysis_ids,
+        readings, excluded_ids)."""
+        moisture_entities = zone_cfg.get("moisture_entities") or []
+        excluded = set(zone_cfg.get("moisture_excluded") or [])
+        analysis_ids = [e for e in moisture_entities if e not in excluded]
+        readings: list[float] = []
+        for ent in analysis_ids:
+            state = self._hass.states.get(ent)
+            if state is None or state.state in ("unknown", "unavailable"):
+                continue
+            try:
+                readings.append(float(state.state))
+            except (TypeError, ValueError):
+                continue
+        combine_mode = zone_cfg.get("combine_mode", COMBINE_AVERAGE)
+        current = combine_moisture(readings, combine_mode)
+        return current, analysis_ids, readings, sorted(excluded & set(moisture_entities))
+
+    # ── Auto-soak recovery (v1.19) ────────────────────────────────
+
+    async def _tick_auto_soak(self, now: datetime) -> None:
+        """Closed-loop low-moisture recovery, driven once per tick.
+
+        For each zone with auto_soak_enabled: when effective moisture
+        (excluded sensors filtered out) drops below min_pct, run the
+        zone for soak_run_minutes, wait soak_wait_minutes for the water
+        to absorb, re-read, and repeat — until moisture >= min_pct or
+        soak_max_cycles is exhausted (then notify + cooldown).
+        """
+        if self.is_locked_out_now():
+            # Rain lockout: abandon any in-flight sequences — rain is
+            # doing the job — and don't start new ones.
+            if self._soak_state:
+                _LOGGER.info(
+                    "Auto-soak: rain lockout active, abandoning %d sequence(s)",
+                    len(self._soak_state),
+                )
+                self._soak_state.clear()
+            return
+
+        for zone_id, zone_cfg in (self._config.get("zones") or {}).items():
+            if not zone_cfg.get("auto_soak_enabled"):
+                self._soak_state.pop(zone_id, None)
+                continue
+            if zone_cfg.get("moisture_disabled"):
+                continue  # moisture is display-only for this zone
+
+            state = self._soak_state.get(zone_id)
+            if state is None:
+                cooldown = self._soak_cooldown.get(zone_id)
+                if cooldown and now < cooldown:
+                    continue
+                current, analysis_ids, _readings, _excl = self._zone_moisture_reading(zone_cfg)
+                if current is None or not analysis_ids:
+                    continue  # can't close the loop without a reading
+                min_pct = float(zone_cfg.get("min_pct", DEFAULT_ZONE_MIN_PCT))
+                if current >= min_pct:
+                    continue
+                zone_state = self._hass.states.get(zone_id)
+                if zone_state is not None and zone_state.state == "on":
+                    continue  # already watering (scheduled/manual) — let it finish
+                await self._start_soak_run(zone_id, zone_cfg, now, cycle=1, current=current)
+                continue
+
+            if now < state["until"]:
+                continue  # current phase still in progress
+
+            if state["phase"] == "running":
+                # Run finished (run_zone's auto-stop handles the valve);
+                # let the water soak in before re-reading.
+                wait_min = int(zone_cfg.get("soak_wait_minutes", _SOAK_DEFAULT_WAIT_MIN))
+                state["phase"] = "soaking"
+                state["until"] = now + timedelta(minutes=wait_min)
+                continue
+
+            # phase == "soaking" → soak finished, re-examine the sensors
+            current, analysis_ids, _readings, _excl = self._zone_moisture_reading(zone_cfg)
+            min_pct = float(zone_cfg.get("min_pct", DEFAULT_ZONE_MIN_PCT))
+            if current is None or not analysis_ids:
+                _LOGGER.info(
+                    "Auto-soak %s: lost moisture reading mid-sequence, abandoning", zone_id
+                )
+                self._soak_state.pop(zone_id, None)
+                continue
+            if current >= min_pct:
+                _LOGGER.info(
+                    "Auto-soak %s: recovered to %.1f%% (min %.0f%%) after %d cycle(s)",
+                    zone_id,
+                    current,
+                    min_pct,
+                    state["cycle"],
+                )
+                self._soak_state.pop(zone_id, None)
+                continue
+            max_cycles = int(zone_cfg.get("soak_max_cycles", _SOAK_DEFAULT_MAX_CYCLES))
+            if state["cycle"] >= max_cycles:
+                self._soak_state.pop(zone_id, None)
+                self._soak_cooldown[zone_id] = now + timedelta(minutes=_SOAK_GIVE_UP_COOLDOWN_MIN)
+                zone_state = self._hass.states.get(zone_id)
+                friendly = (
+                    zone_state.attributes.get("friendly_name") if zone_state else None
+                ) or zone_id
+                _LOGGER.warning(
+                    "Auto-soak %s: still %.1f%% (min %.0f%%) after %d cycles — cooldown %d min",
+                    zone_id,
+                    current,
+                    min_pct,
+                    max_cycles,
+                    _SOAK_GIVE_UP_COOLDOWN_MIN,
+                )
+                if self.notifier is not None:
+                    await self.notifier.notify(
+                        f"Auto-soak couldn't raise {friendly} above its minimum "
+                        f"({current:.0f}% after {max_cycles} run/soak cycles, min "
+                        f"{min_pct:.0f}%). Check the moisture sensors and irrigation "
+                        f"lines. Won't retry for {_SOAK_GIVE_UP_COOLDOWN_MIN // 60} hours.",
+                        title="Irrigation: auto-soak gave up",
+                        category=CATEGORY_IMPORTANT,
+                        event_type="auto_soak_gave_up",
+                    )
+                continue
+            await self._start_soak_run(
+                zone_id, zone_cfg, now, cycle=state["cycle"] + 1, current=current
+            )
+
+    async def _start_soak_run(
+        self, zone_id: str, zone_cfg: dict, now: datetime, *, cycle: int, current: float
+    ) -> None:
+        """Fire one soak-cycle run via run_zone, labeled for History."""
+        run_min = int(zone_cfg.get("soak_run_minutes", _SOAK_DEFAULT_RUN_MIN))
+        max_cycles = int(zone_cfg.get("soak_max_cycles", _SOAK_DEFAULT_MAX_CYCLES))
+        min_pct = float(zone_cfg.get("min_pct", DEFAULT_ZONE_MIN_PCT))
+        entry_data = self._hass.data.get(DOMAIN, {}).get(self._entry_id)
+        if entry_data is not None:
+            # Label the run in History as an auto-soak cycle (the meta
+            # stash is how scheduled runs carry context into run_zone).
+            entry_data.setdefault("pending_run_meta", {})[zone_id] = {
+                "schedule_id": None,
+                "schedule_name": f"Auto-soak cycle {cycle}/{max_cycles}",
+                "requested_minutes": run_min,
+                "triggers": {
+                    "auto_soak": {
+                        "cycle": cycle,
+                        "max_cycles": max_cycles,
+                        "moisture_pct": current,
+                        "min_pct": min_pct,
+                    }
+                },
+                "zone_name": None,
+            }
+        self._soak_state[zone_id] = {
+            "phase": "running",
+            "cycle": cycle,
+            "until": now + timedelta(minutes=run_min),
+        }
+        _LOGGER.info(
+            "Auto-soak %s: cycle %d/%d — %.1f%% < min %.0f%%, running %d min",
+            zone_id,
+            cycle,
+            max_cycles,
+            current,
+            min_pct,
+            run_min,
+        )
+        try:
+            await self._hass.services.async_call(
+                DOMAIN,
+                "run_zone",
+                {"entity_id": zone_id, "minutes": run_min},
+                blocking=False,
+            )
+        except Exception:
+            _LOGGER.exception("Auto-soak %s: run_zone failed", zone_id)
+            self._soak_state.pop(zone_id, None)
+
     def _evaluate_moisture_gate(
         self,
         zone_cfg: dict,
@@ -769,25 +971,23 @@ class ScheduleCoordinator:
             triggers["moisture"] = {"disabled_by_config": True}
             return adjusted_minutes, None
 
-        readings: list[float] = []
-        for ent in moisture_entities:
-            state = self._hass.states.get(ent)
-            if state is None or state.state in ("unknown", "unavailable"):
-                continue
-            try:
-                readings.append(float(state.state))
-            except (TypeError, ValueError):
-                continue
-        combine_mode = zone_cfg.get("combine_mode", COMBINE_AVERAGE)
-        current = combine_moisture(readings, combine_mode)
+        current, analysis_ids, readings, excluded_ids = self._zone_moisture_reading(zone_cfg)
+        # v1.19 — every bound sensor excluded from analysis ⇒ nothing to
+        # decide with. Treat like "no moisture binding" (no-op, even if
+        # require_moisture_reading is on — the user excluded them all on
+        # purpose) but leave a breadcrumb in triggers.
+        if not analysis_ids:
+            triggers["moisture"] = {"all_sensors_excluded": True, "excluded": excluded_ids}
+            return adjusted_minutes, None
         min_pct = float(zone_cfg.get("min_pct", DEFAULT_ZONE_MIN_PCT))
         target_pct = float(zone_cfg.get("target_pct", DEFAULT_ZONE_TARGET_PCT))
         max_pct = float(zone_cfg.get("max_pct", DEFAULT_ZONE_MAX_PCT))
         triggers["moisture"] = {
-            "entities": list(moisture_entities),
+            "entities": list(analysis_ids),
+            "excluded": excluded_ids,
             "readings": readings,
             "combined_pct": current,
-            "combine_mode": combine_mode,
+            "combine_mode": zone_cfg.get("combine_mode", COMBINE_AVERAGE),
             "min_pct": min_pct,
             "target_pct": target_pct,
             "max_pct": max_pct,
@@ -803,7 +1003,7 @@ class ScheduleCoordinator:
                 triggers["moisture"]["decision"] = "skip_no_reading"
                 return adjusted_minutes, (
                     "no moisture reading available and require_moisture_reading is on "
-                    f"(sensors: {', '.join(moisture_entities)})"
+                    f"(sensors: {', '.join(analysis_ids)})"
                 )
             return adjusted_minutes, None
         decision = evaluate_moisture(
