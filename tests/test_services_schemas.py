@@ -92,6 +92,31 @@ def test_update_schedule_with_weekdays_in_weekdays_mode():
     assert result["weekdays"] == [0, 1, 2, 3, 4]
 
 
+def test_zone_moisture_schema_accepts_moisture_disabled():
+    """v1.18.4 — per-zone 'ignore moisture for watering decisions'
+    toggle. Sensors stay bound for display; the gate becomes a no-op."""
+    from custom_components.complete_irrigation.services import (
+        _SET_ZONE_MOISTURE_SCHEMA,
+    )
+
+    result = _SET_ZONE_MOISTURE_SCHEMA(
+        {
+            "zone_entity_id": "switch.garden",
+            "moisture_entities": ["sensor.garden_moisture"],
+            "moisture_disabled": True,
+        }
+    )
+    assert result["moisture_disabled"] is True
+    # Omitted → absent (gate reads falsy → enabled, the default)
+    result = _SET_ZONE_MOISTURE_SCHEMA(
+        {
+            "zone_entity_id": "switch.garden",
+            "moisture_entities": ["sensor.garden_moisture"],
+        }
+    )
+    assert "moisture_disabled" not in result
+
+
 def test_run_schedule_schema_requires_schedule_id():
     """v1.17.13 — run_schedule needs exactly one field: schedule_id."""
     from custom_components.complete_irrigation.services import _RUN_SCHEDULE_SCHEMA
