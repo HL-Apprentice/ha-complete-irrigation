@@ -4,6 +4,28 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.19.0 — 2026-05-31
+
+### Added
+
+- **Auto-soak recovery.** Per-zone closed loop (Sensors editor → "Water
+  automatically when below Min %"): when effective moisture drops below
+  `min_pct`, run the zone for *Run (min)* (default 10), wait *Soak wait*
+  (default 30) for absorption, re-read the sensors, and repeat until
+  moisture recovers — capped at *Max cycles* (default 4). On give-up:
+  notification + 6 h cooldown, so a stuck-low sensor can't water all
+  day. Paused during rain lockout; skips zones already running; runs
+  appear in History as "Auto-soak cycle n/N" with a triggers blob.
+  Abandoned (safely) across HA restarts.
+- **Per-sensor "in avg" toggle.** Each selected moisture sensor in the
+  Sensors editor gets an "in avg" mini-checkbox. Unchecked = the
+  reading stays visible everywhere (chips, tiles, tooltips — marked
+  "excluded from analysis") but is filtered out of the combine/average
+  used by the moisture gate and auto-soak. For sensors that
+  consistently read wrong and skew the math. Excluding *all* sensors
+  is blocked in the editor (use "Ignore moisture" instead). New
+  `moisture_excluded` field on `set_zone_moisture`.
+
 ## v1.18.4 — 2026-05-31
 
 ### Added
