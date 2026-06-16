@@ -4,6 +4,37 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.20.0 — 2026-06-16
+
+### Changed — scheduling never drops a run
+
+- **No more silently dropped runs.** When too many schedules overlap for
+  one-zone-at-a-time, the conflict resolver used to mark the squeezed run
+  `skipped: cascade-cap` and drop it entirely (this is what stranded
+  "Garden Morning" on a multi-giant morning). It now **defers the run late
+  and still fires it** — a run is never dropped, only delayed. A run that
+  lands past the cascade cap is tagged `deferred-late`.
+- **Planning window now spans the longest run.** The resolver's look-back
+  was a fixed 2 hours, so it was blind to a 4–5 hour Trees/Citrus cycle
+  that began earlier and was still running — and would let another zone
+  fire into a valve the controller still had open. The window is now sized
+  to the longest enabled run (`max(2 h, longest run + buffer)`) on both
+  sides, so long runs are seen and everything serializes around them.
+- **Late-run alert.** When a run is deferred past the cap, a notification
+  fires ("running late — the schedule is oversubscribed; consider spacing
+  your start times"), honoring `notify_on_missed`. The run still waters.
+
+### Added (engine — staged, not yet enabled)
+
+- The resolver can **compress** the long runs (down to a `compress_floor_pct`
+  floor, default 70%) to keep a squeezed run closer to on-time, and treats
+  already-firing runs (`REASON_COMMITTED`) as fixed busy intervals to route
+  around. This is fully built and covered by a 4 000-scenario property
+  fuzz plus a multi-tick firing simulation (no run lost, no double-booking),
+  but is **held off in v1.20.0** (`compress_floor_pct=100`) until in-progress
+  run tracking lands in v1.21 — shrinking a run that has already started
+  could otherwise fire a zone into a still-running one.
+
 ## v1.19.0 — 2026-05-31
 
 ### Added
