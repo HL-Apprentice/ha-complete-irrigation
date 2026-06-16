@@ -19,12 +19,15 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from .conflict_resolver import (
+    DEFAULT_CASCADE_CAP_MINUTES,
     POLICY_DEFER_NEW,
     POLICY_SHIFT_EXISTING_EARLIER,
     POLICY_SPLIT_DIFFERENCE,
+    REASON_DEFERRED_LATE,
     resolve_conflicts,
 )
 from .const import (
+    DEFAULT_BUFFER_MINUTES,
     DEFAULT_ZONE_MAX_PCT,
     DEFAULT_ZONE_MIN_PCT,
     DEFAULT_ZONE_TARGET_PCT,
@@ -49,7 +52,7 @@ from .run_history import (
     DEFAULT_RETENTION_DAYS,
     RunHistoryStore,
 )
-from .run_planner import due_runs_since, next_runs
+from .run_planner import due_runs_since, longest_run_span_minutes, next_runs
 from .schedule import ScheduleStore
 from .weather_gate import evaluate_hot_weather, evaluate_rain_lockout, evaluate_wind_defer
 
@@ -560,20 +563,49 @@ class ScheduleCoordinator:
                 "Rain lockout active; %d schedule(s) with ignore_rain_lockout=True still firing",
                 len(enabled_scheds),
             )
+        # v1.20 — size the window to the longest run so the resolver can see
+        # a multi-hour run that started before the window and is still going
+        # (the old fixed 2h blinded it to 4-5h Trees/Citrus cycles). Floor at
+        # the cascade cap so within-cap deferrals are always visible too.
+        horizon = timedelta(
+            minutes=max(
+                DEFAULT_CASCADE_CAP_MINUTES,
+                longest_run_span_minutes(enabled_scheds, zone_buffer) + DEFAULT_BUFFER_MINUTES,
+            )
+        )
         upcoming = next_runs(
             enabled_scheds,
-            from_dt=last - timedelta(hours=2),
-            until_dt=now + timedelta(hours=2),
+            from_dt=last - horizon,
+            until_dt=now + horizon,
             zone_buffer_seconds=int(zone_buffer) if zone_buffer is not None else None,
         )
         # Honor a user-selected global conflict policy (Settings tab).
         # Unknown / missing → keep safe default of POLICY_DEFER_NEW.
         configured = self._config.get("conflict_policy", POLICY_DEFER_NEW)
         policy = configured if configured in _VALID_CONFLICT_POLICIES else POLICY_DEFER_NEW
-        resolved = resolve_conflicts(upcoming, policy)
+        # v1.20 — NEVER-DROP. A run that can't be placed within the cascade
+        # cap is deferred *late* and still fires, instead of being skipped.
+        # Compression (shrinking the long runs to keep a squeezed run on
+        # time) is intentionally OFF here for now: shrinking a run that has
+        # already started would mis-model the controller and could fire a
+        # zone into a still-running one. It lands in v1.21 alongside
+        # in-progress-run tracking (the resolver + sim already support it,
+        # gated by compress_floor_pct < 100 + REASON_COMMITTED blockers).
+        resolved = resolve_conflicts(
+            upcoming,
+            policy,
+            compress_floor_pct=100,  # 100 = no compression (defer-late only)
+        )
         due = due_runs_since(resolved, last, now)
 
         for run in due:
+            # v1.20 — the resolver never drops a run anymore (compress →
+            # defer-late instead). This branch now only catches a defensive
+            # "skipped:" reason should one ever appear; the normal path fires
+            # every due run. A run squeezed past the cap (deferred-late) still
+            # fires, but we alert so the user knows the schedule is overpacked.
+            if run.reason == REASON_DEFERRED_LATE:
+                await self._notify_deferred_late(run)
             if run.reason.startswith("skipped:"):
                 _LOGGER.info(
                     "Skipping run for %s (%s): %s",
@@ -582,10 +614,8 @@ class ScheduleCoordinator:
                     run.reason,
                 )
                 # v1.16.2 — also write a SKIPPED record to History so the
-                # user sees these silent drops in the panel. Previously
-                # only gate-skips inside _fire_run (moisture/wind) made
-                # it into history; conflict-resolver skips (cascade-cap
-                # deferrals past the 2h cap) were log-only and invisible.
+                # user sees these in the panel (gate-skips from _fire_run,
+                # plus any defensive resolver skip).
                 zone_state = self._hass.states.get(run.zone_entity_id)
                 zone_name = (
                     zone_state.attributes.get("friendly_name") if zone_state else None
@@ -648,6 +678,33 @@ class ScheduleCoordinator:
                 },
                 {"action": f"{RUN_MISSED_ACTION}_DISMISS", "title": "Dismiss"},
             ],
+        )
+
+    async def _notify_deferred_late(self, run) -> None:
+        """v1.20 — alert when a run had to be deferred past the cascade cap.
+
+        The run still fires (never dropped), but landing this far past its
+        scheduled time means the schedules are oversubscribed — too many
+        overlapping runs for one-zone-at-a-time to fit. Surfacing it lets
+        the user space their start times before a hot afternoon backs up.
+        Honors `notify_on_missed` (the same late/missed family opt-out).
+        """
+        if self.notifier is None:
+            return
+        notif_cfg = self._config.get("notifications", {})
+        if not notif_cfg.get("notify_on_missed", True):
+            return
+        zone_state = self._hass.states.get(run.zone_entity_id)
+        zone_name = (
+            zone_state.attributes.get("friendly_name") if zone_state else None
+        ) or run.zone_entity_id
+        await self.notifier.notify(
+            f"{run.schedule_name} ({zone_name}) is running late — the schedule is "
+            f"oversubscribed (too many overlapping runs to fit one-zone-at-a-time). "
+            f"It WILL still run; consider spacing your schedule start times.",
+            title="Irrigation: running late",
+            category=CATEGORY_IMPORTANT,
+            event_type="run_deferred_late",
         )
 
     async def _fire_run(self, run) -> None:
