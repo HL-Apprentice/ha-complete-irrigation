@@ -85,6 +85,13 @@ DEFAULT_QUIET_HOURS_END = "07:00"
 DEFAULT_SMALL_SHIFT_TOLERANCE_MIN = 15
 DEFAULT_CASCADE_CAP_HOURS = 2
 DEFAULT_CASCADE_DEFER_LIMIT = 3
+# v1.20 — never-drop scheduling. When serializing one-zone-at-a-time would
+# push a run more than the cascade cap past its scheduled start, the resolver
+# COMPRESSES the runs ahead of it (down to this fraction of their requested
+# minutes) to reclaim time instead of dropping anything. A run is never
+# skipped — at worst it runs late. 70 = a run may be shortened to at most 30%
+# below its requested duration before the resolver prefers deferring it late.
+DEFAULT_COMPRESS_FLOOR_PCT = 70
 DEFAULT_MANUAL_RUN_MINUTES = 10
 MAX_MANUAL_RUN_MINUTES = 60  # safety cap on manual runs
 

@@ -34,6 +34,15 @@ class PlannedRun:
     schedule_id: str
     schedule_name: str
     reason: str = "scheduled"
+    # v1.20 — the original scheduled start, preserved through conflict
+    # resolution (which rewrites start_at). The coordinator keys its
+    # fired-runs ledger on this so a deferred run is never re-planned as a
+    # fresh firing and lost. Defaults to start_at when not set explicitly.
+    scheduled_start_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        if self.scheduled_start_at is None:
+            object.__setattr__(self, "scheduled_start_at", self.start_at)
 
 
 def next_runs(
@@ -248,6 +257,29 @@ def _runs_for_interval_hours(
                             yield run
                 fire_minutes += step_minutes
         cur_date += timedelta(days=1)
+
+
+def longest_run_span_minutes(scheds: Iterable[Schedule], zone_buffer_seconds: int | None) -> float:
+    """Longest single firing span (minutes) across `scheds`, including the
+    inter-zone valve buffers of multi-zone schedules.
+
+    v1.20 — used to size the planning window so the conflict resolver can
+    SEE a long run (e.g. a 5-hour Trees cycle) that started hours ago and
+    is still physically running. With the old fixed 2-hour lookback the
+    resolver was blind to those, so it would let another zone fire into a
+    valve the controller still had open — a hardware collision.
+    """
+    buf_min = (
+        DEFAULT_ZONE_BUFFER_SECONDS if zone_buffer_seconds is None else int(zone_buffer_seconds)
+    ) / 60
+    longest = 0.0
+    for sched in scheds:
+        steps = sched.all_steps()
+        if not steps:
+            continue
+        span = sum(st.duration_minutes for st in steps) + buf_min * (len(steps) - 1)
+        longest = max(longest, span)
+    return longest
 
 
 def due_runs_since(
