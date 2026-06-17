@@ -4,6 +4,28 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.21.0 — 2026-06-16
+
+### Fixed — no more bogus "switch turned off externally" aborts
+
+- **A zone reporting "off" mid-run is now debounced, not instantly aborted.**
+  Root cause (confirmed from the recorder): cloud integrations like Rachio
+  flap a zone "off" for 2–3 seconds right after we turn it on — a stale
+  cloud poll racing our optimistic state update. The zone is *physically
+  running*; the "off" is a lie. The old monitor aborted on that first off
+  event, so runs died at 0–3 minutes (weeks of Shrubs/Flowers/Back-Grass
+  aborts). Now a mid-run off waits `EXTERNAL_OFF_DEBOUNCE_SECONDS` (90 s),
+  re-reads the live state, and:
+  - **back on** → the flap self-corrected, the run continues untouched;
+  - **still off, attempts left, before deadline** → **re-assert** the switch
+    on (up to `EXTERNAL_OFF_MAX_REASSERTS` = 2) to recover a genuine drop;
+  - **still off, out of attempts / past deadline** → abort with an
+    actionable "Run remainder / Open Logbook" alert.
+- Decision logic extracted to a pure, unit-tested `run_guard` module. The
+  run's auto-stop deadline still governs total runtime, so re-asserts can't
+  extend a run. **Note:** to stop a CI-managed run, use CI's Stop button —
+  a manual off elsewhere may be re-asserted while the deadline stands.
+
 ## v1.20.0 — 2026-06-16
 
 ### Changed — scheduling never drops a run
