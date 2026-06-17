@@ -32,6 +32,11 @@ from homeassistant.util import dt as dt_util
 from .const import DEFAULT_MANUAL_RUN_MINUTES, DOMAIN, MAX_MANUAL_RUN_MINUTES
 from .manual_run import ManualRun, validate_run_duration
 from .notifications import CATEGORY_CRITICAL  # v1.16: promoted from inline imports
+from .run_guard import (
+    EXTERNAL_OFF_DEBOUNCE_SECONDS,
+    EXTERNAL_OFF_MAX_REASSERTS,
+    external_off_decision,
+)
 from .run_history import SOURCE_MANUAL, SOURCE_SCHEDULED
 from .schedule import Schedule, ZoneStep
 
@@ -39,6 +44,16 @@ if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant, ServiceCall
 
 _LOGGER = logging.getLogger(__name__)
+
+# v1.21 — external-off resilience. A zone reporting "off" mid-run is
+# debounced before we react (cloud integrations like Rachio flap "off" for
+# seconds after a turn-on); only if it's persistently off do we re-assert
+# the switch on, then finally abort + alert. Use CI's Stop button to stop a
+# CI-managed run — a manual off elsewhere may be re-asserted while the run's
+# deadline stands. Decision logic lives in run_guard.py (pure, tested).
+_EXTERNAL_OFF_DEBOUNCE_SECONDS = EXTERNAL_OFF_DEBOUNCE_SECONDS
+_EXTERNAL_OFF_MAX_REASSERTS = EXTERNAL_OFF_MAX_REASSERTS
+_external_off_decision = external_off_decision
 
 SERVICE_RUN_ZONE = "run_zone"
 SERVICE_STOP_ZONE = "stop_zone"
@@ -442,6 +457,14 @@ def _cancel_handles(entry_data: dict[str, Any], entity_id: str) -> None:
         cancel_listener()
 
 
+def _clear_external_off(entry_data: dict[str, Any], entity_id: str) -> None:
+    """Cancel a pending debounce check and drop the per-zone external-off
+    state. Called whenever a run ends (auto-stop / Stop button / abort)."""
+    ext = entry_data.get("external_off", {}).pop(entity_id, None)
+    if ext and ext.get("pending"):
+        ext["pending"]()
+
+
 async def _notify_zone_failed(coord, friendly: str, message: str) -> None:
     """v1.16 — extracted from handle_run_zone. Sends a critical
     notification when a zone fails to start. No-op if coord or notifier
@@ -569,8 +592,10 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             )
             return
 
-        # Replace any existing run for this entity (cancel old timer + listener).
+        # Replace any existing run for this entity (cancel old timer + listener
+        # + any pending external-off debounce).
         _cancel_handles(entry_data, entity_id)
+        _clear_external_off(entry_data, entity_id)
 
         # Hard-failure guard (PRD #43): if the underlying switch entity is
         # missing or already unavailable, refuse to run and notify the user
@@ -643,6 +668,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             if run_now is None:
                 return  # already cleaned up by an external off
             entry_data["manual_runs"].stop(entity_id)
+            _clear_external_off(entry_data, entity_id)
             await hass.services.async_call(
                 "switch",
                 SERVICE_TURN_OFF,
@@ -658,40 +684,99 @@ async def _async_register_services(hass: HomeAssistant) -> None:
 
         cancel_timer = async_call_later(hass, minutes * 60, _auto_stop)
 
+        # ── debounced external-off verification ──
+        # Fires `_EXTERNAL_OFF_DEBOUNCE_SECONDS` after a zone reports off
+        # mid-run. By now a stale cloud poll has usually been corrected, so
+        # we re-read the live state and only then decide (see
+        # _external_off_decision): recovered → continue; persistently off →
+        # re-assert the switch on, or abort + alert once attempts run out.
+        async def _verify_external_off(_now=None):
+            ext = entry_data.get("external_off", {}).get(entity_id)
+            if ext is not None:
+                ext["pending"] = None
+            run_now = entry_data["manual_runs"].get(entity_id)
+            if run_now is None:
+                return  # run already ended (auto-stop / Stop) while we waited
+            state = hass.states.get(entity_id)
+            state_now = state.state if state is not None else "unavailable"
+            reasserts_left = ext.get("reasserts_left", 0) if ext else 0
+            before_deadline = dt_util.utcnow() < run_now.deadline()
+            decision = _external_off_decision(state_now, reasserts_left, before_deadline)
+
+            if decision == "recovered":
+                _LOGGER.info(
+                    "Zone %s reported off transiently but is back on — run continues",
+                    entity_id,
+                )
+                return
+            if decision == "retry":
+                if ext is not None:
+                    ext["reasserts_left"] = reasserts_left - 1
+                attempt = _EXTERNAL_OFF_MAX_REASSERTS - reasserts_left + 1
+                _LOGGER.warning(
+                    "Zone %s went off mid-run (stale cloud state?); re-asserting on "
+                    "(attempt %d/%d)",
+                    entity_id,
+                    attempt,
+                    _EXTERNAL_OFF_MAX_REASSERTS,
+                )
+                await hass.services.async_call(
+                    "switch", SERVICE_TURN_ON, {"entity_id": entity_id}, blocking=False
+                )
+                return  # listener stays active; a further off re-arms the debounce
+
+            # decision == "abort" — persistently off, out of attempts or past deadline.
+            entry_data["manual_runs"].stop(entity_id)
+            _clear_external_off(entry_data, entity_id)
+            _cancel_handles(entry_data, entity_id)
+            if coord is not None:
+                rec = coord.run_history.abort_run(
+                    entity_id,
+                    ended_at=dt_util.utcnow(),
+                    reason="switch turned off externally (did not recover)",
+                )
+                hass.async_create_task(coord.async_save_run_history())
+                # Actionable "Run remainder" / "Open Logbook" alert for a
+                # scheduled run cut short below 90% of planned.
+                hass.async_create_task(_maybe_notify_cut_short(coord, rec))
+            _LOGGER.warning(
+                "Zone %s stayed off after %d re-assert(s) — aborting run",
+                entity_id,
+                _EXTERNAL_OFF_MAX_REASSERTS,
+            )
+
         # ── state listener ──
-        # If the user turns the zone off some other way, cancel our auto-stop
-        # so we don't double-trigger turn_off (and so we clear our run state).
+        # A zone reporting off mid-run is debounced, not acted on immediately
+        # (cloud integrations flap "off" for seconds after a turn-on). One
+        # check is scheduled; further offs are ignored until it fires.
         @callback
         def _on_state_change(event):
             new_state = event.data.get("new_state")
             if new_state is None or new_state.state == "on":
                 return
-            # Zone is off (or unavailable). Drop our run.
-            if entry_data["manual_runs"].get(entity_id):
-                entry_data["manual_runs"].stop(entity_id)
-                _cancel_handles(entry_data, entity_id)
-                # External off — treat as abort with a generic reason.
-                if coord is not None:
-                    rec = coord.run_history.abort_run(
-                        entity_id,
-                        ended_at=dt_util.utcnow(),
-                        reason="switch turned off externally",
-                    )
-                    hass.async_create_task(coord.async_save_run_history())
-                    # v1.17.8 — if a SCHEDULED run was cut short by an
-                    # external actor (not the user pressing Stop), the
-                    # user almost always wants to know. Fire an
-                    # actionable notification with "Run remainder" +
-                    # "Open Logbook" buttons. Skips short-by-design
-                    # cases: source=manual or actual >= 90% of planned.
-                    hass.async_create_task(_maybe_notify_cut_short(coord, rec))
-                _LOGGER.info(
-                    "Manual run for %s ended externally — cancelled auto-stop",
-                    entity_id,
-                )
+            run_now = entry_data["manual_runs"].get(entity_id)
+            if run_now is None:
+                return  # our run already ended
+            ext = entry_data.setdefault("external_off", {}).setdefault(
+                entity_id, {"reasserts_left": _EXTERNAL_OFF_MAX_REASSERTS, "pending": None}
+            )
+            if ext.get("pending") is not None:
+                return  # a debounce check is already scheduled
+            ext["pending"] = async_call_later(
+                hass, _EXTERNAL_OFF_DEBOUNCE_SECONDS, _verify_external_off
+            )
+            _LOGGER.debug(
+                "Zone %s reported off mid-run; debouncing %ds before reacting",
+                entity_id,
+                _EXTERNAL_OFF_DEBOUNCE_SECONDS,
+            )
 
         cancel_listener = async_track_state_change_event(hass, [entity_id], _on_state_change)
 
+        entry_data.setdefault("external_off", {})[entity_id] = {
+            "reasserts_left": _EXTERNAL_OFF_MAX_REASSERTS,
+            "pending": None,
+        }
         entry_data.setdefault("cancel_handles", {})[entity_id] = (
             cancel_timer,
             cancel_listener,
@@ -719,6 +804,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             return
 
         entry_data["manual_runs"].stop(entity_id)
+        _clear_external_off(entry_data, entity_id)
         _cancel_handles(entry_data, entity_id)
         await hass.services.async_call(
             "switch",
@@ -1219,3 +1305,9 @@ def _cleanup_entry_handles(entry_data: dict[str, Any]) -> None:
         if cancel_listener:
             cancel_listener()
     handles.clear()
+    # v1.21 — also cancel any pending external-off debounce timers.
+    external_off = entry_data.get("external_off", {})
+    for ext in list(external_off.values()):
+        if ext.get("pending"):
+            ext["pending"]()
+    external_off.clear()
