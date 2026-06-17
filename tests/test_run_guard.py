@@ -1,12 +1,13 @@
-"""Tests for run_guard.external_off_decision (pure logic, v1.21).
+"""Tests for run_guard.external_off_decision (pure logic, v1.21-v1.22).
 
 Decides what to do when a zone reports off mid-run after the debounce:
-recover (it's back on), retry (re-assert the switch), or abort.
+recover (it's back on), retry / retry_reset (re-assert the switch), or abort.
 """
 
 from __future__ import annotations
 
 from custom_components.complete_irrigation.run_guard import (
+    EXTERNAL_OFF_HEALTHY_RUN_SECONDS,
     EXTERNAL_OFF_MAX_REASSERTS,
     external_off_decision,
 )
@@ -37,3 +38,47 @@ def test_past_deadline_aborts_even_with_attempts():
 
 def test_reassert_budget_is_positive():
     assert EXTERNAL_OFF_MAX_REASSERTS >= 1
+
+
+# ── v1.22 — healthy cap-stop refills the budget ─────────────────────
+
+
+def test_healthy_chunk_retries_and_resets_even_with_no_budget():
+    # A long run that Rachio stopped at its per-zone cap (it ran a healthy
+    # chunk first) must keep going — re-assert AND refill the budget, even
+    # when reasserts_left has hit 0. This is what carries Trees/Citrus to
+    # their full CI duration across repeated cap-stops.
+    assert (
+        external_off_decision("off", reasserts_left=0, before_deadline=True, ran_healthy=True)
+        == "retry_reset"
+    )
+    assert (
+        external_off_decision("off", reasserts_left=2, before_deadline=True, ran_healthy=True)
+        == "retry_reset"
+    )
+
+
+def test_healthy_chunk_past_deadline_still_aborts():
+    # Even a healthy run that's reached its deadline stops — no overrun.
+    assert (
+        external_off_decision("off", reasserts_left=2, before_deadline=False, ran_healthy=True)
+        == "abort"
+    )
+
+
+def test_unhealthy_flap_falls_back_to_limited_budget():
+    # A zone that can't stay on past the healthy threshold (flap/fault)
+    # spends the bounded budget and then aborts — no infinite hammering.
+    assert (
+        external_off_decision("off", reasserts_left=1, before_deadline=True, ran_healthy=False)
+        == "retry"
+    )
+    assert (
+        external_off_decision("off", reasserts_left=0, before_deadline=True, ran_healthy=False)
+        == "abort"
+    )
+
+
+def test_healthy_threshold_is_sane():
+    # Above a few-second cloud flap, below any reasonable controller cap.
+    assert 30 <= EXTERNAL_OFF_HEALTHY_RUN_SECONDS <= 600
