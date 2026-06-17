@@ -4,6 +4,30 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.22.0 — 2026-06-16
+
+### Fixed — long runs survive the Rachio per-zone cap
+
+- **A run no longer dies at the controller's manual-run cap.** Rachio stops
+  a zone at its configured "manual run minutes" (e.g. 60), so a long
+  Complete Irrigation run (Trees 270, Citrus 240, Shrubs 135) used to abort
+  the moment Rachio cut it. The external-off guard now distinguishes a
+  **healthy cap-stop** (the zone ran at least `EXTERNAL_OFF_HEALTHY_RUN_SECONDS`
+  = 120 s before stopping) from a quick flap/fault: on a healthy stop it
+  **re-asserts the switch on AND refills the re-assert budget**, so the run
+  rides cap after cap all the way to its full CI duration. A zone that
+  *can't* stay on past the threshold still spends the bounded budget and
+  aborts quickly — no infinite hammering of a genuinely dead valve, and a
+  run that reaches its deadline always stops (no overrun).
+- **Why this matters with your Rachio setting:** Rachio rejects a
+  manual-run value above its own max (~180), so you can't just raise it to
+  cover a 270-minute zone — setting it to 400 makes the *start command fail*
+  outright. With this change you can leave it at a safe value (60) and CI
+  re-asserts through the cap to deliver the full run. (You can also raise it
+  to Rachio's ceiling, e.g. 120/180, to reduce the number of re-asserts.)
+  Best paired with Rachio **Cycle & Soak off** for those zones, so CI owns
+  the timing instead of fighting Rachio's pauses.
+
 ## v1.21.0 — 2026-06-16
 
 ### Fixed — no more bogus "switch turned off externally" aborts
