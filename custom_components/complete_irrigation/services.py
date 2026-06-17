@@ -34,6 +34,7 @@ from .manual_run import ManualRun, validate_run_duration
 from .notifications import CATEGORY_CRITICAL  # v1.16: promoted from inline imports
 from .run_guard import (
     EXTERNAL_OFF_DEBOUNCE_SECONDS,
+    EXTERNAL_OFF_HEALTHY_RUN_SECONDS,
     EXTERNAL_OFF_MAX_REASSERTS,
     external_off_decision,
 )
@@ -53,6 +54,7 @@ _LOGGER = logging.getLogger(__name__)
 # deadline stands. Decision logic lives in run_guard.py (pure, tested).
 _EXTERNAL_OFF_DEBOUNCE_SECONDS = EXTERNAL_OFF_DEBOUNCE_SECONDS
 _EXTERNAL_OFF_MAX_REASSERTS = EXTERNAL_OFF_MAX_REASSERTS
+_EXTERNAL_OFF_HEALTHY_RUN_SECONDS = EXTERNAL_OFF_HEALTHY_RUN_SECONDS
 _external_off_decision = external_off_decision
 
 SERVICE_RUN_ZONE = "run_zone"
@@ -701,7 +703,10 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             state_now = state.state if state is not None else "unavailable"
             reasserts_left = ext.get("reasserts_left", 0) if ext else 0
             before_deadline = dt_util.utcnow() < run_now.deadline()
-            decision = _external_off_decision(state_now, reasserts_left, before_deadline)
+            ran_healthy = bool(ext.get("ran_healthy")) if ext else False
+            decision = _external_off_decision(
+                state_now, reasserts_left, before_deadline, ran_healthy
+            )
 
             if decision == "recovered":
                 _LOGGER.info(
@@ -709,17 +714,32 @@ async def _async_register_services(hass: HomeAssistant) -> None:
                     entity_id,
                 )
                 return
-            if decision == "retry":
+            if decision in ("retry", "retry_reset"):
                 if ext is not None:
-                    ext["reasserts_left"] = reasserts_left - 1
-                attempt = _EXTERNAL_OFF_MAX_REASSERTS - reasserts_left + 1
-                _LOGGER.warning(
-                    "Zone %s went off mid-run (stale cloud state?); re-asserting on "
-                    "(attempt %d/%d)",
-                    entity_id,
-                    attempt,
-                    _EXTERNAL_OFF_MAX_REASSERTS,
-                )
+                    if decision == "retry_reset":
+                        # Legit controller cap-stop after a healthy chunk —
+                        # refill the budget so a long run rides cap after cap.
+                        ext["reasserts_left"] = _EXTERNAL_OFF_MAX_REASSERTS
+                    else:
+                        ext["reasserts_left"] = reasserts_left - 1
+                    # Next chunk is measured fresh from this re-assert.
+                    ext["last_on_at"] = dt_util.utcnow()
+                    ext["ran_healthy"] = False
+                if decision == "retry_reset":
+                    _LOGGER.warning(
+                        "Zone %s stopped after a healthy run (controller cap-stop?); "
+                        "re-asserting on to continue toward its full duration",
+                        entity_id,
+                    )
+                else:
+                    attempt = _EXTERNAL_OFF_MAX_REASSERTS - reasserts_left + 1
+                    _LOGGER.warning(
+                        "Zone %s went off mid-run (stale cloud state?); re-asserting on "
+                        "(attempt %d/%d)",
+                        entity_id,
+                        attempt,
+                        _EXTERNAL_OFF_MAX_REASSERTS,
+                    )
                 await hass.services.async_call(
                     "switch", SERVICE_TURN_ON, {"entity_id": entity_id}, blocking=False
                 )
@@ -752,22 +772,40 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         @callback
         def _on_state_change(event):
             new_state = event.data.get("new_state")
-            if new_state is None or new_state.state == "on":
-                return
             run_now = entry_data["manual_runs"].get(entity_id)
             if run_now is None:
                 return  # our run already ended
             ext = entry_data.setdefault("external_off", {}).setdefault(
-                entity_id, {"reasserts_left": _EXTERNAL_OFF_MAX_REASSERTS, "pending": None}
+                entity_id,
+                {
+                    "reasserts_left": _EXTERNAL_OFF_MAX_REASSERTS,
+                    "pending": None,
+                    "last_on_at": dt_util.utcnow(),
+                    "ran_healthy": False,
+                },
             )
+            if new_state is None:
+                return
+            if new_state.state == "on":
+                # Zone (re)started — measure the next chunk from here.
+                ext["last_on_at"] = dt_util.utcnow()
+                return
+            # Off transition: was the chunk it just finished a healthy run
+            # (a controller cap-stop) or a quick flap/fault? Drives whether
+            # the re-assert budget gets refilled (see external_off_decision).
+            on_seconds = (
+                dt_util.utcnow() - ext.get("last_on_at", dt_util.utcnow())
+            ).total_seconds()
+            ext["ran_healthy"] = on_seconds >= _EXTERNAL_OFF_HEALTHY_RUN_SECONDS
             if ext.get("pending") is not None:
                 return  # a debounce check is already scheduled
             ext["pending"] = async_call_later(
                 hass, _EXTERNAL_OFF_DEBOUNCE_SECONDS, _verify_external_off
             )
             _LOGGER.debug(
-                "Zone %s reported off mid-run; debouncing %ds before reacting",
+                "Zone %s reported off mid-run after %.0fs on; debouncing %ds before reacting",
                 entity_id,
+                on_seconds,
                 _EXTERNAL_OFF_DEBOUNCE_SECONDS,
             )
 
@@ -776,6 +814,8 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         entry_data.setdefault("external_off", {})[entity_id] = {
             "reasserts_left": _EXTERNAL_OFF_MAX_REASSERTS,
             "pending": None,
+            "last_on_at": dt_util.utcnow(),
+            "ran_healthy": False,
         }
         entry_data.setdefault("cancel_handles", {})[entity_id] = (
             cancel_timer,
