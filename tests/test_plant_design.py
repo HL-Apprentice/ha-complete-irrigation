@@ -12,6 +12,7 @@ from custom_components.complete_irrigation.plant import PlantRecord
 from custom_components.complete_irrigation.plant_design import (
     build_yard_report,
     schedule_runs_per_week,
+    serialize_loop_report,
     watering_schedules_for_zone,
     zone_run_minutes,
 )
@@ -141,3 +142,34 @@ def test_watering_schedules_sorted_by_weekly_water():
     small = _interval_sched("switch.z", 10, days=2, sid="sm")
     ordered = watering_schedules_for_zone([small, big], "switch.z")
     assert [s.id for s, _, _ in ordered] == ["big", "sm"]
+
+
+# ── serialization (ws_api / panel) ──────────────────────────────────
+
+
+def test_serialize_loop_report_is_json_safe():
+    import json
+
+    plants = [_plant("p1", "switch.citrus", cat="high", area=100)]
+    scheds = [_weekday_sched("switch.citrus", 240)]
+    rep = build_yard_report(plants, scheds, eto_in_week=1.8)[0]
+    d = serialize_loop_report(rep)
+    json.dumps(d)  # must not raise (no inf/tuples/dataclasses)
+    assert d["zone_entity_id"] == "switch.citrus"
+    assert d["plants"][0]["status"] in ("OK", "UNDER", "OVER")
+    assert isinstance(d["plants"][0]["emitters"], list)
+
+
+def test_serialize_handles_infinite_required_gph():
+    import json
+    import math
+
+    # A zone with no schedule -> required_gph is inf -> must serialize to None.
+    rep = build_yard_report([_plant("p1", "switch.orphan")], [], eto_in_week=1.8)[0]
+    d = serialize_loop_report(rep)
+    json.dumps(d)
+    assert all(
+        not (isinstance(r["required_gph"], float) and math.isinf(r["required_gph"]))
+        for r in d["plants"]
+    )
+    assert d["plants"][0]["required_gph"] is None
