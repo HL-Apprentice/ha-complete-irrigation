@@ -217,3 +217,48 @@ def test_add_schedule_with_interval_hours_and_empty_weekdays_unchanged():
         }
     )
     assert result["weekdays"] == []
+
+
+# ── v2 plant CRUD schemas ───────────────────────────────────────────
+
+
+def test_add_plant_schema_accepts_valid():
+    from custom_components.complete_irrigation.services import _ADD_PLANT_SCHEMA
+
+    result = _ADD_PLANT_SCHEMA(
+        {
+            "name": "Lemon tree",
+            "wucols_category": "high",
+            "canopy_area_sqft": 113,
+            "zone_entity_id": "switch.citrus",
+        }
+    )
+    assert result["wucols_category"] == "high"
+    assert result["canopy_area_sqft"] == 113.0  # coerced to float
+
+
+def test_add_plant_schema_rejects_bad_category_and_area():
+    from custom_components.complete_irrigation.services import _ADD_PLANT_SCHEMA
+
+    base = {"name": "X", "canopy_area_sqft": 10, "zone_entity_id": "switch.z"}
+    with pytest.raises(vol.Invalid):
+        _ADD_PLANT_SCHEMA({**base, "wucols_category": "ultra"})
+    with pytest.raises(vol.Invalid):
+        _ADD_PLANT_SCHEMA({**base, "wucols_category": "low", "canopy_area_sqft": 0})
+
+
+def test_update_plant_schema_allows_partial():
+    from custom_components.complete_irrigation.services import _UPDATE_PLANT_SCHEMA
+
+    result = _UPDATE_PLANT_SCHEMA({"plant_id": "abc123", "canopy_area_sqft": 50})
+    assert result["plant_id"] == "abc123"
+    assert result["canopy_area_sqft"] == 50.0
+    assert "name" not in result
+
+
+def test_delete_plant_schema_requires_id():
+    from custom_components.complete_irrigation.services import _DELETE_PLANT_SCHEMA
+
+    assert _DELETE_PLANT_SCHEMA({"plant_id": "abc"}) == {"plant_id": "abc"}
+    with pytest.raises(vol.Invalid):
+        _DELETE_PLANT_SCHEMA({})

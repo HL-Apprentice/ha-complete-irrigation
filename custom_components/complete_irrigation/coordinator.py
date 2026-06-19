@@ -48,6 +48,7 @@ from .notifications import (
     CATEGORY_IMPORTANT,
     NotificationDispatcher,
 )
+from .plant import PlantStore
 from .run_history import (
     DEFAULT_RETENTION_DAYS,
     RunHistoryStore,
@@ -150,6 +151,24 @@ async def _async_save_run_history(
     await helper.async_save({"records": store.to_serializable()})
 
 
+async def _async_load_plants(hass: HomeAssistant, entry_id: str) -> PlantStore:
+    """v2 — load the yard's plants (plant-aware irrigation)."""
+    from homeassistant.helpers.storage import Store
+
+    helper = Store(hass, STORAGE_VERSION, _storage_key(entry_id, "plants"))
+    data = await helper.async_load()
+    if not data:
+        return PlantStore()
+    return PlantStore.from_serializable(data.get("plants", []))
+
+
+async def _async_save_plants(hass: HomeAssistant, entry_id: str, store: PlantStore) -> None:
+    from homeassistant.helpers.storage import Store
+
+    helper = Store(hass, STORAGE_VERSION, _storage_key(entry_id, "plants"))
+    await helper.async_save({"plants": store.to_serializable()})
+
+
 class ScheduleCoordinator:
     """Per-entry orchestrator for persisted schedules + per-tick firing."""
 
@@ -181,6 +200,9 @@ class ScheduleCoordinator:
         # Run history (v1.14): every completed / skipped / aborted run.
         # Loaded in async_setup, pruned at load + on each tick boundary.
         self._run_history: RunHistoryStore = RunHistoryStore()
+        # v2 — the yard's plants (plant-aware irrigation). Loaded in
+        # async_setup; mutated via the add/update/delete_plant services.
+        self._plants: PlantStore = PlantStore()
         # v1.19 — auto-soak controller state (in-memory; abandoned on
         # restart, which is safe: the in-flight run's auto-stop handles
         # the valve and a fresh below-min reading restarts the loop).
@@ -201,6 +223,10 @@ class ScheduleCoordinator:
     @property
     def run_history(self) -> RunHistoryStore:
         return self._run_history
+
+    @property
+    def plants(self) -> PlantStore:
+        return self._plants
 
     def register_lockout_listener(self, callback: Callable[[], None]) -> None:
         self._lockout_listeners.append(callback)
@@ -230,6 +256,7 @@ class ScheduleCoordinator:
         self._config = await _async_load_config(self._hass, self._entry_id)
         self._config.setdefault("zones", {})
         self._run_history = await _async_load_run_history(self._hass, self._entry_id)
+        self._plants = await _async_load_plants(self._hass, self._entry_id)
         # Prune on load — drops anything past the 90-day window so the
         # store file shrinks over time even if the user rarely opens
         # the History tab.
@@ -503,6 +530,9 @@ class ScheduleCoordinator:
 
     async def async_save_run_history(self) -> None:
         await _async_save_run_history(self._hass, self._entry_id, self._run_history)
+
+    async def async_save_plants(self) -> None:
+        await _async_save_plants(self._hass, self._entry_id, self._plants)
 
     def clear_lockout(self) -> None:
         if self.lockout_until is not None:
