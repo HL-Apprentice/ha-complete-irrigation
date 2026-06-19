@@ -12,10 +12,19 @@ via `to_calc_plant()`; the panel/services will mutate them later.
 
 from __future__ import annotations
 
+import logging
+import math
 from dataclasses import dataclass
 from typing import Any
 
 from .hydraulics import WUCOLS_FACTORS, Plant
+
+_LOGGER = logging.getLogger(__name__)
+
+# Upper sanity bound on canopy area, mirroring the service schema so the
+# .storage load path can't accept absurd / non-finite values (a corrupt or
+# crafted store would otherwise poison the water math + WS JSON).
+_MAX_CANOPY_AREA_SQFT = 100000
 
 
 @dataclass(frozen=True)
@@ -38,8 +47,15 @@ class PlantRecord:
                 f"unknown WUCOLS category {self.wucols_category!r}; "
                 f"expected one of {sorted(WUCOLS_FACTORS)}"
             )
-        if self.canopy_area_sqft <= 0:
-            raise ValueError(f"canopy_area_sqft must be positive, got {self.canopy_area_sqft}")
+        # Reject NaN/Inf explicitly (NaN <= 0 is False, Inf > 0 is True, so a
+        # bare "<= 0" check lets them through and they poison the water math).
+        if not math.isfinite(self.canopy_area_sqft) or not (
+            0 < self.canopy_area_sqft <= _MAX_CANOPY_AREA_SQFT
+        ):
+            raise ValueError(
+                f"canopy_area_sqft must be a finite value in (0, {_MAX_CANOPY_AREA_SQFT}], "
+                f"got {self.canopy_area_sqft}"
+            )
         if not self.zone_entity_id:
             raise ValueError("zone_entity_id must be non-empty")
 
@@ -124,9 +140,17 @@ class PlantStore:
 
     @classmethod
     def from_serializable(cls, data: list[dict[str, Any]]) -> PlantStore:
-        """Build a fresh store from the serialized form."""
+        """Build a fresh store from the serialized form.
+
+        Per-record defensive: a single malformed/corrupt entry is logged and
+        skipped rather than failing the whole load (which would take down
+        list_plants / yard_report)."""
         store = cls()
         for d in data:
-            rec = PlantRecord.from_dict(d)
+            try:
+                rec = PlantRecord.from_dict(d)
+            except (KeyError, ValueError, TypeError) as err:
+                _LOGGER.warning("Skipping invalid plant record %r: %s", d, err)
+                continue
             store._items[rec.id] = rec
         return store

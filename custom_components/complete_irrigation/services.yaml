@@ -293,7 +293,7 @@ set_weather_config:
       name: Rain sensors
       description: One or more rainfall sensors (accumulation today/yesterday, duration, intensity, etc.). The first one is used for lockout; all show on the Today banner.
       required: false
-      example: "['sensor.gilbert_rain_accumulation_today', 'sensor.gilbert_rain_intensity']"
+      example: "['sensor.backyard_rain_accumulation_today', 'sensor.backyard_rain_intensity']"
       selector:
         object:
     temperature_sensor:
