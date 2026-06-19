@@ -557,3 +557,101 @@ run_schedule:
       required: true
       selector:
         text:
+
+# ── v2: plant-aware irrigation ──────────────────────────────────────
+add_plant:
+  name: Add plant
+  description: >
+    Register a plant in the yard and attach it to a zone (drip loop). Used by
+    the per-loop water calculator to recommend emitters. Persists across HA
+    restarts.
+  fields:
+    name:
+      name: Plant name
+      description: A human-friendly label for this plant.
+      required: true
+      example: "Lemon tree"
+      selector:
+        text:
+    wucols_category:
+      name: Water-use category
+      description: WUCOLS landscape water-use category (sets the plant factor).
+      required: true
+      example: "high"
+      selector:
+        select:
+          options:
+            - very_low
+            - low
+            - moderate
+            - high
+    canopy_area_sqft:
+      name: Canopy area (sq ft)
+      description: Approximate planted/canopy area the plant covers.
+      required: true
+      example: 100
+      selector:
+        number:
+          min: 0.1
+          max: 100000
+          mode: box
+          unit_of_measurement: "ft²"
+    zone_entity_id:
+      name: Zone / loop
+      description: The switch entity (irrigation zone) this plant is watered by.
+      required: true
+      selector:
+        entity:
+          domain: switch
+
+update_plant:
+  name: Update plant
+  description: Change one or more fields of an existing plant.
+  fields:
+    plant_id:
+      name: Plant ID
+      description: The id of the plant to update.
+      required: true
+      selector:
+        text:
+    name:
+      name: Plant name
+      required: false
+      selector:
+        text:
+    wucols_category:
+      name: Water-use category
+      required: false
+      selector:
+        select:
+          options:
+            - very_low
+            - low
+            - moderate
+            - high
+    canopy_area_sqft:
+      name: Canopy area (sq ft)
+      required: false
+      selector:
+        number:
+          min: 0.1
+          max: 100000
+          mode: box
+          unit_of_measurement: "ft²"
+    zone_entity_id:
+      name: Zone / loop
+      required: false
+      selector:
+        entity:
+          domain: switch
+
+delete_plant:
+  name: Delete plant
+  description: Permanently remove a plant by id.
+  fields:
+    plant_id:
+      name: Plant ID
+      description: The id of the plant to delete.
+      required: true
+      selector:
+        text:
