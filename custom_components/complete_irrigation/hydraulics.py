@@ -38,6 +38,10 @@ EMITTER_SIZES: tuple[float, ...] = (0.5, 1.0, 2.0, 4.0)
 
 GAL_PER_SQFT_INCH = 0.623  # gallons to cover 1 sq ft with 1 inch of water
 DEFAULT_EFFICIENCY = 0.9  # drip irrigation efficiency
+# Fallback reference ET (in/week) when none is configured. A moderate default;
+# real ETo is climate/season-driven (Phoenix high summer runs ~2). Manual via
+# set_weather_config for now; a weather/ET feed can supply it later.
+DEFAULT_ETO_IN_WEEK = 1.5
 WITHIN_TOLERANCE = 0.10  # +/-10% delivered vs need still counts as "OK"
 MAX_EMITTERS_PER_PLANT = 10
 

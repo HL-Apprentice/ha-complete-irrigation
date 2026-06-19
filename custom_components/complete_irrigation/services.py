@@ -260,6 +260,10 @@ _SET_WEATHER_CONFIG_SCHEMA = vol.Schema(
         # current wind ≥ threshold causes scheduled runs to skip.
         vol.Optional("wind_sensor"): cv.entity_id,
         vol.Optional("wind_defer_mph"): vol.All(vol.Coerce(float), vol.Range(min=0, max=80)),
+        # v2 — reference evapotranspiration (in/week) + drip efficiency drive
+        # the plant-aware water calculator. Manual for now; an ET feed later.
+        vol.Optional("eto_in_week"): vol.All(vol.Coerce(float), vol.Range(min=0.1, max=10)),
+        vol.Optional("drip_efficiency"): vol.All(vol.Coerce(float), vol.Range(min=0.5, max=1.0)),
     }
 )
 
@@ -1201,6 +1205,8 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             "boost_percent",
             "wind_sensor",
             "wind_defer_mph",
+            "eto_in_week",
+            "drip_efficiency",
         ):
             if key in data:
                 coord.config[key] = data[key]

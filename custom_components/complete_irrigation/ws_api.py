@@ -16,6 +16,8 @@ import voluptuous as vol
 from homeassistant.components import websocket_api
 
 from .const import DOMAIN
+from .hydraulics import DEFAULT_EFFICIENCY, DEFAULT_ETO_IN_WEEK
+from .plant_design import build_yard_report, serialize_loop_report
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -25,6 +27,8 @@ WS_TYPE_GET_CONFIG = f"{DOMAIN}/get_config"
 WS_TYPE_GET_ACTIVE_RUNS = f"{DOMAIN}/get_active_runs"
 WS_TYPE_LIST_RUN_HISTORY = f"{DOMAIN}/list_run_history"
 WS_TYPE_LIST_PLANNED_RUNS = f"{DOMAIN}/list_planned_runs"
+WS_TYPE_LIST_PLANTS = f"{DOMAIN}/list_plants"
+WS_TYPE_YARD_REPORT = f"{DOMAIN}/yard_report"
 
 
 def _find_coordinator(hass: HomeAssistant):
@@ -220,6 +224,45 @@ async def list_planned_runs(hass, connection, msg):
     connection.send_result(msg["id"], {"runs": runs})
 
 
+# ── v2: plant-aware irrigation ──────────────────────────────────────
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): WS_TYPE_LIST_PLANTS})
+@websocket_api.async_response
+async def list_plants(hass, connection, msg):
+    """Return all plants (serialized) for the panel's plant editor."""
+    coord = _find_coordinator(hass)
+    if coord is None:
+        connection.send_result(msg["id"], {"plants": []})
+        return
+    connection.send_result(msg["id"], {"plants": coord.plants.to_serializable()})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): WS_TYPE_YARD_REPORT})
+@websocket_api.async_response
+async def yard_report(hass, connection, msg):
+    """Per-loop water design report: each plant's need + recommended emitters
+    + OK/UNDER/OVER and design/capacity warnings, computed from the plants,
+    their zones' schedules, and the configured reference ET."""
+    coord = _find_coordinator(hass)
+    if coord is None:
+        connection.send_result(msg["id"], {"reports": [], "eto_in_week": None})
+        return
+    eto = float(coord.config.get("eto_in_week", DEFAULT_ETO_IN_WEEK))
+    eff = float(coord.config.get("drip_efficiency", DEFAULT_EFFICIENCY))
+    reports = build_yard_report(coord.plants.all(), coord.schedule_store.all(), eto, eff)
+    connection.send_result(
+        msg["id"],
+        {
+            "reports": [serialize_loop_report(r) for r in reports],
+            "eto_in_week": eto,
+            "drip_efficiency": eff,
+        },
+    )
+
+
 def async_register_ws_commands(hass: HomeAssistant) -> None:
     """Register all WS commands. Idempotent."""
     websocket_api.async_register_command(hass, list_schedules)
@@ -227,3 +270,5 @@ def async_register_ws_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, get_active_runs)
     websocket_api.async_register_command(hass, list_run_history)
     websocket_api.async_register_command(hass, list_planned_runs)
+    websocket_api.async_register_command(hass, list_plants)
+    websocket_api.async_register_command(hass, yard_report)
