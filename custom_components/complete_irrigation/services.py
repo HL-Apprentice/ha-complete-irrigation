@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from dataclasses import replace
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -30,8 +31,10 @@ from homeassistant.helpers.event import async_call_later, async_track_state_chan
 from homeassistant.util import dt as dt_util
 
 from .const import DEFAULT_MANUAL_RUN_MINUTES, DOMAIN, MAX_MANUAL_RUN_MINUTES
+from .hydraulics import WUCOLS_FACTORS
 from .manual_run import ManualRun, validate_run_duration
 from .notifications import CATEGORY_CRITICAL  # v1.16: promoted from inline imports
+from .plant import PlantRecord
 from .run_guard import (
     EXTERNAL_OFF_DEBOUNCE_SECONDS,
     EXTERNAL_OFF_HEALTHY_RUN_SECONDS,
@@ -73,6 +76,10 @@ SERVICE_TEST_NOTIFICATION = "test_notification"
 SERVICE_START_ESTABLISHMENT = "start_establishment"
 SERVICE_SET_CONFLICT_POLICY = "set_conflict_policy"
 SERVICE_SET_GENERAL_CONFIG = "set_general_config"
+# v2 — plant-aware irrigation
+SERVICE_ADD_PLANT = "add_plant"
+SERVICE_UPDATE_PLANT = "update_plant"
+SERVICE_DELETE_PLANT = "delete_plant"
 
 MAX_SCHEDULE_DURATION_MIN = 480  # 8 hours — safety cap for scheduled runs
 
@@ -384,6 +391,32 @@ _START_ESTABLISHMENT_SCHEMA = vol.Schema(
         vol.Optional("start_hour", default=6): vol.All(vol.Coerce(int), vol.Range(min=0, max=23)),
     }
 )
+
+# v2 — plant CRUD. canopy_area_sqft is generous-bounded (a small annual to a
+# big shade tree's canopy); wucols_category is constrained to the known set.
+_WUCOLS_CATEGORIES = tuple(sorted(WUCOLS_FACTORS))
+_CANOPY_AREA = vol.All(vol.Coerce(float), vol.Range(min=0.1, max=100000))
+
+_ADD_PLANT_SCHEMA = vol.Schema(
+    {
+        vol.Required("name"): vol.All(cv.string, vol.Length(min=1, max=80), _no_control_chars),
+        vol.Required("wucols_category"): vol.In(_WUCOLS_CATEGORIES),
+        vol.Required("canopy_area_sqft"): _CANOPY_AREA,
+        vol.Required("zone_entity_id"): cv.entity_id,
+    }
+)
+
+_UPDATE_PLANT_SCHEMA = vol.Schema(
+    {
+        vol.Required("plant_id"): cv.string,
+        vol.Optional("name"): vol.All(cv.string, vol.Length(min=1, max=80), _no_control_chars),
+        vol.Optional("wucols_category"): vol.In(_WUCOLS_CATEGORIES),
+        vol.Optional("canopy_area_sqft"): _CANOPY_AREA,
+        vol.Optional("zone_entity_id"): cv.entity_id,
+    }
+)
+
+_DELETE_PLANT_SCHEMA = vol.Schema({vol.Required("plant_id"): cv.string})
 
 
 def _find_coordinator(hass: HomeAssistant):
@@ -1056,6 +1089,60 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         await coord.async_save()
         _LOGGER.info("Set schedule %s enabled=%s", existing.id, data["enabled"])
 
+    # ── v2: plant CRUD (plant-aware irrigation) ────────────────────
+
+    async def handle_add_plant(call: ServiceCall) -> None:
+        if not await _require_admin_if_configured(hass, call):
+            return
+        data = _ADD_PLANT_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None:
+            _LOGGER.warning("add_plant called but no coordinator available")
+            return
+        plant = PlantRecord(
+            id=uuid.uuid4().hex[:12],
+            name=data["name"],
+            wucols_category=data["wucols_category"],
+            canopy_area_sqft=data["canopy_area_sqft"],
+            zone_entity_id=data["zone_entity_id"],
+        )
+        coord.plants.add(plant)
+        await coord.async_save_plants()
+        _LOGGER.info("Added plant %s (%s) on %s", plant.id, plant.name, plant.zone_entity_id)
+
+    async def handle_update_plant(call: ServiceCall) -> None:
+        if not await _require_admin_if_configured(hass, call):
+            return
+        data = _UPDATE_PLANT_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None:
+            return
+        existing = coord.plants.get(data["plant_id"])
+        if existing is None:
+            _LOGGER.warning("update_plant: no such plant %s", data["plant_id"])
+            return
+        overrides = {
+            k: data[k]
+            for k in ("name", "wucols_category", "canopy_area_sqft", "zone_entity_id")
+            if k in data
+        }
+        # replace() re-runs PlantRecord validation on the merged record.
+        merged = replace(existing, **overrides)
+        coord.plants.upsert(merged)
+        await coord.async_save_plants()
+        _LOGGER.info("Updated plant %s", merged.id)
+
+    async def handle_delete_plant(call: ServiceCall) -> None:
+        if not await _require_admin_if_configured(hass, call):
+            return
+        data = _DELETE_PLANT_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None:
+            return
+        if coord.plants.delete(data["plant_id"]):
+            await coord.async_save_plants()
+            _LOGGER.info("Deleted plant %s", data["plant_id"])
+
     hass.services.async_register(DOMAIN, SERVICE_RUN_ZONE, handle_run_zone, schema=_RUN_ZONE_SCHEMA)
     hass.services.async_register(
         DOMAIN, SERVICE_STOP_ZONE, handle_stop_zone, schema=_STOP_ZONE_SCHEMA
@@ -1086,6 +1173,15 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         SERVICE_RUN_SCHEDULE,
         handle_run_schedule,
         schema=_RUN_SCHEDULE_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_ADD_PLANT, handle_add_plant, schema=_ADD_PLANT_SCHEMA
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_UPDATE_PLANT, handle_update_plant, schema=_UPDATE_PLANT_SCHEMA
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_DELETE_PLANT, handle_delete_plant, schema=_DELETE_PLANT_SCHEMA
     )
 
     # ── Weather + per-zone moisture configuration ──────────────────
@@ -1331,6 +1427,9 @@ def _async_unregister_services(hass: HomeAssistant) -> None:
         SERVICE_START_ESTABLISHMENT,
         SERVICE_SET_CONFLICT_POLICY,
         SERVICE_SET_GENERAL_CONFIG,
+        SERVICE_ADD_PLANT,
+        SERVICE_UPDATE_PLANT,
+        SERVICE_DELETE_PLANT,
     ):
         if hass.services.has_service(DOMAIN, svc):
             hass.services.async_remove(DOMAIN, svc)
