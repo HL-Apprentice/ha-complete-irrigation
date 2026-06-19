@@ -6,6 +6,8 @@ bridge to the hydraulics calc type.
 
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from custom_components.complete_irrigation.hydraulics import Plant
@@ -37,6 +39,21 @@ def test_rejects_nonpositive_area():
         _rec(area=0)
     with pytest.raises(ValueError):
         _rec(area=-5)
+
+
+def test_rejects_nonfinite_and_oversized_area():
+    # Security-gate hardening: NaN/Inf (which slip past a bare "<= 0" check)
+    # and absurd values must be rejected on the .storage load path too.
+    for bad in (math.nan, math.inf, -math.inf, 1_000_000):
+        with pytest.raises(ValueError):
+            _rec(area=bad)
+
+
+def test_from_dict_rejects_nonfinite_area():
+    data = _rec().to_dict()
+    data["canopy_area_sqft"] = float("nan")
+    with pytest.raises(ValueError):
+        PlantRecord.from_dict(data)
 
 
 def test_rejects_blank_name_and_ids():
@@ -133,3 +150,14 @@ def test_store_round_trip():
     restored = PlantStore.from_serializable(s.to_serializable())
     assert [p.id for p in restored.all()] == ["p1", "p2"]
     assert restored.get("p2").wucols_category == "very_low"
+
+
+def test_from_serializable_skips_bad_records_without_failing_load():
+    # Security-gate hardening: one corrupt entry must not take down the whole
+    # store (which would break list_plants / yard_report).
+    good = _rec("p1", name="Lemon").to_dict()
+    good2 = _rec("p2", name="Orange").to_dict()
+    bad_missing_key = {"id": "p3", "name": "X"}  # missing required fields
+    bad_value = {**_rec("p4").to_dict(), "wucols_category": "ultra"}
+    restored = PlantStore.from_serializable([good, bad_missing_key, good2, bad_value])
+    assert [p.id for p in restored.all()] == ["p1", "p2"]  # only the valid ones
