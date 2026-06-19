@@ -18,7 +18,13 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from .hydraulics import DEFAULT_EFFICIENCY, Loop, LoopReport, build_loop_report
+from .hydraulics import (
+    DEFAULT_EFFICIENCY,
+    Loop,
+    LoopReport,
+    PlantWaterResult,
+    build_loop_report,
+)
 from .plant import PlantRecord
 from .schedule import MODE_INTERVAL, MODE_INTERVAL_HOURS, Schedule
 
@@ -116,3 +122,37 @@ def build_yard_report(
             )
         reports.append(rep)
     return reports
+
+
+# ── JSON serialization for the ws_api / panel ───────────────────────
+
+
+def serialize_plant_result(r: PlantWaterResult) -> dict:
+    """JSON-safe dict for one plant's result (inf required GPH -> None)."""
+    req = r.required_gph
+    return {
+        "name": r.plant.name,
+        "wucols_category": r.plant.wucols_category,
+        "canopy_area_sqft": r.plant.canopy_area_sqft,
+        "need_gal_week": round(r.need_gal_week, 1),
+        "required_gph": None if req == float("inf") else round(req, 2),
+        "emitters": [{"count": c, "gph": s} for c, s in r.emitters],
+        "emitter_gph": round(r.emitter_gph, 2),
+        "delivered_gal_week": round(r.delivered_gal_week, 1),
+        "status": r.status,
+        "pct_off": round(r.pct_off, 3),
+    }
+
+
+def serialize_loop_report(rep: LoopReport) -> dict:
+    """JSON-safe dict for a per-loop design report (for ws_api / the panel)."""
+    return {
+        "zone_entity_id": rep.loop.id,
+        "runtime_minutes": rep.loop.runtime_minutes,
+        "runs_per_week": rep.loop.runs_per_week,
+        "max_flow_gph": rep.loop.max_flow_gph,
+        "total_flow_gph": round(rep.total_flow_gph, 2),
+        "warnings": list(rep.warnings),
+        "suggested_runtime_minutes": rep.suggested_runtime_minutes,
+        "plants": [serialize_plant_result(p) for p in rep.plants],
+    }
