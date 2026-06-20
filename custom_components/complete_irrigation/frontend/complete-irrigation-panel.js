@@ -70,6 +70,7 @@
     { id: "today", label: "Today", icon: "📅" },
     { id: "schedules", label: "Schedules", icon: "⏰" },
     { id: "zones", label: "Zones", icon: "🌱" },
+    { id: "yard", label: "Yard", icon: "🪴" },
     { id: "history", label: "History", icon: "📜" },
     { id: "sensors", label: "Sensors", icon: "📊" },
     { id: "weather", label: "Weather", icon: "🌧️" },
@@ -118,6 +119,17 @@
       "-" +
       String(d.getDate()).padStart(2, "0")
     );
+  }
+
+  // v2 — Yard tab plant add/edit draft (null id = creating new).
+  function emptyPlantEditor() {
+    return {
+      id: null,
+      name: "",
+      wucols_category: "moderate",
+      canopy_area_sqft: "",
+      zone_entity_id: "",
+    };
   }
 
   function emptyEditor() {
@@ -213,6 +225,14 @@
       this._scheduleEditor = emptyEditor();
       this._schedules = [];
       this._schedulesLoaded = false;
+
+      // v2 — Yard tab (plant-aware irrigation) state.
+      this._plants = [];
+      this._yardReports = [];
+      this._yardEto = null;
+      this._yardEff = null;
+      this._yardLoaded = false;
+      this._plantEditor = null; // null = form hidden; object = add/edit draft
 
       // Sensor (moisture) modal state
       this._sensorModalOpen = false;
@@ -481,6 +501,31 @@
         if (action === "configure-sensor")
           return this._openConfigureSensor(node.dataset.entityId);
         if (action === "clear-rain-lockout") return this._clearRainLockout();
+        // v2 — Yard tab plant CRUD + ETo.
+        if (action === "add-plant") {
+          this._plantEditor = emptyPlantEditor();
+          return this._renderNow();
+        }
+        if (action === "edit-plant") {
+          const p = this._plants.find((x) => x.id === node.dataset.plantId);
+          if (p) {
+            this._plantEditor = {
+              id: p.id,
+              name: p.name,
+              wucols_category: p.wucols_category,
+              canopy_area_sqft: p.canopy_area_sqft,
+              zone_entity_id: p.zone_entity_id,
+            };
+          }
+          return this._renderNow();
+        }
+        if (action === "cancel-plant") {
+          this._plantEditor = null;
+          return this._renderNow();
+        }
+        if (action === "delete-plant")
+          return this._deletePlant(node.dataset.plantId, node.dataset.plantName);
+        if (action === "apply-eto") return this._applyEto();
         if (action === "toggle-theme") return this._cycleTheme();
         if (action === "open-banner-settings") {
           this._bannerModalOpen = true;
@@ -652,6 +697,11 @@
         this._saveAdminOnlyServices(e.target);
         return;
       }
+      if (e.target?.classList.contains("plant-form")) {
+        e.preventDefault();
+        this._savePlant();
+        return;
+      }
       if (e.target?.classList.contains("schedule-form")) {
         e.preventDefault();
         this._saveSchedule();
@@ -684,6 +734,15 @@
       if (!t) return;
       // History filters — driven by data-action, not name.
       const action = t.dataset?.action;
+      // v2 — Yard plant editor fields keep the draft in sync (selects fire
+      // change; text/number also handled in _onInput so typing survives a
+      // background re-render).
+      if (action === "plant-field") {
+        if (this._plantEditor && t.name in this._plantEditor) {
+          this._plantEditor[t.name] = t.value;
+        }
+        return; // value already shown by the control; no re-render
+      }
       if (action === "notify-target-change") {
         const idx = parseInt(t.dataset.idx, 10);
         if (!Array.isArray(this._notifyDraft)) this._hydrateNotifyDraft();
@@ -820,6 +879,14 @@
       // triggered by other changes don't blow away unsaved edits).
       const t = e.target;
       if (!t) return;
+      // v2 — Yard plant editor: keep draft current per keystroke so a
+      // background re-render doesn't blow away unsaved typing.
+      if (t.dataset?.action === "plant-field") {
+        if (this._plantEditor && t.name in this._plantEditor) {
+          this._plantEditor[t.name] = t.value;
+        }
+        return;
+      }
       // v1.19.0 — live filter the sensor checkbox list as the user
       // types. Pure DOM operation; no re-render so checkbox state +
       // input focus + cursor position stay put while typing.
@@ -1040,6 +1107,8 @@
       this._currentSection = sectionId;
       if (sectionId === "schedules" && !this._schedulesLoaded) this._fetchSchedules();
       if (sectionId === "history") this._fetchRunHistory();  // always refetch on open
+      // v2 — Yard: always refetch on open (report depends on schedules + ETo).
+      if (sectionId === "yard") this._fetchYard();
       // v1.17 — Today screen's missed-runs banner reads from run history,
       // so load it lazily on first Today open if not already cached.
       if (sectionId === "today" && !this._runHistoryLoaded) this._fetchRunHistory();
@@ -1316,6 +1385,25 @@
         this._scheduleRender();
       } catch (err) {
         console.error("[complete-irrigation] get_config failed:", err);
+      }
+    }
+
+    async _fetchYard() {
+      // v2 — pull the plant list + the computed per-loop design report.
+      if (!this._hass?.callWS) return;
+      try {
+        const [plantsRes, reportRes] = await Promise.all([
+          this._hass.callWS({ type: "complete_irrigation/list_plants" }),
+          this._hass.callWS({ type: "complete_irrigation/yard_report" }),
+        ]);
+        this._plants = (plantsRes && plantsRes.plants) || [];
+        this._yardReports = (reportRes && reportRes.reports) || [];
+        this._yardEto = reportRes ? reportRes.eto_in_week : null;
+        this._yardEff = reportRes ? reportRes.drip_efficiency : null;
+        this._yardLoaded = true;
+        this._scheduleRender();
+      } catch (err) {
+        console.error("[complete-irrigation] yard fetch failed:", err);
       }
     }
 
@@ -1685,6 +1773,68 @@
       }
     }
 
+    // ── v2 Yard: plant CRUD + ETo ──────────────────────────────────
+    async _savePlant() {
+      const e = this._plantEditor;
+      if (!e) return;
+      const name = (e.name || "").trim();
+      const area = parseFloat(e.canopy_area_sqft);
+      const zone = e.zone_entity_id;
+      if (!name || !zone || !(area > 0)) {
+        alert("Enter a name, a positive canopy area (ft²), and pick a zone.");
+        return;
+      }
+      const payload = {
+        name,
+        wucols_category: e.wucols_category,
+        canopy_area_sqft: area,
+        zone_entity_id: zone,
+      };
+      try {
+        if (e.id) {
+          await this._hass.callService("complete_irrigation", "update_plant", {
+            plant_id: e.id,
+            ...payload,
+          });
+        } else {
+          await this._hass.callService("complete_irrigation", "add_plant", payload);
+        }
+        this._plantEditor = null;
+        await this._fetchYard();
+      } catch (err) {
+        alert("Failed to save plant: " + (err?.message || err));
+      }
+    }
+
+    async _deletePlant(plantId, name) {
+      if (!confirm(`Delete plant "${name || plantId}"?`)) return;
+      try {
+        await this._hass.callService("complete_irrigation", "delete_plant", {
+          plant_id: plantId,
+        });
+        await this._fetchYard();
+      } catch (err) {
+        alert("Failed to delete plant: " + (err?.message || err));
+      }
+    }
+
+    async _applyEto() {
+      const input = this.shadowRoot.querySelector('input[name="eto_in_week"]');
+      const val = input ? parseFloat(input.value) : NaN;
+      if (!(val > 0)) {
+        alert("Enter a positive reference ET value (inches/week).");
+        return;
+      }
+      try {
+        await this._hass.callService("complete_irrigation", "set_weather_config", {
+          eto_in_week: val,
+        });
+        await this._fetchYard();
+      } catch (err) {
+        alert("Failed to set ET: " + (err?.message || err));
+      }
+    }
+
     async _runSchedule(scheduleId, scheduleName) {
       // v1.19.0 — "Run" button on each schedule row. Confirms before
       // firing since this triggers physical irrigation hardware. The
@@ -1856,6 +2006,7 @@
       if (this._currentSection === "today") return this._renderToday();
       if (this._currentSection === "schedules") return this._renderSchedules();
       if (this._currentSection === "zones") return this._renderZones();
+      if (this._currentSection === "yard") return this._renderYard();
       if (this._currentSection === "history") return this._renderHistory();
       if (this._currentSection === "sensors") return this._renderSensors();
       if (this._currentSection === "weather") return this._renderWeather();
@@ -4220,6 +4371,219 @@
       }
     }
 
+    // ── v2 Yard tab (plant-aware irrigation) ───────────────────────
+    _zoneFriendly(entityId) {
+      const s = this._hass?.states?.[entityId];
+      return (s && s.attributes?.friendly_name) || entityId;
+    }
+
+    _switchOptions() {
+      const out = [];
+      const states = this._hass?.states || {};
+      for (const eid of Object.keys(states)) {
+        if (!eid.startsWith("switch.")) continue;
+        out.push({ id: eid, name: states[eid].attributes?.friendly_name || eid });
+      }
+      out.sort((a, b) => a.name.localeCompare(b.name));
+      return out;
+    }
+
+    _catLabel(cat) {
+      return (
+        {
+          very_low: "Very low",
+          low: "Low",
+          moderate: "Moderate",
+          high: "High",
+        }[cat] || cat
+      );
+    }
+
+    _emitterLabel(emitters) {
+      if (!emitters || !emitters.length) return "—";
+      return emitters.map((e) => `${e.count}×${e.gph}`).join(" + ") + " GPH";
+    }
+
+    _fmtRuns(n) {
+      if (n == null) return "—";
+      const r = Math.round(n * 10) / 10;
+      return (Number.isInteger(r) ? r : r.toFixed(1)) + "×";
+    }
+
+    _renderYard() {
+      if (!this._yardLoaded) {
+        return `<div class="placeholder"><p>Loading yard…</p></div>`;
+      }
+      const eto = this._yardEto != null ? this._yardEto : "";
+      const eff = this._yardEff != null ? Math.round(this._yardEff * 100) : 90;
+      return (
+        `<div class="yard-intro">` +
+        `<h2>🪴 Yard</h2>` +
+        `<p class="muted">Place each plant on its zone (drip loop) and the calculator sizes ` +
+        `emitters so every plant gets the right water — even when they share a loop.</p>` +
+        `</div>` +
+        // Reference ET control
+        `<div class="card yard-eto">` +
+        `<label>Reference ET (inches / week)</label>` +
+        `<div class="yard-eto-row">` +
+        `<input type="number" name="eto_in_week" min="0.1" max="10" step="0.1" value="${escapeAttr(
+          String(eto)
+        )}" />` +
+        `<button class="btn btn-primary" data-action="apply-eto">Apply</button>` +
+        `<span class="muted">Drives every plant's weekly need (drip efficiency ${eff}%). ` +
+        `Raise it in summer, lower in winter.</span>` +
+        `</div>` +
+        `</div>` +
+        // Add-plant button or the inline editor form
+        (this._plantEditor
+          ? this._renderPlantForm()
+          : `<button class="btn btn-primary yard-add" data-action="add-plant">+ Add plant</button>`) +
+        // Plant list
+        this._renderPlantList() +
+        // Per-loop design report
+        this._renderYardReport()
+      );
+    }
+
+    _renderPlantForm() {
+      const e = this._plantEditor;
+      const cats = [
+        ["very_low", "Very low"],
+        ["low", "Low"],
+        ["moderate", "Moderate"],
+        ["high", "High"],
+      ];
+      const zones = this._switchOptions();
+      return (
+        `<form class="card plant-form">` +
+        `<h3>${e.id ? "Edit plant" : "Add plant"}</h3>` +
+        `<div class="yard-form-grid">` +
+        `<div><label>Name</label>` +
+        `<input name="name" data-action="plant-field" type="text" value="${escapeAttr(
+          e.name
+        )}" placeholder="e.g. Lemon tree" required /></div>` +
+        `<div><label>Water-use category</label>` +
+        `<select name="wucols_category" data-action="plant-field">` +
+        cats
+          .map(
+            ([v, l]) =>
+              `<option value="${v}"${e.wucols_category === v ? " selected" : ""}>${l}</option>`
+          )
+          .join("") +
+        `</select></div>` +
+        `<div><label>Canopy area (ft²)</label>` +
+        `<input name="canopy_area_sqft" data-action="plant-field" type="number" min="0.1" step="1" value="${escapeAttr(
+          String(e.canopy_area_sqft)
+        )}" placeholder="e.g. 100" required /></div>` +
+        `<div><label>Zone / loop</label>` +
+        `<select name="zone_entity_id" data-action="plant-field">` +
+        `<option value="">— pick a zone —</option>` +
+        zones
+          .map(
+            (z) =>
+              `<option value="${escapeAttr(z.id)}"${
+                e.zone_entity_id === z.id ? " selected" : ""
+              }>${escapeHtml(z.name)}</option>`
+          )
+          .join("") +
+        `</select></div>` +
+        `</div>` +
+        `<div class="yard-form-actions">` +
+        `<button class="btn btn-primary" type="submit">${e.id ? "Save" : "Add plant"}</button>` +
+        `<button class="btn btn-small" type="button" data-action="cancel-plant">Cancel</button>` +
+        `</div>` +
+        `</form>`
+      );
+    }
+
+    _renderPlantList() {
+      if (!this._plants.length) {
+        return `<div class="empty">No plants yet. Add one to see its watering needs.</div>`;
+      }
+      const rows = this._plants
+        .map(
+          (p) =>
+            `<tr>` +
+            `<td>${escapeHtml(p.name)}</td>` +
+            `<td>${escapeHtml(this._catLabel(p.wucols_category))}</td>` +
+            `<td>${escapeHtml(String(p.canopy_area_sqft))} ft²</td>` +
+            `<td>${escapeHtml(this._zoneFriendly(p.zone_entity_id))}</td>` +
+            `<td class="yard-row-actions">` +
+            `<button class="btn btn-small" data-action="edit-plant" data-plant-id="${escapeAttr(
+              p.id
+            )}">Edit</button>` +
+            `<button class="btn btn-small btn-stop" data-action="delete-plant" data-plant-id="${escapeAttr(
+              p.id
+            )}" data-plant-name="${escapeAttr(p.name)}">Delete</button>` +
+            `</td></tr>`
+        )
+        .join("");
+      return (
+        `<h3 class="yard-h3">Plants (${this._plants.length})</h3>` +
+        `<div class="yard-table-wrap"><table class="yard-table">` +
+        `<thead><tr><th>Name</th><th>Category</th><th>Area</th><th>Zone</th><th></th></tr></thead>` +
+        `<tbody>${rows}</tbody></table></div>`
+      );
+    }
+
+    _renderYardReport() {
+      if (!this._yardReports.length) {
+        return this._plants.length
+          ? `<div class="empty">Add a schedule for these plants' zones to see the water report.</div>`
+          : "";
+      }
+      return (
+        `<h3 class="yard-h3">Per-loop design report</h3>` +
+        this._yardReports.map((r) => this._renderLoopReportCard(r)).join("")
+      );
+    }
+
+    _renderLoopReportCard(r) {
+      const zoneName = this._zoneFriendly(r.zone_entity_id);
+      const capStr = r.max_flow_gph != null ? ` / ${r.max_flow_gph} GPH line` : "";
+      const plantRows = (r.plants || [])
+        .map((p) => {
+          const status = (p.status || "").toLowerCase();
+          const pct =
+            p.pct_off != null
+              ? ` ${p.pct_off >= 0 ? "+" : ""}${Math.round(p.pct_off * 100)}%`
+              : "";
+          return (
+            `<tr>` +
+            `<td>${escapeHtml(p.name)}</td>` +
+            `<td>${escapeHtml(String(p.need_gal_week))} gal/wk</td>` +
+            `<td>${escapeHtml(this._emitterLabel(p.emitters))}</td>` +
+            `<td>${escapeHtml(String(p.delivered_gal_week))} gal/wk</td>` +
+            `<td><span class="yard-badge ${escapeAttr(status)}">${escapeHtml(
+              p.status
+            )}${escapeHtml(pct)}</span></td>` +
+            `</tr>`
+          );
+        })
+        .join("");
+      const warnings = (r.warnings || [])
+        .map((w) => `<li>⚠ ${escapeHtml(w)}</li>`)
+        .join("");
+      return (
+        `<div class="card yard-loop-card">` +
+        `<div class="yard-loop-head">` +
+        `<strong>${escapeHtml(zoneName)}</strong>` +
+        `<span class="muted">${r.runtime_minutes} min · ${this._fmtRuns(
+          r.runs_per_week
+        )}/wk · ${escapeHtml(String(r.total_flow_gph))} GPH${escapeHtml(
+          capStr
+        )} · suggested ${r.suggested_runtime_minutes} min</span>` +
+        `</div>` +
+        (plantRows
+          ? `<div class="yard-table-wrap"><table class="yard-table">` +
+            `<thead><tr><th>Plant</th><th>Needs</th><th>Emitters</th><th>Gets</th><th>Status</th></tr></thead>` +
+            `<tbody>${plantRows}</tbody></table></div>`
+          : "") +
+        (warnings ? `<ul class="yard-warnings">${warnings}</ul>` : "") +
+        `</div>`
+      );
+    }
+
     _renderSchedules() {
       return (
         `<header class="page-header">` +
@@ -4705,6 +5069,35 @@
         `.color-swatch-none{background:var(--ci-hover);color:var(--ci-text-2);font-size:13px;display:inline-flex;align-items:center;justify-content:center}` +
         `.btn-small{padding:6px 10px;font-size:12px}` +
         `.empty{background:var(--ci-card);border:1px dashed var(--ci-border);border-radius:12px;padding:24px;text-align:center;color:var(--ci-text-2)}` +
+        // v2 — Yard tab (plant-aware irrigation)
+        `.card{background:var(--ci-card);border:1px solid var(--ci-border);border-radius:12px;padding:16px;margin-bottom:14px}` +
+        `.muted{color:var(--ci-text-2);font-size:12px}` +
+        `.yard-intro h2{margin:0 0 4px}` +
+        `.yard-intro p{margin:0 0 14px;max-width:60ch}` +
+        `.yard-eto label{display:block;font-size:12px;color:var(--ci-text-2);margin-bottom:6px}` +
+        `.yard-eto-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}` +
+        `.yard-eto-row input{width:90px;padding:8px 10px;border:1px solid var(--ci-border);border-radius:6px;background:var(--ci-input-bg);color:inherit;font:inherit;box-sizing:border-box}` +
+        `.yard-add{margin-bottom:14px}` +
+        `.plant-form h3{margin:0 0 12px;font-size:15px}` +
+        `.plant-form label{display:block;font-size:12px;color:var(--ci-text-2);margin-bottom:4px}` +
+        `.plant-form input,.plant-form select{width:100%;padding:8px 10px;border:1px solid var(--ci-border);border-radius:6px;background:var(--ci-input-bg);color:inherit;font:inherit;box-sizing:border-box}` +
+        `.yard-form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}` +
+        `.yard-form-actions{display:flex;gap:8px;margin-top:14px}` +
+        `.yard-h3{margin:18px 0 8px;font-size:14px}` +
+        `.yard-table-wrap{overflow-x:auto}` +
+        `.yard-table{width:100%;border-collapse:collapse;font-size:13px}` +
+        `.yard-table th{text-align:left;font-weight:600;color:var(--ci-text-2);padding:6px 10px;border-bottom:1px solid var(--ci-border);white-space:nowrap}` +
+        `.yard-table td{padding:7px 10px;border-bottom:1px solid var(--ci-border);vertical-align:middle}` +
+        `.yard-row-actions{display:flex;gap:6px;justify-content:flex-end}` +
+        `.yard-loop-card{padding:14px 16px}` +
+        `.yard-loop-head{display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:8px}` +
+        `.yard-loop-head strong{font-size:14px}` +
+        `.yard-warnings{margin:10px 0 0;padding:0;list-style:none;font-size:12px}` +
+        `.yard-warnings li{margin:4px 0;color:#c77800}` +
+        `.yard-badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;white-space:nowrap}` +
+        `.yard-badge.ok{background:rgba(67,160,71,0.16);color:#2e7d32}` +
+        `.yard-badge.under{background:rgba(249,168,37,0.18);color:#b26a00}` +
+        `.yard-badge.over{background:rgba(219,68,55,0.16);color:#c62828}` +
         `.placeholder{background:var(--ci-card);border:1px solid var(--ci-border);border-radius:12px;padding:24px}` +
         // Modal
         `.modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:99}` +
