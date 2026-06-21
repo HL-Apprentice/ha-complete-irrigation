@@ -262,3 +262,16 @@ def test_delete_plant_schema_requires_id():
     assert _DELETE_PLANT_SCHEMA({"plant_id": "abc"}) == {"plant_id": "abc"}
     with pytest.raises(vol.Invalid):
         _DELETE_PLANT_SCHEMA({})
+
+
+def test_run_zone_schema_accepts_long_scheduled_durations():
+    """v1.24 — the run_zone 'minutes' cap was 60, which silently rejected every
+    scheduled run over 60 min (the long deep-watering zones never fired). It now
+    accepts up to the schedule cap (480 min)."""
+    from custom_components.complete_irrigation.services import _RUN_ZONE_SCHEMA
+
+    for mins in (135, 240, 300, 480):  # Shrubs / Citrus / Trees / max
+        result = _RUN_ZONE_SCHEMA({"entity_id": "switch.front_back_trees", "minutes": mins})
+        assert result["minutes"] == float(mins)
+    with pytest.raises(vol.Invalid):  # still bounded — no absurd values
+        _RUN_ZONE_SCHEMA({"entity_id": "switch.x", "minutes": 999})
