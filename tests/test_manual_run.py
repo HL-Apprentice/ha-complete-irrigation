@@ -53,6 +53,17 @@ def test_rejects_over_default_max_60():
 
 def test_custom_max_minutes():
     assert validate_run_duration(90, max_minutes=120) == 90
+
+
+def test_allows_long_scheduled_runs_v124():
+    # v1.24 regression: scheduled long runs (Shrubs 135, Citrus 240, Trees 300)
+    # dispatch through run_zone and must be accepted under the schedule cap
+    # (480). The old 60-min cap silently rejected every one of them.
+    assert validate_run_duration(135, 480) == 135
+    assert validate_run_duration(240, 480) == 240
+    assert validate_run_duration(300, 480) == 300
+    with pytest.raises(ValueError, match="exceeds max"):
+        validate_run_duration(481, 480)
     assert validate_run_duration(120, max_minutes=120) == 120
     with pytest.raises(ValueError, match="exceeds max"):
         validate_run_duration(121, max_minutes=120)
