@@ -836,6 +836,10 @@ class ScheduleCoordinator:
             adjusted_minutes,
             run.schedule_name,
         )
+        # Dispatch through run_zone. A run longer than the controller's
+        # per-activation cap (Rachio ~60 min) is split into back-to-back blocks
+        # inside handle_run_zone (v1.25) — the single funnel both scheduled and
+        # manual runs share — so nothing controller-specific lives here.
         try:
             await self._hass.services.async_call(
                 DOMAIN,

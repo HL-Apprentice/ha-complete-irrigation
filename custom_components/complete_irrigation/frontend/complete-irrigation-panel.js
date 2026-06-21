@@ -50,7 +50,9 @@
   // out of sync with manifest.json on most releases.
   const PANEL_VERSION = "v1.19.0";
   const DEFAULT_MANUAL_MINUTES = 10;
-  const MAX_MANUAL_MINUTES = 60;
+  const MAX_MANUAL_MINUTES = 480; // 8 h — matches the backend schedule cap; long
+  // runs are delivered in controller-cap blocks (v1.25). Was 60, which blocked
+  // manually running the deep-watering zones (Trees/Citrus/Shrubs) to full time.
   const MAX_SCHEDULE_MINUTES = 480; // 8 hours
 
   // Shared time-of-day formatter (v1.16 — extracted from two inline
@@ -4854,6 +4856,20 @@
             `<input name="duration_m" type="number" min="0" max="59" step="1" value="${durM}" aria-label="Minutes" />` +
             `<span class="duration-unit">m</span>` +
             `</div>` +
+            // v1.25 — controller-cap (Rachio) block-delivery notice.
+            ((this._scheduleEditor.duration_minutes || 0) >
+            (this._config?.controller_max_run_minutes || 58)
+              ? `<div class="block-notice">⚠ Longer than your controller's ${
+                  this._config?.controller_max_run_minutes || 58
+                }-minute per-zone limit. Rachio caps each activation, so this run is ` +
+                `delivered in ${Math.ceil(
+                  (this._scheduleEditor.duration_minutes || 0) /
+                    (this._config?.controller_max_run_minutes || 58)
+                )} blocks of up to ${
+                  this._config?.controller_max_run_minutes || 58
+                } min with a short gap between (off → reset → on), to comply with the ` +
+                `Rachio integration.</div>`
+              : "") +
             `</div>` +
             `</div>`
           );
@@ -5098,6 +5114,8 @@
         `.yard-badge.ok{background:rgba(67,160,71,0.16);color:#2e7d32}` +
         `.yard-badge.under{background:rgba(249,168,37,0.18);color:#b26a00}` +
         `.yard-badge.over{background:rgba(219,68,55,0.16);color:#c62828}` +
+        // v1.25 — controller-cap block-delivery notice in the schedule editor
+        `.block-notice{margin:8px 0 0;padding:8px 10px;border-radius:8px;font-size:12px;line-height:1.45;background:rgba(249,168,37,0.14);color:#b26a00;border:1px solid rgba(249,168,37,0.32)}` +
         `.placeholder{background:var(--ci-card);border:1px solid var(--ci-border);border-radius:12px;padding:24px}` +
         // Modal
         `.modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:99}` +

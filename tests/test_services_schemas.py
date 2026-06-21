@@ -183,6 +183,23 @@ def test_general_config_schema_accepts_admin_only_services():
     assert result["admin_only_services"] is False
 
 
+def test_general_config_schema_accepts_chunking_keys():
+    """v1.25 — controller_max_run_minutes (per-activation block size) +
+    block_gap_seconds tune the long-run chunking. Bounded so a typo can't set an
+    absurd value that would starve or hammer the controller."""
+    from custom_components.complete_irrigation.services import (
+        _SET_GENERAL_CONFIG_SCHEMA,
+    )
+
+    result = _SET_GENERAL_CONFIG_SCHEMA({"controller_max_run_minutes": 55, "block_gap_seconds": 45})
+    assert result["controller_max_run_minutes"] == 55
+    assert result["block_gap_seconds"] == 45
+    with pytest.raises(vol.Invalid):  # over the 480 ceiling
+        _SET_GENERAL_CONFIG_SCHEMA({"controller_max_run_minutes": 999})
+    with pytest.raises(vol.Invalid):  # under the 5s floor
+        _SET_GENERAL_CONFIG_SCHEMA({"block_gap_seconds": 1})
+
+
 def test_notification_schema_accepts_notify_on_aborted():
     """v1.17.8 — `notify_on_aborted` joins the notifications config
     blob alongside notify_on_missed + low_moisture_alerts. Validates

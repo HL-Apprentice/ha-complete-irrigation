@@ -4,6 +4,40 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.25.0 — 2026-06-21
+
+### Added — long runs delivered in controller-cap blocks (batch runs)
+
+- **Runs longer than the controller's per-activation cap are now split into
+  back-to-back blocks.** Rachio (and similar cloud controllers) cap each zone
+  activation at a fixed number of minutes (~60); v1.24 stopped rejecting long
+  runs, but a single >60-min activation is still truncated by the controller. A
+  long run is now delivered as cap-sized **blocks** with a short **gap** between
+  each (off -> gap -> on = a fresh activation the controller accepts, with its
+  manual-run timer reset). Example: Trees (300 min) -> `[58, 58, 58, 58, 58, 10]`,
+  six blocks, ~302 min wall-clock. The run history records each as
+  *"Trees (block 3/6)"*.
+- **Chunking lives in `run_zone`** — the single service both scheduled
+  (`_fire_run`) *and* manual runs funnel through — so a manual "Run Now" of a
+  long duration chunks identically. Each block re-uses the normal single-
+  activation path (auto-stop + external-off monitor per block); a run within the
+  cap takes that path unchanged.
+- **Default block size is 58 min**, two minutes under Rachio's 60-min limit so
+  our auto-stop ends each block before Rachio's own cutoff (no boundary race).
+  Tunable per install via two new `set_general_config` keys:
+  `controller_max_run_minutes` (block size) and `block_gap_seconds` (gap).
+- **Schedule editor notice:** when a schedule's duration exceeds the controller
+  cap, the editor now shows how many blocks it will be split into and why
+  (Rachio's per-zone limit).
+- **Manual "Run Now" cap raised to 8 h** in the panel (was 60 min), so a manual
+  deep-watering run can be requested at full duration and chunked.
+- **Stop / delete / reload truly stop a chunked run.** Each block timer is tracked
+  and the sequence is tagged with a per-zone generation; pressing Stop, deleting
+  the schedule, or reloading the integration cancels every pending block (and a
+  block that already slipped onto the loop re-checks the generation before
+  firing), so the valve can never re-open after you stop a long run. A new run on
+  a zone supersedes any still-pending sequence.
+
 ## v1.24.0 — 2026-06-21
 
 ### Fixed — long schedules never fired (the bug starving the deep-watering zones)

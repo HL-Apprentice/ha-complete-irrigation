@@ -30,6 +30,11 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.event import async_call_later, async_track_state_change_event
 from homeassistant.util import dt as dt_util
 
+from .chunked_run import (
+    DEFAULT_BLOCK_GAP_SECONDS,
+    DEFAULT_CONTROLLER_MAX_RUN_MIN,
+    plan_blocks,
+)
 from .const import DEFAULT_MANUAL_RUN_MINUTES, DOMAIN
 from .hydraulics import WUCOLS_FACTORS
 from .manual_run import ManualRun, validate_run_duration
@@ -365,6 +370,13 @@ _SET_GENERAL_CONFIG_SCHEMA = vol.Schema(
         # false so existing scripts/automations running as non-admin
         # contexts don't suddenly start failing.
         vol.Optional("admin_only_services"): cv.boolean,
+        # v1.25 — controller per-activation cap (block size) + inter-block gap
+        # for long-run chunking. Defaults (58 min / 30 s) suit Rachio; tune only
+        # if your controller's manual-run limit differs.
+        vol.Optional("controller_max_run_minutes"): vol.All(
+            vol.Coerce(int), vol.Range(min=5, max=480)
+        ),
+        vol.Optional("block_gap_seconds"): vol.All(vol.Coerce(int), vol.Range(min=5, max=600)),
     }
 )
 
@@ -378,6 +390,8 @@ _GENERAL_CONFIG_FIELDS: dict[str, Any] = {
     "weekly_reminder_snoozed_until": lambda v: v.isoformat() if v else None,
     "zone_order": lambda v: list(v),
     "admin_only_services": bool,  # v1.17.11
+    "controller_max_run_minutes": int,  # v1.25
+    "block_gap_seconds": int,  # v1.25
 }
 
 
@@ -509,6 +523,31 @@ def _clear_external_off(entry_data: dict[str, Any], entity_id: str) -> None:
         ext["pending"]()
 
 
+def _cancel_block_timers(entry_data: dict[str, Any], entity_id: str) -> None:
+    """v1.25 — cancel any pending chunked-run block timers for this zone and
+    invalidate the sequence.
+
+    A long run is delivered as back-to-back blocks scheduled with
+    async_call_later (see _dispatch_run_blocks). Without this, Stopping a zone
+    turned the valve off only for the *current* block while the queued later
+    blocks re-opened it — runaway re-watering after the user pressed Stop. Every
+    path that ends a run (Stop / delete_schedule / unload) and every new sequence
+    on the same zone calls this. We ADVANCE the generation FIRST so any block
+    timer already slipped onto the event loop becomes a no-op when it fires (it
+    re-checks the generation), then cancel the still-pending timers. The
+    generation only ever advances (never resets), so a superseding sequence can't
+    collide with a stale timer's id."""
+    seqs = entry_data.setdefault("block_seq", {})
+    seqs[entity_id] = seqs.get(entity_id, 0) + 1
+    for cancel in entry_data.get("block_timers", {}).pop(entity_id, []):
+        try:
+            cancel()
+        except Exception:
+            # A timer that already fired returns a cancel that's a harmless
+            # no-op; guard anyway so teardown never raises.
+            _LOGGER.debug("block-timer cancel for %s was already fired", entity_id)
+
+
 async def _notify_zone_failed(coord, friendly: str, message: str) -> None:
     """v1.16 — extracted from handle_run_zone. Sends a critical
     notification when a zone fails to start. No-op if coord or notifier
@@ -612,6 +651,71 @@ def _record_run_start_to_history(
     )
 
 
+def _dispatch_run_blocks(
+    hass: HomeAssistant,
+    entity_id: str,
+    entry_data: dict[str, Any],
+    blocks: list[int],
+    gap_seconds: int,
+    base_meta: dict[str, Any] | None,
+) -> None:
+    """v1.25 — deliver a >cap run as back-to-back cap-sized blocks (off -> gap ->
+    on each time = a fresh activation the controller accepts).
+
+    Block 1 fires now; blocks 2..n are scheduled at increasing offsets so each
+    starts after the previous block's water time + the gap. Every block is an
+    ordinary <=cap run_zone service call, so it re-uses the normal single-
+    activation path (auto-stop + external-off monitor) per block. Scheduled
+    metadata is carried into each block so the run history reads "name (block
+    i/n)"; manual blocks (no base_meta) just record as ordinary manual runs.
+
+    Cancellation safety: the scheduled-block timer handles are stored in
+    entry_data["block_timers"][entity_id] and the sequence is tagged with a
+    generation in entry_data["block_seq"][entity_id]. Stop / delete_schedule /
+    unload call _cancel_block_timers to cancel the pending timers and drop the
+    generation; each block also re-checks the generation when it fires, so a Stop
+    truly stops the run instead of letting later blocks re-open the valve. A new
+    sequence on the same zone supersedes any prior one.
+    """
+    # A fresh sequence supersedes any still-pending one on this zone.
+    # _cancel_block_timers advances the generation; that advanced value is this
+    # sequence's id (each block re-checks it before firing).
+    _cancel_block_timers(entry_data, entity_id)
+    gen = entry_data["block_seq"][entity_id]
+    timers = entry_data.setdefault("block_timers", {})
+    timers[entity_id] = []
+
+    n = len(blocks)
+    offset = 0
+    for i, block_min in enumerate(blocks):
+
+        def _fire(_now=None, bm=block_min, idx=i + 1, seq=gen):
+            # Skip if this sequence was cancelled / superseded since the timer was
+            # scheduled (Stop, delete_schedule, reload, or a newer run here).
+            if entry_data.get("block_seq", {}).get(entity_id) != seq:
+                return
+            if base_meta is not None:
+                meta = dict(base_meta)
+                base_name = base_meta.get("schedule_name") or ""
+                meta["schedule_name"] = f"{base_name} (block {idx}/{n})"
+                meta["requested_minutes"] = bm
+                entry_data.setdefault("pending_run_meta", {})[entity_id] = meta
+            hass.async_create_task(
+                hass.services.async_call(
+                    DOMAIN,
+                    SERVICE_RUN_ZONE,
+                    {"entity_id": entity_id, "minutes": bm},
+                    blocking=False,
+                )
+            )
+
+        if i == 0:
+            _fire()
+        else:
+            timers[entity_id].append(async_call_later(hass, offset, _fire))
+        offset += block_min * 60 + gap_seconds
+
+
 async def _async_register_services(hass: HomeAssistant) -> None:
     """Register both services. Idempotent — safe to call from multiple entries."""
 
@@ -636,6 +740,31 @@ async def _async_register_services(hass: HomeAssistant) -> None:
                 "run_zone called for %s, not a configured zone — ignoring",
                 entity_id,
             )
+            return
+
+        # v1.25 — controllers (Rachio) cap each zone activation at a fixed number
+        # of minutes; a longer run can't be delivered in one activation. Split it
+        # into back-to-back blocks (each <= the cap) with a short gap between
+        # (off -> gap -> on = a fresh activation each time). Both scheduled
+        # (_fire_run) and manual runs funnel through here, so this is the single
+        # place chunking belongs. A run within the cap falls through to the normal
+        # single-activation path below, UNCHANGED.
+        cfg = getattr(entry_data.get("coordinator"), "config", None) or {}
+        cap = int(cfg.get("controller_max_run_minutes", DEFAULT_CONTROLLER_MAX_RUN_MIN))
+        blocks = plan_blocks(minutes, cap)
+        if len(blocks) > 1:
+            gap_s = int(cfg.get("block_gap_seconds", DEFAULT_BLOCK_GAP_SECONDS))
+            base_meta = entry_data.get("pending_run_meta", {}).pop(entity_id, None)
+            _LOGGER.info(
+                "%s (%s min) exceeds the %d-min controller cap — delivering as "
+                "%d blocks with a %ds gap",
+                entity_id,
+                minutes,
+                cap,
+                len(blocks),
+                gap_s,
+            )
+            _dispatch_run_blocks(hass, entity_id, entry_data, blocks, gap_s, base_meta)
             return
 
         # Replace any existing run for this entity (cancel old timer + listener
@@ -890,6 +1019,10 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         entry_data["manual_runs"].stop(entity_id)
         _clear_external_off(entry_data, entity_id)
         _cancel_handles(entry_data, entity_id)
+        # v1.25 — cancel any pending chunked-run blocks so Stop truly stops the
+        # run; otherwise later blocks would re-open the valve after the user
+        # turned it off.
+        _cancel_block_timers(entry_data, entity_id)
         await hass.services.async_call(
             "switch",
             SERVICE_TURN_OFF,
@@ -1014,8 +1147,16 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         coord = _find_coordinator(hass)
         if coord is None:
             return
+        # Resolve the schedule's zone(s) BEFORE deleting so we can stop any
+        # chunked-run blocks in flight for them (v1.25).
+        sched = coord.schedule_store.get(data["schedule_id"])
         if coord.schedule_store.delete(data["schedule_id"]):
             await coord.async_save()
+            if sched is not None:
+                for step in sched.all_steps():
+                    ed = _find_entry_data(hass, step.zone_entity_id)
+                    if ed is not None:
+                        _cancel_block_timers(ed, step.zone_entity_id)
             _LOGGER.info("Deleted schedule %s", data["schedule_id"])
 
     async def handle_run_schedule(call: ServiceCall) -> None:
@@ -1463,3 +1604,14 @@ def _cleanup_entry_handles(entry_data: dict[str, Any]) -> None:
         if ext.get("pending"):
             ext["pending"]()
     external_off.clear()
+    # v1.25 — cancel any pending chunked-run block timers so a stale block can't
+    # fire run_zone after the entry is torn down (unload / reload).
+    block_timers = entry_data.get("block_timers", {})
+    for cancels in list(block_timers.values()):
+        for cancel in cancels:
+            try:
+                cancel()
+            except Exception:
+                _LOGGER.debug("block-timer cancel during cleanup was already fired")
+    block_timers.clear()
+    entry_data.get("block_seq", {}).clear()
