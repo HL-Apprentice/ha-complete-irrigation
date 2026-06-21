@@ -4,6 +4,35 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.23.0 — 2026-06-18
+
+### Added — plant-aware irrigation (the "Yard" tab)
+
+A new **🪴 Yard** tab turns the integration from a scheduler into a drip-design
+assistant: tell it what plants are on each zone and it sizes the emitters so
+every plant gets the right amount of water — even when they share a loop.
+
+- **Plants.** Add/edit/delete plants (name, **WUCOLS** water-use category,
+  canopy area, and the zone/loop they're on) via new `add_plant` /
+  `update_plant` / `delete_plant` services. Persisted in `.storage`.
+- **Reference ET.** `set_weather_config` now takes `eto_in_week` (+ optional
+  `drip_efficiency`) — the climate driver for the water math. Manual for now.
+- **Per-loop design report.** For each loop the Yard tab shows every plant's
+  weekly need, the **recommended emitter set** (e.g. "2×2 GPH"), delivered
+  water, and an OK / UNDER / OVER badge — using the standard landscape formula
+  `need = ETo × plant_factor × area × 0.623 / drip_efficiency`, then sizing
+  emitters to the loop's shared runtime.
+- **Honest warnings.** It flags what emitter tuning *can't* fix: plants too
+  mismatched to share a loop ("split the loop"), a loop whose total flow
+  exceeds the line capacity, and a zone that has plants but **no schedule
+  watering it** — instead of emitting a confident-but-wrong config.
+- New websocket reads `list_plants` and `yard_report` back the panel.
+
+All new logic is pure + unit-tested (hydraulics core, plant store, design
+bridge); the storage load path rejects non-finite/oversized values and skips a
+single corrupt record rather than failing the whole load. Pre-publish security
+gate run (privacy scrub + adversarial audit): zero blockers.
+
 ## v1.22.0 — 2026-06-16
 
 ### Fixed — long runs survive the Rachio per-zone cap

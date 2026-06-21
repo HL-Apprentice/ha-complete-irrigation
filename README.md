@@ -13,7 +13,7 @@
 
 A Home Assistant custom integration for complete, sensor-driven irrigation control. Works with any controller that exposes zone switches.
 
-> **Latest: v1.17.4.** Smoke-tested against a real HA container per the 3-check protocol every release. Back up your HA before installing; report bugs at the [issues page](https://github.com/HL-Apprentice/ha-complete-irrigation/issues). See [CHANGELOG.md](CHANGELOG.md) for what's new.
+> **Latest: v1.23.0.** Smoke-tested against a real HA container per the 3-check protocol every release. Back up your HA before installing; report bugs at the [issues page](https://github.com/HL-Apprentice/ha-complete-irrigation/issues). Security issues: see [SECURITY.md](SECURITY.md). See [CHANGELOG.md](CHANGELOG.md) for what's new.
 
 ## What it does
 
