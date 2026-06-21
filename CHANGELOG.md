@@ -4,6 +4,24 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.24.0 — 2026-06-21
+
+### Fixed — long schedules never fired (the bug starving the deep-watering zones)
+
+- **CRITICAL: any scheduled run longer than 60 minutes was silently rejected
+  and never ran.** `run_zone` — the single service every run (manual *and*
+  scheduled) dispatches through — capped `minutes` at a 60-minute "manual safety
+  cap" (both the voluptuous schema and `validate_run_duration`). Because
+  `coordinator._fire_run` fires scheduled runs through that same service, every
+  schedule over 60 min was rejected *before it could start*: **Shrubs (135),
+  Citrus (240), and Trees (300) produced zero run records and delivered no
+  water**, while the short zones (grass, garden, 60-min Flowers) ran fine. Plants
+  starved silently. The cap is now the schedule maximum (`MAX_SCHEDULE_DURATION_MIN`
+  = 480 min / 8 h), so long deep-watering schedules fire. (Rachio's separate
+  60-min *per-activation* hardware cap is handled by the v1.22 external-off
+  ride-through.) Regression tests added for both the schema and the duration
+  validator.
+
 ## v1.23.0 — 2026-06-18
 
 ### Added — plant-aware irrigation (the "Yard" tab)
