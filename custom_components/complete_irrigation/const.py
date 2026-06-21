@@ -93,7 +93,9 @@ DEFAULT_CASCADE_DEFER_LIMIT = 3
 # below its requested duration before the resolver prefers deferring it late.
 DEFAULT_COMPRESS_FLOOR_PCT = 70
 DEFAULT_MANUAL_RUN_MINUTES = 10
-MAX_MANUAL_RUN_MINUTES = 60  # safety cap on manual runs
+# (v1.24 removed MAX_MANUAL_RUN_MINUTES=60 — it was wrongly applied to scheduled
+#  runs via run_zone, silently blocking every schedule over 60 min. The single
+#  absolute cap is now MAX_SCHEDULE_DURATION_MIN=480 in services.py.)
 
 # Per-zone moisture defaults when the user hasn't configured min/target/max
 # (matches the "lawn" preset in PLANT_CATEGORIES above). Used by the

@@ -30,7 +30,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.event import async_call_later, async_track_state_change_event
 from homeassistant.util import dt as dt_util
 
-from .const import DEFAULT_MANUAL_RUN_MINUTES, DOMAIN, MAX_MANUAL_RUN_MINUTES
+from .const import DEFAULT_MANUAL_RUN_MINUTES, DOMAIN
 from .hydraulics import WUCOLS_FACTORS
 from .manual_run import ManualRun, validate_run_duration
 from .notifications import CATEGORY_CRITICAL  # v1.16: promoted from inline imports
@@ -84,12 +84,17 @@ SERVICE_DELETE_PLANT = "delete_plant"
 MAX_SCHEDULE_DURATION_MIN = 480  # 8 hours — safety cap for scheduled runs
 
 # Voluptuous schema for validation at the HA boundary.
+# v1.24 — CRITICAL: cap at MAX_SCHEDULE_DURATION_MIN, NOT a 60-min manual cap.
+# run_zone is the single entry point for BOTH manual runs AND scheduled runs
+# (coordinator._fire_run dispatches every scheduled run through it). A 60-min
+# cap here silently rejected every schedule longer than 60 min — the long
+# deep-watering zones (Shrubs 135, Citrus 240, Trees 300) never fired at all.
 _RUN_ZONE_SCHEMA = vol.Schema(
     {
         vol.Required("entity_id"): cv.entity_id,
         vol.Optional("minutes", default=DEFAULT_MANUAL_RUN_MINUTES): vol.All(
             vol.Coerce(float),
-            vol.Range(min=1, max=MAX_MANUAL_RUN_MINUTES),
+            vol.Range(min=1, max=MAX_SCHEDULE_DURATION_MIN),
         ),
     }
 )
@@ -619,7 +624,9 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         data = _RUN_ZONE_SCHEMA(dict(call.data))
         entity_id: str = data["entity_id"]
         try:
-            minutes = validate_run_duration(data["minutes"])
+            # v1.24 — cap at the schedule max (480), not 60: scheduled long
+            # runs flow through here too and must not be truncated/rejected.
+            minutes = validate_run_duration(data["minutes"], MAX_SCHEDULE_DURATION_MIN)
         except (TypeError, ValueError) as err:
             raise vol.Invalid(str(err)) from err
 
