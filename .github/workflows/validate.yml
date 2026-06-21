@@ -7,6 +7,12 @@ on:
     - cron: "0 6 * * *"
   workflow_dispatch:
 
+# Least privilege: this workflow only validates / lints / tests — it never
+# writes to the repo or uses secrets, so the default GITHUB_TOKEN is scoped
+# down to read-only.
+permissions:
+  contents: read
+
 jobs:
   hassfest:
     name: HA Hassfest validation
