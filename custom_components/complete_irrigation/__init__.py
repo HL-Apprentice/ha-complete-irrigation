@@ -228,11 +228,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await _async_register_services(hass)
 
     # WebSocket API commands for the panel.
+    from .health_view import async_register_health_view
     from .ical_view import async_register_ical_view
     from .ws_api import async_register_ws_commands
 
     async_register_ws_commands(hass)
     async_register_ical_view(hass)
+    async_register_health_view(hass)
 
     # v1.17 — listen for "Run now" taps from missed-run notifications.
     # Idempotent: only registered once per HA session even if multiple

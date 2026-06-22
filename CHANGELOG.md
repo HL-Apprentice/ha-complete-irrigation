@@ -4,6 +4,31 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.26.0 — 2026-06-22
+
+### Added — health.json status feed (foundation for the LLM monitor)
+
+- **New read-only endpoint `GET /api/complete_irrigation/health.json`** exposing
+  everything a watchdog needs to enforce "every plant gets its water, every time":
+  the schedules + cadence + each schedule's next planned run; the plants on each
+  loop with their drips / volume (WUCOLS x ETo design); recent run outcomes + what
+  is running now; and a **pre-computed list of misses** (aborted / skipped / short
+  runs in the last 24 h) so a consumer has a deterministic alarm signal even when
+  the LLM is unavailable.
+- `requires_auth=True` (same as the iCal feed) — schedule / plant / occupancy data
+  leaks landscaping patterns, so the feed is not reachable unauthenticated; a
+  monitor authenticates with a long-lived access token.
+- Pure helpers `health_view._detect_misses` / `_cadence_summary` covered by
+  `test_health_view.py`. This is the first half of the LLM irrigation monitor; the
+  mini-side watchdog (Qwen reasoning against the prime directive) consumes it.
+
+### CI
+
+- HACS validation no longer runs on `pull_request` events. `hacs/action` re-fetches
+  the PR head branch, which 404s ("branch removed / not compliant") if the PR was
+  merged + branch-deleted while the job was queued — a spurious red on the closed
+  PR. Push/main/tag runs still validate the structure.
+
 ## v1.25.0 — 2026-06-21
 
 ### Added — long runs delivered in controller-cap blocks (batch runs)

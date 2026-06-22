@@ -1,0 +1,205 @@
+"""Health JSON view — machine-readable irrigation status for the LLM monitor.
+
+Serves a read-only JSON document at /api/complete_irrigation/health.json with
+everything the watchdog needs to enforce the prime directive ("every plant gets
+its water, every time; detect a miss within one cycle"):
+
+  • the schedule + cadence and each schedule's next planned run,
+  • which plants are on each loop and their drips / volume (the WUCOLS x ETo
+    water-need design),
+  • the recent run outcomes + what's running now,
+  • a PRE-COMPUTED list of misses (aborted / skipped / short runs in the last
+    24 h) so a consumer has a deterministic alarm signal even when the LLM is
+    unavailable — the model then adds judgment (cadence-overdue, under-watered)
+    on top.
+
+Read-only. requires_auth=True (same as the iCal feed): schedule / plant /
+occupancy data leaks landscaping patterns, so it must not be reachable
+unauthenticated. The monitor authenticates with a long-lived access token.
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import timedelta
+from typing import TYPE_CHECKING
+
+from homeassistant.components.http import HomeAssistantView
+
+from .const import DOMAIN
+from .hydraulics import DEFAULT_EFFICIENCY
+from .plant_design import build_yard_report, serialize_loop_report
+from .run_history import STATUS_ABORTED, STATUS_COMPLETED, STATUS_SKIPPED
+from .run_planner import next_runs
+
+if TYPE_CHECKING:
+    from homeassistant.core import HomeAssistant
+
+_LOGGER = logging.getLogger(__name__)
+
+_SCHEMA_VERSION = 1
+_NEXT_RUN_LOOKAHEAD_DAYS = 7
+_RECENT_RUNS = 40
+_MISS_WINDOW_HOURS = 24
+_SHORT_RUN_FRACTION = 0.8  # completed but < 80% of requested = cut short
+
+_WEEKDAY_ABBR = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+
+def _cadence_summary(sched) -> str:
+    """Human-readable firing cadence for a schedule (for the LLM to reason about
+    'overdue')."""
+    mode = getattr(sched, "mode", "weekdays")
+    if mode == "interval_hours" and sched.interval_hours:
+        return f"every {sched.interval_hours}h"
+    if mode == "interval" and sched.interval_days:
+        return f"every {sched.interval_days}d"
+    days = getattr(sched, "weekdays", ()) or ()
+    valid = [d for d in sorted(days) if 0 <= d <= 6]
+    if valid:
+        return "weekly: " + ",".join(_WEEKDAY_ABBR[d] for d in valid)
+    return mode
+
+
+def _detect_misses(history, now):
+    """Pure scan of recent records for aborted / skipped / short runs in the last
+    `_MISS_WINDOW_HOURS`. Returns (issues, aborted, skipped, short).
+
+    This is the deterministic floor of the monitor: a consumer can alarm on these
+    without ever calling the LLM (defense-in-depth for "this miss can't happen")."""
+    from homeassistant.util import dt as dt_util
+
+    cutoff = now - timedelta(hours=_MISS_WINDOW_HOURS)
+    issues: list[str] = []
+    aborted = skipped = short = 0
+    for rec in history:
+        started = dt_util.parse_datetime(rec.started_at) if rec.started_at else None
+        if started is None or started < cutoff:
+            continue
+        when = dt_util.as_local(started).strftime("%a %H:%M")
+        name = rec.zone_name or rec.zone_entity_id
+        req = int(rec.requested_minutes or 0)
+        act = int(rec.actual_minutes or 0)
+        if rec.status == STATUS_ABORTED:
+            aborted += 1
+            issues.append(f"{name} ABORTED at {act}/{req} min ({rec.reason or 'unknown'}) - {when}")
+        elif rec.status == STATUS_SKIPPED:
+            skipped += 1
+            issues.append(f"{name} SKIPPED ({rec.reason or 'unknown'}) - {when}")
+        elif rec.status == STATUS_COMPLETED and req > 0 and act < req * _SHORT_RUN_FRACTION:
+            short += 1
+            issues.append(f"{name} SHORT {act}/{req} min - {when}")
+    return issues, aborted, skipped, short
+
+
+class IrrigationHealthView(HomeAssistantView):
+    """Read-only JSON status feed for the LLM irrigation monitor."""
+
+    url = f"/api/{DOMAIN}/health.json"
+    name = f"{DOMAIN}:health_json"
+    requires_auth = True
+
+    async def get(self, request):
+        from aiohttp import web
+        from homeassistant.util import dt as dt_util
+
+        from . import find_coordinator
+
+        hass: HomeAssistant = request.app["hass"]
+        coord = find_coordinator(hass)
+        if coord is None:
+            return web.json_response(
+                {
+                    "schema_version": _SCHEMA_VERSION,
+                    "ok": False,
+                    "error": "no coordinator configured",
+                },
+                status=503,
+            )
+
+        now = dt_util.now()
+
+        # Next planned run per schedule (raw scheduled intent — earliest start).
+        planned = next_runs(
+            coord.schedule_store.enabled_schedules(),
+            from_dt=now,
+            until_dt=now + timedelta(days=_NEXT_RUN_LOOKAHEAD_DAYS),
+        )
+        next_by_sched: dict[str, str] = {}
+        for r in planned:
+            next_by_sched.setdefault(r.schedule_id, r.start_at.isoformat())
+
+        schedules = [
+            {
+                "id": s.id,
+                "name": s.name,
+                "enabled": s.enabled,
+                "zones": [step.zone_entity_id for step in s.all_steps()],
+                "duration_minutes": s.duration_minutes,
+                "cadence": _cadence_summary(s),
+                "next_run_at": next_by_sched.get(s.id),
+            }
+            for s in coord.schedule_store.all()
+        ]
+
+        # Plants + drips/volume per loop (WUCOLS x ETo design).
+        eto = float(coord.config.get("eto_in_week", 1.5))
+        efficiency = float(coord.config.get("drip_efficiency", DEFAULT_EFFICIENCY))
+        try:
+            loops = [
+                serialize_loop_report(rep)
+                for rep in build_yard_report(
+                    coord.plants.all(), coord.schedule_store.all(), eto, efficiency
+                )
+            ]
+        except Exception as err:  # the health feed must never 500 on design math
+            _LOGGER.debug("yard report failed for health feed: %s", err)
+            loops = []
+
+        history = coord.run_history.all()
+        recent = [rec.to_dict() for rec in history[:_RECENT_RUNS]]
+        running = [
+            {
+                "zone": rec.zone_entity_id,
+                "zone_name": rec.zone_name,
+                "schedule": rec.schedule_name,
+                "source": rec.source,
+                "started_at": rec.started_at,
+                "requested_minutes": rec.requested_minutes,
+            }
+            for rec in coord.run_history.running_records()
+        ]
+
+        issues, aborted, skipped, short = _detect_misses(history, now)
+
+        return web.json_response(
+            {
+                "schema_version": _SCHEMA_VERSION,
+                "generated_at": now.isoformat(),
+                "controller": {
+                    "busy": bool(running),
+                    "running": running,
+                    "lockout_until": (
+                        coord.lockout_until.isoformat() if coord.lockout_until else None
+                    ),
+                },
+                "schedules": schedules,
+                "loops": loops,
+                "recent_runs": recent,
+                "health": {
+                    "ok": not issues,
+                    "window_hours": _MISS_WINDOW_HOURS,
+                    "aborted": aborted,
+                    "skipped": skipped,
+                    "short": short,
+                    "issues": issues,
+                },
+            }
+        )
+
+
+def async_register_health_view(hass: HomeAssistant) -> None:
+    """Register the health JSON view. Idempotent."""
+    if hass.http is None:
+        return
+    hass.http.register_view(IrrigationHealthView())

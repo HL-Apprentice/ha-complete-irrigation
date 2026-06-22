@@ -148,6 +148,12 @@ class RunHistoryStore:
                 return r
         return None
 
+    def running_records(self) -> list[RunHistoryRecord]:
+        """v1.26 — every record still in STATUS_RUNNING (at most one per zone).
+        Surfaced in the health.json feed as the controller's currently-running
+        zones, so the LLM monitor knows what's live this cycle."""
+        return [r for r in self._records if r.status == STATUS_RUNNING]
+
     # ── Write — start a run ──────────────────────────────────────
 
     def start_run(
