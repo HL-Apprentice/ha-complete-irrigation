@@ -246,11 +246,37 @@ def test_prune_drops_records_older_than_retention_days():
     assert len(s.all()) == 1
 
 
-def test_prune_enforces_hard_cap():
+def test_prune_enforces_hard_cap_on_loaded_records():
+    # v1.27 — inserts are capped live, so the only way to exceed HARD_RECORD_CAP is
+    # loading a persisted store from before that cap existed. prune() (run at load)
+    # trims it back down even though every record is within retention.
+    base = datetime(2026, 5, 1, tzinfo=UTC)
+    raw = [
+        {
+            "id": f"r{i}",
+            "started_at": (base + timedelta(minutes=i)).isoformat(),
+            "zone_entity_id": f"switch.z{i}",
+            "zone_name": f"Z{i}",
+            "requested_minutes": 1,
+            "status": STATUS_COMPLETED,
+            "source": SOURCE_MANUAL,
+        }
+        for i in range(HARD_RECORD_CAP + 5)
+    ]
+    s = RunHistoryStore.from_serializable(raw)
+    assert len(s.all()) == HARD_RECORD_CAP + 5  # load does NOT trim
+    removed = s.prune(now=datetime(2026, 5, 15, tzinfo=UTC), retention_days=90)
+    assert removed == 5
+    assert len(s.all()) == HARD_RECORD_CAP
+
+
+def test_hard_cap_enforced_at_insert_without_prune():
+    """v1.27 — the hard cap holds on every insert (not only at prune/load), so the
+    in-memory list stays bounded between HA restarts. Without this, _records grows
+    unbounded until the next restart."""
     s = RunHistoryStore()
     base = datetime(2026, 5, 1, tzinfo=UTC)
-    # Insert HARD_RECORD_CAP + 5 records, all within retention
-    for i in range(HARD_RECORD_CAP + 5):
+    for i in range(HARD_RECORD_CAP + 50):
         s.start_run(
             zone_entity_id=f"switch.z{i}",
             zone_name=f"Z{i}",
@@ -258,9 +284,26 @@ def test_prune_enforces_hard_cap():
             source=SOURCE_MANUAL,
             started_at=base + timedelta(minutes=i),
         )
-    # All within 90 days, but hard_cap should still trim to 1000
-    removed = s.prune(now=datetime(2026, 5, 15, tzinfo=UTC), retention_days=90)
-    assert removed == 5
+    # No prune() and no reload — the cap held purely via inserts.
+    assert len(s.all()) == HARD_RECORD_CAP
+    # Newest-first: the most recent insert is at the head; the oldest were dropped.
+    assert s.all()[0].zone_entity_id == f"switch.z{HARD_RECORD_CAP + 49}"
+    assert all(r.zone_entity_id != "switch.z0" for r in s.all())
+
+
+def test_record_skipped_also_respects_hard_cap_at_insert():
+    s = RunHistoryStore()
+    base = datetime(2026, 5, 1, tzinfo=UTC)
+    for i in range(HARD_RECORD_CAP + 10):
+        s.record_skipped(
+            zone_entity_id=f"switch.z{i}",
+            zone_name=f"Z{i}",
+            requested_minutes=5,
+            schedule_id="s",
+            schedule_name="S",
+            fired_at=base + timedelta(minutes=i),
+            reason="moisture",
+        )
     assert len(s.all()) == HARD_RECORD_CAP
 
 

@@ -156,6 +156,15 @@ class RunHistoryStore:
 
     # ── Write — start a run ──────────────────────────────────────
 
+    def _enforce_hard_cap(self) -> None:
+        """Keep at most HARD_RECORD_CAP records, dropping the oldest. Called on
+        every insert so the in-memory list stays bounded BETWEEN HA restarts —
+        prune() only runs at load and is the one that does age-based retention.
+        The list is newest-first (every insert is at index 0), so the tail is the
+        oldest."""
+        if len(self._records) > HARD_RECORD_CAP:
+            del self._records[HARD_RECORD_CAP:]
+
     def start_run(
         self,
         *,
@@ -200,6 +209,7 @@ class RunHistoryStore:
             triggers=dict(triggers or {}),
         )
         self._records.insert(0, rec)
+        self._enforce_hard_cap()
         return rec
 
     # ── Write — complete / abort a run ───────────────────────────
@@ -291,6 +301,7 @@ class RunHistoryStore:
             source=SOURCE_SCHEDULED,
         )
         self._records.insert(0, rec)
+        self._enforce_hard_cap()
         return rec
 
     # ── Retention ────────────────────────────────────────────────

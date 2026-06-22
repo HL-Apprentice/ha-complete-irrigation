@@ -4,6 +4,19 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.27.0 — 2026-06-22
+
+### Fixed — run-history stays bounded between restarts
+
+- **The 1000-record hard cap is now enforced on every insert**, not only at load.
+  `prune()` (which also does age-based retention) runs only at coordinator startup,
+  so between restarts `run_history` could grow past the cap — a slow leak that also
+  made the new `health.json` scans O(n) in record count. `start_run` /
+  `record_skipped` now trim the oldest records beyond `HARD_RECORD_CAP` on insert,
+  so the list is always bounded. (Surfaced as a LOW finding by the v1.26
+  health-endpoint security gate; the stale "pruned on each tick" comment is
+  corrected.)
+
 ## v1.26.0 — 2026-06-22
 
 ### Added — health.json status feed (foundation for the LLM monitor)
