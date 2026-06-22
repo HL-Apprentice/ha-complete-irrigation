@@ -198,7 +198,9 @@ class ScheduleCoordinator:
         # already prompted about, so the prompt doesn't fire daily.
         self._establishment_prompted: set[str] = set()
         # Run history (v1.14): every completed / skipped / aborted run.
-        # Loaded in async_setup, pruned at load + on each tick boundary.
+        # Loaded in async_setup; prune() runs at load (age-based retention), and
+        # the hard record cap is enforced on every insert (v1.27) so the list
+        # stays bounded between restarts.
         self._run_history: RunHistoryStore = RunHistoryStore()
         # v2 — the yard's plants (plant-aware irrigation). Loaded in
         # async_setup; mutated via the add/update/delete_plant services.
