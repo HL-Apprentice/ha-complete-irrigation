@@ -1,0 +1,126 @@
+"""Reference evapotranspiration (ETo) from weather — FAO-56 Penman-Monteith.
+
+Pure logic, HA-free. Wraps the vendored PyETO (BSD-3-Clause, (c) 2015 Mark
+Richards; see pyeto/LICENSE.txt) to compute daily ETo from the weather a HA
+weather entity / sensors provide, then a weekly total in INCHES to feed the
+existing plant water-need math (need = ETo_in x plant_factor x area x 0.623 /
+drip_efficiency) — replacing the MANUAL `eto_in_week`.
+
+Graceful degradation (the way Smart Irrigation does it): full FAO-56 Penman-
+Monteith when humidity + wind are available; temperature-only **Hargreaves** when
+they aren't. Solar radiation is used if measured, else estimated from the daily
+temperature range. So it produces a sane ETo even on sparse sensors.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from . import pyeto
+
+MM_PER_INCH = 25.4
+
+
+@dataclass(frozen=True)
+class DayWeather:
+    """One day's weather. tmin/tmax are required; everything else is optional and
+    drives whether we can run full Penman-Monteith or fall back to Hargreaves."""
+
+    tmin_c: float
+    tmax_c: float
+    wind_m_s: float | None = None
+    rh_min: float | None = None
+    rh_max: float | None = None
+    rh_mean: float | None = None
+    dewpoint_c: float | None = None
+    pressure_kpa: float | None = None
+    solar_rad_mj: float | None = None  # measured MJ m-2 day-1, if available
+
+
+def _actual_vapour_pressure(day: DayWeather) -> float | None:
+    """Actual vapour pressure [kPa] from the best humidity source available, or
+    None if there is no humidity data (-> Hargreaves)."""
+    svp_min = pyeto.svp_from_t(day.tmin_c)
+    svp_max = pyeto.svp_from_t(day.tmax_c)
+    if day.dewpoint_c is not None:
+        return pyeto.avp_from_tdew(day.dewpoint_c)
+    if day.rh_min is not None and day.rh_max is not None:
+        return pyeto.avp_from_rhmin_rhmax(svp_min, svp_max, day.rh_min, day.rh_max)
+    if day.rh_max is not None:
+        return pyeto.avp_from_rhmax(svp_min, day.rh_max)
+    if day.rh_mean is not None:
+        return pyeto.avp_from_rhmean(svp_min, svp_max, day.rh_mean)
+    return None
+
+
+def daily_eto_mm(
+    day: DayWeather,
+    *,
+    latitude_deg: float,
+    altitude_m: float,
+    day_of_year: int,
+    coastal: bool = False,
+) -> float:
+    """Reference ETo [mm] for one day. Full FAO-56 Penman-Monteith when humidity +
+    wind are present; otherwise temperature-only Hargreaves. Never negative."""
+    lat = pyeto.deg2rad(latitude_deg)
+    sd = pyeto.sol_dec(day_of_year)
+    sha = pyeto.sunset_hour_angle(lat, sd)
+    ird = pyeto.inv_rel_dist_earth_sun(day_of_year)
+    et_rad = pyeto.et_rad(lat, sd, sha, ird)
+    cs_rad = pyeto.cs_rad(altitude_m, et_rad)
+    tmean = (day.tmin_c + day.tmax_c) / 2
+
+    avp = _actual_vapour_pressure(day)
+    if avp is None or day.wind_m_s is None:
+        # Not enough for Penman-Monteith -> Hargreaves (temperature only).
+        return max(0.0, pyeto.hargreaves(day.tmin_c, day.tmax_c, tmean, et_rad))
+
+    sol_rad = day.solar_rad_mj
+    if sol_rad is None:
+        sol_rad = pyeto.sol_rad_from_t(et_rad, cs_rad, day.tmin_c, day.tmax_c, coastal)
+    svp = pyeto.mean_svp(day.tmin_c, day.tmax_c)
+    delta = pyeto.delta_svp(tmean)
+    pressure = day.pressure_kpa if day.pressure_kpa else pyeto.atm_pressure(altitude_m)
+    psy = pyeto.psy_const(pressure)
+    ni_sw = pyeto.net_in_sol_rad(sol_rad)
+    no_lw = pyeto.net_out_lw_rad(
+        pyeto.celsius2kelvin(day.tmin_c), pyeto.celsius2kelvin(day.tmax_c), sol_rad, cs_rad, avp
+    )
+    eto = pyeto.fao56_penman_monteith(
+        pyeto.net_rad(ni_sw, no_lw),
+        pyeto.celsius2kelvin(tmean),
+        day.wind_m_s,
+        svp,
+        avp,
+        delta,
+        psy,
+    )
+    return max(0.0, eto)
+
+
+def weekly_eto_inches(
+    days: list[DayWeather],
+    *,
+    latitude_deg: float,
+    altitude_m: float,
+    start_day_of_year: int,
+    coastal: bool = False,
+) -> float:
+    """Total weekly ETo in INCHES from a list of consecutive days (a weather
+    forecast). Normalizes the daily mean up to a full 7-day week so a 5-day
+    forecast still yields a weekly figure comparable to the manual eto_in_week."""
+    if not days:
+        return 0.0
+    total_mm = sum(
+        daily_eto_mm(
+            d,
+            latitude_deg=latitude_deg,
+            altitude_m=altitude_m,
+            day_of_year=start_day_of_year + i,
+            coastal=coastal,
+        )
+        for i, d in enumerate(days)
+    )
+    mean_mm = total_mm / len(days)
+    return (mean_mm * 7) / MM_PER_INCH
