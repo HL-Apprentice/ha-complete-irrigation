@@ -43,6 +43,8 @@ from .coordinator_logic import (
     compute_low_moisture_offenders,
     detect_sensor_offline_transitions,
 )
+from .et_calc import select_eto, weekly_eto_inches_from_forecast
+from .hydraulics import DEFAULT_ETO_IN_WEEK
 from .moisture_gate import COMBINE_AVERAGE, combine_moisture, evaluate_moisture
 from .notifications import (
     CATEGORY_IMPORTANT,
@@ -213,6 +215,14 @@ class ScheduleCoordinator:
         # _soak_cooldown[zone_id] = datetime — no re-attempts until then
         self._soak_state: dict[str, dict] = {}
         self._soak_cooldown: dict[str, Any] = {}
+        # v1.28 — auto ETo from weather (FAO-56). Refreshed daily at 03:00 and
+        # whenever eto_auto is toggled on; effective_eto() falls back to the
+        # manual eto_in_week when auto is off, never computed, or stale, so the
+        # design math always has a positive number. In-memory by design — a
+        # fresh forecast is fetched at startup if auto is on.
+        self._auto_eto_in_week: float | None = None
+        self._auto_eto_at: datetime | None = None
+        self._cancel_eto = None
 
     @property
     def schedule_store(self) -> ScheduleStore:
@@ -313,6 +323,16 @@ class ScheduleCoordinator:
             self._hass, self._fire_weekly_reminder, hour=8, minute=0, second=0
         )
 
+        # v1.28 — auto ETo: refresh the FAO-56 figure daily at 03:00 (after
+        # midnight, before the morning watering window). If auto is already
+        # enabled, fetch one immediately so the design math isn't manual-only
+        # until the first 03:00 after a restart.
+        self._cancel_eto = async_track_time_change(
+            self._hass, self._refresh_auto_eto, hour=3, minute=0, second=0
+        )
+        if self._config.get("eto_auto"):
+            self._hass.async_create_task(self._refresh_auto_eto())
+
         # PRD #78 — one-shot 7-day post-install reminder. Tracked in
         # coordinator config so it only fires once per integration setup,
         # not on every HA restart.
@@ -373,6 +393,7 @@ class ScheduleCoordinator:
             "_cancel_summary",
             "_cancel_weekly",
             "_cancel_post_install",
+            "_cancel_eto",
         ):
             cancel = getattr(self, cancel_attr, None)
             if cancel:
@@ -1241,3 +1262,114 @@ class ScheduleCoordinator:
             except (TypeError, ValueError):
                 continue
         return None
+
+    # ── Auto ETo (FAO-56 from the weather forecast) ───────────────
+
+    def _resolve_weather_entity(self) -> str | None:
+        """The weather entity to pull a forecast from: the configured
+        `weather_entity`, else the first available weather.* entity."""
+        ent = self._config.get("weather_entity")
+        if ent:
+            return ent
+        ids = self._hass.states.async_entity_ids("weather")
+        return ids[0] if ids else None
+
+    def _eto_decision(self) -> tuple[float, str]:
+        """(value, source) for the reference ETo — auto when enabled+fresh,
+        else the manual figure. Pure policy lives in et_calc.select_eto."""
+        from homeassistant.util import dt as dt_util
+
+        age_h = None
+        if self._auto_eto_at is not None:
+            age_h = (dt_util.now() - self._auto_eto_at).total_seconds() / 3600
+        return select_eto(
+            manual=self._config.get("eto_in_week"),
+            auto_value=self._auto_eto_in_week,
+            auto_enabled=bool(self._config.get("eto_auto")),
+            auto_age_hours=age_h,
+            default=DEFAULT_ETO_IN_WEEK,
+        )
+
+    def effective_eto(self) -> float:
+        """Reference ETo (in/week) the design math should use right now. Always
+        a positive number — auto (FAO-56 from weather) when enabled and fresh,
+        otherwise the manual eto_in_week (or the default). Never raises."""
+        return self._eto_decision()[0]
+
+    def eto_status(self) -> dict[str, Any]:
+        """Snapshot of the ETo source + values for the Yard UI / health feed."""
+        value, source = self._eto_decision()
+        manual = self._config.get("eto_in_week")
+        try:
+            manual = float(manual) if manual is not None else DEFAULT_ETO_IN_WEEK
+        except (TypeError, ValueError):
+            manual = DEFAULT_ETO_IN_WEEK
+        return {
+            "eto_in_week": value,  # what the math uses (back-compat key)
+            "eto_source": source,
+            "eto_auto": bool(self._config.get("eto_auto")),
+            "eto_manual": manual,
+            "eto_auto_value": self._auto_eto_in_week,
+            "eto_auto_at": self._auto_eto_at.isoformat() if self._auto_eto_at else None,
+            "weather_entity": self._resolve_weather_entity(),
+        }
+
+    async def _refresh_auto_eto(self, now=None) -> None:
+        """Recompute the auto ETo from the weather entity's daily forecast.
+
+        No-op unless eto_auto is enabled. Any failure (no entity, service error,
+        empty/unusable forecast, computed 0) leaves the previous value untouched
+        so effective_eto() falls back to the manual figure — we never water on a
+        guess. Wired to a daily 03:00 timer + an immediate call when toggled on."""
+        if not self._config.get("eto_auto"):
+            return
+        entity = self._resolve_weather_entity()
+        if not entity:
+            _LOGGER.debug("auto-ETo: no weather entity available")
+            return
+        state = self._hass.states.get(entity)
+        if state is None:
+            _LOGGER.debug("auto-ETo: weather entity %s has no state", entity)
+            return
+        try:
+            resp = await self._hass.services.async_call(
+                "weather",
+                "get_forecasts",
+                {"entity_id": entity, "type": "daily"},
+                blocking=True,
+                return_response=True,
+            )
+        except Exception as err:
+            _LOGGER.warning("auto-ETo: forecast fetch failed for %s: %s", entity, err)
+            return
+        forecast = (resp or {}).get(entity, {}).get("forecast") or []
+        if not forecast:
+            _LOGGER.debug("auto-ETo: %s returned no daily forecast", entity)
+            return
+
+        from homeassistant.util import dt as dt_util
+
+        now_local = dt_util.now()
+        try:
+            eto = weekly_eto_inches_from_forecast(
+                forecast,
+                latitude_deg=float(self._hass.config.latitude),
+                altitude_m=float(self._hass.config.elevation or 0.0),
+                temp_unit=state.attributes.get("temperature_unit"),
+                wind_unit=state.attributes.get("wind_speed_unit"),
+                start_day_of_year=now_local.timetuple().tm_yday,
+            )
+        except Exception as err:
+            _LOGGER.warning("auto-ETo: computation failed for %s: %s", entity, err)
+            return
+        if eto <= 0:
+            _LOGGER.debug("auto-ETo: %s forecast yielded 0 — keeping fallback", entity)
+            return
+        self._auto_eto_in_week = round(eto, 3)
+        self._auto_eto_at = now_local
+        _LOGGER.info(
+            "auto-ETo: %.2f in/week from %s (%d-day forecast)",
+            self._auto_eto_in_week,
+            entity,
+            len(forecast),
+        )

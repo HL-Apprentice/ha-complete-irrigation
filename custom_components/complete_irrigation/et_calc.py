@@ -199,3 +199,42 @@ def weekly_eto_inches_from_forecast(
         start_day_of_year=start_day_of_year,
         coastal=coastal,
     )
+
+
+# ── Source selection (auto vs manual) — pure policy, HA-free ──────────
+
+DEFAULT_AUTO_STALE_HOURS = 36.0
+
+
+def select_eto(
+    *,
+    manual: float | None,
+    auto_value: float | None,
+    auto_enabled: bool,
+    auto_age_hours: float | None,
+    default: float,
+    stale_hours: float = DEFAULT_AUTO_STALE_HOURS,
+) -> tuple[float, str]:
+    """Pick the reference ETo (in/week) the design math should use, with graceful
+    fallback. Returns (value, source) where source is 'auto' or 'manual'.
+
+    Auto wins ONLY when it's enabled, positive, and fresh (age <= stale_hours, so a
+    dark weather feed can't strand us on a days-old number). Otherwise the manual
+    value — or `default` when manual is missing/invalid/non-positive. Never raises,
+    always returns a positive value, so callers can trust it for water math."""
+    try:
+        m = float(manual) if manual is not None else default
+    except (TypeError, ValueError):
+        m = default
+    if m <= 0:
+        m = default
+    if not auto_enabled:
+        return m, "manual"
+    if (
+        auto_value is not None
+        and auto_value > 0
+        and auto_age_hours is not None
+        and auto_age_hours <= stale_hours
+    ):
+        return float(auto_value), "auto"
+    return m, "manual"

@@ -271,8 +271,12 @@ _SET_WEATHER_CONFIG_SCHEMA = vol.Schema(
         vol.Optional("wind_sensor"): cv.entity_id,
         vol.Optional("wind_defer_mph"): vol.All(vol.Coerce(float), vol.Range(min=0, max=80)),
         # v2 — reference evapotranspiration (in/week) + drip efficiency drive
-        # the plant-aware water calculator. Manual for now; an ET feed later.
+        # the plant-aware water calculator. eto_in_week is the MANUAL figure;
+        # v1.28 eto_auto computes it from the weather forecast (FAO-56) and
+        # falls back to this manual value when the feed is missing/stale.
         vol.Optional("eto_in_week"): vol.All(vol.Coerce(float), vol.Range(min=0.1, max=10)),
+        vol.Optional("eto_auto"): cv.boolean,
+        vol.Optional("weather_entity"): cv.entity_id,
         vol.Optional("drip_efficiency"): vol.All(vol.Coerce(float), vol.Range(min=0.5, max=1.0)),
     }
 )
@@ -1345,6 +1349,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         coord = _find_coordinator(hass)
         if coord is None:
             return
+        eto_was_auto = bool(coord.config.get("eto_auto"))
         for key in (
             "rain_sensor",
             "rain_sensors",
@@ -1354,6 +1359,8 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             "wind_sensor",
             "wind_defer_mph",
             "eto_in_week",
+            "eto_auto",
+            "weather_entity",
             "drip_efficiency",
         ):
             if key in data:
@@ -1365,6 +1372,11 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         if rs_list:
             coord.config["rain_sensor"] = rs_list[0]
         await coord.async_save_config()
+        # v1.28 — if auto ETo just turned on (or the weather entity changed
+        # while it's on), fetch a fresh figure now rather than waiting for the
+        # daily 03:00 refresh.
+        if coord.config.get("eto_auto") and (not eto_was_auto or "weather_entity" in data):
+            hass.async_create_task(coord._refresh_auto_eto())
         _LOGGER.info("Weather config updated: %s", data)
 
     async def handle_set_zone_moisture(call: ServiceCall) -> None:

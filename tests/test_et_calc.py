@@ -15,6 +15,7 @@ from custom_components.complete_irrigation.et_calc import (
     _to_m_s,
     daily_eto_mm,
     day_from_forecast,
+    select_eto,
     weekly_eto_inches,
     weekly_eto_inches_from_forecast,
 )
@@ -135,3 +136,63 @@ def test_weekly_from_forecast_empty_or_unusable_is_zero():
         )
         == 0.0
     )
+
+
+# ── source selection (auto vs manual fallback) ───────────────────────
+
+DEF = 1.5  # the integration's DEFAULT_ETO_IN_WEEK
+
+
+def test_select_eto_auto_off_uses_manual():
+    assert select_eto(
+        manual=2.0, auto_value=3.0, auto_enabled=False, auto_age_hours=1.0, default=DEF
+    ) == (2.0, "manual")
+
+
+def test_select_eto_auto_on_fresh_uses_auto():
+    assert select_eto(
+        manual=2.0, auto_value=3.1, auto_enabled=True, auto_age_hours=2.0, default=DEF
+    ) == (3.1, "auto")
+
+
+def test_select_eto_auto_on_but_stale_falls_back_to_manual():
+    # 40h old > 36h staleness window -> don't water on a days-old number.
+    assert select_eto(
+        manual=2.0, auto_value=3.1, auto_enabled=True, auto_age_hours=40.0, default=DEF
+    ) == (2.0, "manual")
+
+
+def test_select_eto_auto_on_no_value_yet_falls_back():
+    assert select_eto(
+        manual=2.0, auto_value=None, auto_enabled=True, auto_age_hours=None, default=DEF
+    ) == (2.0, "manual")
+
+
+def test_select_eto_auto_zero_value_falls_back():
+    assert select_eto(
+        manual=2.0, auto_value=0.0, auto_enabled=True, auto_age_hours=1.0, default=DEF
+    ) == (2.0, "manual")
+
+
+def test_select_eto_manual_missing_or_invalid_uses_default():
+    assert select_eto(
+        manual=None, auto_value=None, auto_enabled=False, auto_age_hours=None, default=DEF
+    ) == (DEF, "manual")
+    assert select_eto(
+        manual="bad", auto_value=None, auto_enabled=False, auto_age_hours=None, default=DEF
+    ) == (DEF, "manual")
+    # Non-positive manual is nonsensical for water math -> default.
+    assert select_eto(
+        manual=0.0, auto_value=None, auto_enabled=False, auto_age_hours=None, default=DEF
+    ) == (DEF, "manual")
+
+
+def test_select_eto_always_returns_positive():
+    # Every degraded path still yields a usable positive number.
+    for kw in (
+        dict(manual=None, auto_value=None, auto_enabled=True, auto_age_hours=None),
+        dict(manual=-1, auto_value=-2, auto_enabled=True, auto_age_hours=99),
+        dict(manual=None, auto_value=None, auto_enabled=False, auto_age_hours=None),
+    ):
+        value, _ = select_eto(default=DEF, **kw)
+        assert value > 0
