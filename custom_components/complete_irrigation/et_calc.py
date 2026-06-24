@@ -124,3 +124,78 @@ def weekly_eto_inches(
     )
     mean_mm = total_mm / len(days)
     return (mean_mm * 7) / MM_PER_INCH
+
+
+# ── HA weather-forecast adaptation (unit conversion -> DayWeather) ────
+# Kept here (pure) so the finicky unit handling is unit-tested without HA. The
+# coordinator does the async forecast fetch + reads the entity's unit attributes,
+# then hands the raw forecast list to weekly_eto_inches_from_forecast().
+
+_WIND_TO_M_S = {
+    "m/s": 1.0,
+    "km/h": 1.0 / 3.6,
+    "kmh": 1.0 / 3.6,
+    "mph": 0.44704,
+    "mi/h": 0.44704,
+    "kn": 0.514444,
+    "kt": 0.514444,
+    "knot": 0.514444,
+    "ft/s": 0.3048,
+}
+
+
+def _to_celsius(value: float, unit: str | None) -> float:
+    u = str(unit or "").strip().lower().replace("°", "")
+    if u in ("f", "fahrenheit"):
+        return (float(value) - 32.0) * 5.0 / 9.0
+    return float(value)  # assume Celsius (HA's default and FAO unit)
+
+
+def _to_m_s(value: float, unit: str | None) -> float:
+    u = str(unit or "").strip().lower()
+    return float(value) * _WIND_TO_M_S.get(u, 1.0)  # unknown -> assume m/s
+
+
+def day_from_forecast(
+    entry: dict, *, temp_unit: str | None, wind_unit: str | None
+) -> DayWeather | None:
+    """Map one HA daily-forecast dict to a DayWeather (units -> C / m/s). Needs
+    both `temperature` (high) and `templow` (low); returns None otherwise (so that
+    day is skipped). A daily forecast carries one `humidity` -> rh_mean."""
+    tmax, tmin = entry.get("temperature"), entry.get("templow")
+    if tmax is None or tmin is None:
+        return None
+    wind = entry.get("wind_speed")
+    rh = entry.get("humidity")
+    return DayWeather(
+        tmin_c=_to_celsius(tmin, temp_unit),
+        tmax_c=_to_celsius(tmax, temp_unit),
+        wind_m_s=_to_m_s(wind, wind_unit) if wind is not None else None,
+        rh_mean=float(rh) if rh is not None else None,
+    )
+
+
+def weekly_eto_inches_from_forecast(
+    forecast: list[dict],
+    *,
+    latitude_deg: float,
+    altitude_m: float,
+    temp_unit: str | None,
+    wind_unit: str | None,
+    start_day_of_year: int,
+    coastal: bool = False,
+) -> float:
+    """Weekly ETo [inches] from a HA daily forecast (the coordinator's entry point).
+    Returns 0.0 if no day in the forecast has both a high and a low."""
+    days = [
+        d
+        for d in (day_from_forecast(e, temp_unit=temp_unit, wind_unit=wind_unit) for e in forecast)
+        if d is not None
+    ]
+    return weekly_eto_inches(
+        days,
+        latitude_deg=latitude_deg,
+        altitude_m=altitude_m,
+        start_day_of_year=start_day_of_year,
+        coastal=coastal,
+    )

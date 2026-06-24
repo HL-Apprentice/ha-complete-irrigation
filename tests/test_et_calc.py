@@ -11,8 +11,12 @@ from __future__ import annotations
 from custom_components.complete_irrigation.et_calc import (
     MM_PER_INCH,
     DayWeather,
+    _to_celsius,
+    _to_m_s,
     daily_eto_mm,
+    day_from_forecast,
     weekly_eto_inches,
+    weekly_eto_inches_from_forecast,
 )
 
 PHX = {"latitude_deg": 33.4, "altitude_m": 337, "day_of_year": 180}
@@ -80,3 +84,54 @@ def test_hotter_day_means_more_eto():
     cooler = daily_eto_mm(_phx_day(tmax_c=35.0), **PHX)
     hotter = daily_eto_mm(_phx_day(tmax_c=45.0), **PHX)
     assert hotter > cooler
+
+
+# ── forecast adaptation + unit conversion ────────────────────────────
+
+FC_PHX = {"latitude_deg": 33.4, "altitude_m": 337, "start_day_of_year": 180}
+
+
+def test_unit_conversions():
+    assert abs(_to_celsius(212, "°F") - 100.0) < 1e-6
+    assert abs(_to_celsius(25, "°C") - 25.0) < 1e-6
+    assert abs(_to_m_s(3.6, "km/h") - 1.0) < 1e-6
+    assert abs(_to_m_s(1.0, "mph") - 0.44704) < 1e-6
+    assert abs(_to_m_s(1.0, "kn") - 0.514444) < 1e-6
+    assert abs(_to_m_s(5.0, "m/s") - 5.0) < 1e-6
+
+
+def test_day_from_forecast_converts_metric():
+    d = day_from_forecast(
+        {"temperature": 42.0, "templow": 25.0, "humidity": 25, "wind_speed": 7.2},
+        temp_unit="°C",
+        wind_unit="km/h",
+    )
+    assert d is not None
+    assert abs(d.tmax_c - 42.0) < 1e-6 and abs(d.tmin_c - 25.0) < 1e-6
+    assert abs(d.wind_m_s - 2.0) < 1e-6  # 7.2 km/h
+    assert d.rh_mean == 25.0
+
+
+def test_day_from_forecast_missing_low_is_none():
+    assert day_from_forecast({"temperature": 42.0}, temp_unit="°C", wind_unit="m/s") is None
+
+
+def test_weekly_from_forecast_metric_and_imperial_agree():
+    # The same physical day expressed in metric vs imperial must give the same ETo.
+    metric = [{"temperature": 42.0, "templow": 25.0, "humidity": 25, "wind_speed": 7.2}] * 5
+    imperial = [{"temperature": 107.6, "templow": 77.0, "humidity": 25, "wind_speed": 4.4704}] * 5
+    wk_m = weekly_eto_inches_from_forecast(metric, temp_unit="°C", wind_unit="km/h", **FC_PHX)
+    wk_i = weekly_eto_inches_from_forecast(imperial, temp_unit="°F", wind_unit="mph", **FC_PHX)
+    assert abs(wk_m - wk_i) < 0.01, (wk_m, wk_i)
+    assert 2.0 < wk_m < 2.7
+
+
+def test_weekly_from_forecast_empty_or_unusable_is_zero():
+    assert weekly_eto_inches_from_forecast([], temp_unit="°C", wind_unit="m/s", **FC_PHX) == 0.0
+    # No templow -> day skipped -> nothing usable -> 0 (coordinator falls back to manual).
+    assert (
+        weekly_eto_inches_from_forecast(
+            [{"temperature": 42.0}], temp_unit="°C", wind_unit="m/s", **FC_PHX
+        )
+        == 0.0
+    )
