@@ -3008,6 +3008,122 @@
       return `<div class="empty"><p>No zones configured. Re-run setup from Settings → Devices & services.</p></div>`;
     }
 
+    _zoneRunningNowPerPlan(entityId) {
+      // v1.30 — true if a non-skipped planned run for this zone is in its live
+      // window right now (same signal the Today calendar uses for "Running
+      // now"). Skipped runs are already excluded from _plannedRunsByDate.
+      const now = new Date();
+      const iso =
+        now.getFullYear() +
+        "-" +
+        String(now.getMonth() + 1).padStart(2, "0") +
+        "-" +
+        String(now.getDate()).padStart(2, "0");
+      const todays = this._plannedRunsByDate && this._plannedRunsByDate.get(iso);
+      if (!todays || !todays.length) return false;
+      const nowMin = now.getHours() * 60 + now.getMinutes();
+      return todays.some(
+        (r) =>
+          r.zone_entity_id === entityId &&
+          r.start_minutes <= nowMin &&
+          nowMin < r.start_minutes + r.duration_minutes
+      );
+    }
+
+    _groupHistoryRows(records) {
+      // v1.30 — collapse a chunked run's consecutive "Base (block i/n)" records
+      // into one session group. Records are newest-first, so a session reads as
+      // n/n … 1/n (strictly descending index); a non-descending index or a
+      // different (zone, base, n) starts a new session.
+      const BLOCK_RE = /^(.*) \(block (\d+)\/(\d+)\)$/;
+      const out = [];
+      let group = null;
+      const close = () => {
+        if (group) {
+          out.push(group);
+          group = null;
+        }
+      };
+      for (const r of records) {
+        const m = (r.schedule_name || "").match(BLOCK_RE);
+        if (!m) {
+          close();
+          out.push(r);
+          continue;
+        }
+        const base = m[1];
+        const idx = parseInt(m[2], 10);
+        const n = parseInt(m[3], 10);
+        if (
+          group &&
+          group.zone_entity_id === r.zone_entity_id &&
+          group.base === base &&
+          group.n === n &&
+          idx < group.minIdx
+        ) {
+          group.blocks.push(r);
+          group.minIdx = idx;
+        } else {
+          close();
+          group = {
+            session: true,
+            base,
+            n,
+            minIdx: idx,
+            zone_entity_id: r.zone_entity_id,
+            zone_name: r.zone_name,
+            schedule_id: r.schedule_id,
+            blocks: [r],
+          };
+        }
+      }
+      close();
+      return out;
+    }
+
+    _meaningfulTriggerKeys(triggers) {
+      // v1.30 — keys of triggers that actually changed/gated the run. Hides the
+      // coordinator's no-op breadcrumbs (a gate that was disabled, inapplicable,
+      // or evaluated-but-took-no-action) so History isn't cluttered with
+      // "moisture, wind, hot_weather" on every row.
+      if (!triggers || typeof triggers !== "object") return [];
+      const keep = [];
+      for (const key of Object.keys(triggers)) {
+        const v = triggers[key] || {};
+        if (v.disabled_by_config || v.all_sensors_excluded || v.ignored_by_schedule) continue;
+        if (key === "wind" && !v.deferred) continue; // evaluated but didn't defer
+        if (key === "hot_weather" && !v.boost_applied) continue; // evaluated but no boost
+        if (key === "moisture") {
+          const acted = v.decision === "skip" || v.decision === "skip_no_reading" || v.adjusted_minutes != null;
+          if (!acted) continue; // passed/ok with no adjustment — no effect
+        }
+        keep.push(key);
+      }
+      return keep;
+    }
+
+    _zoneRunningNowPerPlan(entityId) {
+      // v1.30 — true if a non-skipped planned run for this zone is in its live
+      // window right now (same signal the Today calendar uses for "Running
+      // now"). Skipped runs are already excluded from _plannedRunsByDate.
+      const now = new Date();
+      const iso =
+        now.getFullYear() +
+        "-" +
+        String(now.getMonth() + 1).padStart(2, "0") +
+        "-" +
+        String(now.getDate()).padStart(2, "0");
+      const todays = this._plannedRunsByDate && this._plannedRunsByDate.get(iso);
+      if (!todays || !todays.length) return false;
+      const nowMin = now.getHours() * 60 + now.getMinutes();
+      return todays.some(
+        (r) =>
+          r.zone_entity_id === entityId &&
+          r.start_minutes <= nowMin &&
+          nowMin < r.start_minutes + r.duration_minutes
+      );
+    }
+
     _renderZoneTile(zone) {
       const isHidden = this._hiddenZones.has(zone.entityId);
       const countdown = this._localRuns[zone.entityId];
@@ -3026,6 +3142,13 @@
         ? ` of ${totalMinutes} min`
         : "";
 
+      // v1.30 — the raw switch reads OFF during a chunked run's inter-block
+      // gaps and during Rachio state-poll lag, which made the card say "Idle"
+      // while the Today calendar said "Running now". Treat the zone as running
+      // when the schedule's live window covers now too, so the two can't disagree.
+      const runningPerPlan = !zone.on && zone.available && this._zoneRunningNowPerPlan(zone.entityId);
+      const showRunning = zone.on || runningPerPlan;
+
       let statusClass, statusLabel;
       if (!zone.available) {
         statusClass = "unavailable";
@@ -3035,12 +3158,15 @@
         statusLabel = isCountingDown
           ? `Running — ${cdSpan} left${totalLabel}`
           : "Running";
+      } else if (runningPerPlan) {
+        statusClass = "running";
+        statusLabel = "Running"; // per the schedule (switch off between blocks)
       } else {
         statusClass = "idle";
         statusLabel = "Idle";
       }
 
-      const action = zone.on
+      const action = showRunning
         ? `<button class="btn btn-stop" data-action="stop" data-entity-id="${escapeAttr(
             zone.entityId
           )}">⏹ Stop${isCountingDown ? " (" + cdSpan + ")" : ""}</button>`
@@ -3617,13 +3743,19 @@
         const reason = r.reason
           ? `<span class="history-reason">${escapeHtml(r.reason)}</span>`
           : "";
-        const hasTriggers = r.triggers && Object.keys(r.triggers).length > 0;
+        // v1.30 — only surface triggers that actually AFFECTED this run. The
+        // coordinator writes breadcrumbs for disabled / no-effect gates (e.g.
+        // {wind:{deferred:false}}, {moisture:{disabled_by_config:true}}) which
+        // cluttered every row with "moisture, wind, hot_weather". Hide those;
+        // the full blob is still available on expand.
+        const meaningfulKeys = this._meaningfulTriggerKeys(r.triggers);
+        const hasMeaningful = meaningfulKeys.length > 0;
         const expanded = this._historyExpanded.has(r.id);
-        const triggerCell = hasTriggers
-          ? `<button class="btn btn-small history-trigger-toggle" data-action="history-toggle-triggers" data-record-id="${escapeAttr(r.id)}">${expanded ? "▾" : "▸"} ${Object.keys(r.triggers).map(escapeHtml).join(", ")}</button>`
+        const triggerCell = hasMeaningful
+          ? `<button class="btn btn-small history-trigger-toggle" data-action="history-toggle-triggers" data-record-id="${escapeAttr(r.id)}">${expanded ? "▾" : "▸"} ${meaningfulKeys.map(escapeHtml).join(", ")}</button>`
           : `<span class="history-dim">—</span>`;
         const expandedBlock =
-          expanded && hasTriggers
+          expanded && hasMeaningful
             ? `<tr class="history-expanded-row"><td colspan="6"><pre class="history-triggers">${escapeHtml(JSON.stringify(r.triggers, null, 2))}</pre></td></tr>`
             : "";
         return (
@@ -3639,8 +3771,57 @@
         );
       };
 
-      const rowsHtml = filtered.length
-        ? filtered.map(fmtRow).join("")
+      // v1.30 — collapse a chunked run's "(block i/n)" records into ONE session
+      // row with a progress bar (i of n blocks done), instead of N short rows.
+      const fmtSessionRow = (g) => {
+        const blocks = g.blocks;
+        const starts = blocks.map((b) => Date.parse(b.started_at)).filter(isFinite);
+        const startedAt = starts.length
+          ? new Date(Math.min(...starts))
+          : new Date(blocks[blocks.length - 1].started_at);
+        const dateStr = startedAt.toLocaleString(undefined, {
+          month: "short",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+        });
+        const n = g.n;
+        const completed = blocks.filter((b) => b.status === "completed").length;
+        const runningAny = blocks.some((b) => b.status === "running");
+        const abortedAny = blocks.some((b) => b.status === "aborted");
+        const delivered = blocks.reduce((s, b) => s + (b.actual_minutes || 0), 0);
+        const pct = Math.round((completed / Math.max(1, n)) * 100);
+        const sessStatus = runningAny
+          ? "running"
+          : completed >= n
+            ? "completed"
+            : abortedAny
+              ? "aborted"
+              : "running";
+        const meaningful = Array.from(
+          new Set(blocks.flatMap((b) => this._meaningfulTriggerKeys(b.triggers)))
+        );
+        const triggerCell = meaningful.length
+          ? `<span class="history-dim">${meaningful.map(escapeHtml).join(", ")}</span>`
+          : `<span class="history-dim">—</span>`;
+        return (
+          `<tr class="history-row history-row-${sessStatus}">` +
+          `<td class="history-when">${escapeHtml(dateStr)}</td>` +
+          `<td class="history-zone">${escapeHtml(g.zone_name || g.zone_entity_id)}</td>` +
+          `<td class="history-schedule">${escapeHtml(g.base)} <span class="history-dim">(${n} blocks)</span></td>` +
+          `<td class="history-duration">${delivered} min</td>` +
+          `<td class="history-status-cell">${statusBadge(sessStatus)}` +
+          `<div class="history-block-progress" title="${completed} of ${n} blocks completed">` +
+          `<div class="history-block-bar" style="width:${pct}%"></div></div>` +
+          `<span class="history-block-count">${completed}/${n} blocks</span></td>` +
+          `<td class="history-triggers-cell">${triggerCell}</td>` +
+          `</tr>`
+        );
+      };
+
+      const grouped = this._groupHistoryRows(filtered);
+      const rowsHtml = grouped.length
+        ? grouped.map((g) => (g.session ? fmtSessionRow(g) : fmtRow(g))).join("")
         : `<tr><td colspan="6" class="history-empty">No runs match these filters.</td></tr>`;
 
       const loadingNote = !this._runHistoryLoaded
@@ -5320,6 +5501,9 @@
         `.history-status-aborted{background:rgba(219,68,55,0.18);color:#c62828}` +
         `.history-status-running{background:rgba(3,169,244,0.18);color:var(--ci-accent)}` +
         `.history-trigger-toggle{font-size:11px;padding:3px 8px}` +
+        `.history-block-progress{display:inline-block;vertical-align:middle;width:70px;height:6px;border-radius:3px;background:var(--ci-border,#444);margin:0 6px;overflow:hidden}` +
+        `.history-block-bar{height:100%;background:#43a047;border-radius:3px}` +
+        `.history-block-count{font-size:11px;color:var(--ci-text-2,#aaa)}` +
         `.history-expanded-row td{background:var(--ci-hover)}` +
         `.history-triggers{margin:0;font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--ci-text);white-space:pre-wrap}` +
         `.history-empty{text-align:center;color:var(--ci-text-2);padding:24px}` +
