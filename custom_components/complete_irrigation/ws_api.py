@@ -16,7 +16,7 @@ import voluptuous as vol
 from homeassistant.components import websocket_api
 
 from .const import DOMAIN
-from .hydraulics import DEFAULT_EFFICIENCY, DEFAULT_ETO_IN_WEEK
+from .hydraulics import DEFAULT_EFFICIENCY
 from .plant_design import build_yard_report, serialize_loop_report
 
 if TYPE_CHECKING:
@@ -250,15 +250,18 @@ async def yard_report(hass, connection, msg):
     if coord is None:
         connection.send_result(msg["id"], {"reports": [], "eto_in_week": None})
         return
-    eto = float(coord.config.get("eto_in_week", DEFAULT_ETO_IN_WEEK))
+    # v1.28 — effective_eto() is auto (FAO-56 from weather) when enabled+fresh,
+    # else the manual figure; eto_status() carries the source for the UI.
+    status = coord.eto_status()
+    eto = float(status["eto_in_week"])
     eff = float(coord.config.get("drip_efficiency", DEFAULT_EFFICIENCY))
     reports = build_yard_report(coord.plants.all(), coord.schedule_store.all(), eto, eff)
     connection.send_result(
         msg["id"],
         {
             "reports": [serialize_loop_report(r) for r in reports],
-            "eto_in_week": eto,
             "drip_efficiency": eff,
+            **status,
         },
     )
 

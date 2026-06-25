@@ -4,6 +4,37 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.28.0 — 2026-06-23
+
+### Added — automatic reference ET from the weather forecast (FAO-56)
+
+- **Reference ET (ETo) can now be computed automatically from your weather
+  entity's daily forecast** instead of being entered by hand. Turn on
+  *Auto reference ET from weather forecast* in the Yard tab (or pass
+  `eto_auto: true` to `complete_irrigation.set_weather_config`) and the
+  integration recomputes the weekly ETo daily at 03:00 — before the morning
+  watering window — plus immediately when you toggle it on.
+- **Physics:** full **FAO-56 Penman-Monteith** when the forecast carries humidity
+  and wind; a temperature-only **Hargreaves** estimate when it doesn't (solar
+  radiation is estimated from the daily temperature range when not measured). So
+  it yields a sane ETo even on a sparse forecast. Computation is unit-aware
+  (handles °F/°C and mph / km/h / kn / etc.) and uses your HA latitude + elevation.
+- **Graceful by design:** `effective_eto()` falls back to your manual `eto_in_week`
+  whenever auto is off, has never produced a value, is stale (older than 36 h — so
+  a weather feed going dark can't strand watering on a days-old number), or is
+  **outside the sane 0–10 in/week envelope** the manual field already enforces (so a
+  flaky forecast — a provider field-swap or unit glitch — can never over-water the
+  yard). The design math always gets a positive number; it never raises. The manual
+  field becomes the labeled fallback when auto is on. A forecast spanning year-end
+  is handled (day-of-year wraps 1–366 instead of tripping the ETo range check).
+- **New `set_weather_config` fields:** `eto_auto` (bool) and `weather_entity`
+  (which `weather.*` entity to read; defaults to the first available). The
+  `health.json` feed gains an `eto` block (source / manual / auto value +
+  timestamp / weather entity) for the LLM monitor.
+- **Attribution:** bundles a trimmed copy of **PyETO** (FAO-56 / Hargreaves
+  equations) by Mark Richards, BSD-3-Clause — see
+  `custom_components/complete_irrigation/pyeto/LICENSE.txt`.
+
 ## v1.27.0 — 2026-06-22
 
 ### Fixed — run-history stays bounded between restarts
