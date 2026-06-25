@@ -42,6 +42,7 @@ from .coordinator_logic import (
     compute_expired_establishment_schedules,
     compute_low_moisture_offenders,
     detect_sensor_offline_transitions,
+    plan_session_resume,
 )
 from .et_calc import SANE_ETO_MAX, select_eto, weekly_eto_inches_from_forecast
 from .hydraulics import DEFAULT_ETO_IN_WEEK
@@ -79,6 +80,10 @@ TICK_SECONDS = 60
 # the run. Longer gaps fall back to "now" — long outages would otherwise
 # burst-fire every missed run, which floods the irrigation system.
 _MISSED_LOOKBACK_MIN = 5
+# v1.30 — restart fail-over: how long after startup to wait before resuming an
+# interrupted run, so switch integrations (Rachio etc.) have time to come back
+# online before we re-assert the valve.
+_RESUME_DELAY_SECONDS = 30
 
 # v1.19 — auto-soak defaults + give-up cooldown. After soak_max_cycles
 # fail to raise moisture above min_pct, the zone won't re-attempt for
@@ -223,6 +228,9 @@ class ScheduleCoordinator:
         self._auto_eto_in_week: float | None = None
         self._auto_eto_at: datetime | None = None
         self._cancel_eto = None
+        # v1.30 — restart fail-over: a one-shot timer that resumes any run
+        # interrupted by an HA restart (see _resume_interrupted_runs).
+        self._cancel_resume = None
 
     @property
     def schedule_store(self) -> ScheduleStore:
@@ -361,6 +369,17 @@ class ScheduleCoordinator:
                     lambda _now: self._hass.async_create_task(self._fire_post_install_reminder()),
                 )
 
+        # v1.30 — restart fail-over. If HA restarted mid-run, the in-memory
+        # auto-stop / chunked-block timers were lost but the run's session was
+        # persisted. Resume (or close out) it after a short delay so switch
+        # integrations are back online before we re-assert a valve.
+        if self._config.get("active_run_sessions"):
+            self._cancel_resume = async_call_later(
+                self._hass,
+                _RESUME_DELAY_SECONDS,
+                lambda _now: self._hass.async_create_task(self._resume_interrupted_runs()),
+            )
+
         _LOGGER.info(
             "Schedule coordinator started for entry %s — %d schedule(s) loaded",
             self._entry_id,
@@ -394,6 +413,7 @@ class ScheduleCoordinator:
             "_cancel_weekly",
             "_cancel_post_install",
             "_cancel_eto",
+            "_cancel_resume",
         ):
             cancel = getattr(self, cancel_attr, None)
             if cancel:
@@ -1381,3 +1401,56 @@ class ScheduleCoordinator:
             entity,
             len(forecast),
         )
+
+    # ── Restart fail-over (v1.30) ─────────────────────────────────
+
+    async def _resume_interrupted_runs(self, _now=None) -> None:
+        """Resume (or close out) runs interrupted by an HA restart. For each
+        persisted session: still within its planned window -> re-fire run_zone
+        for the remaining minutes (re-chunks a giant); past its end -> drop it,
+        force the valve off, and complete any 'zombie' running record. Bad/garbage
+        session data fails safe to close (never resumes on a guess)."""
+        from homeassistant.util import dt as dt_util
+
+        sessions = dict(self._config.get("active_run_sessions") or {})
+        if not sessions:
+            return
+        entry_data = self._hass.data.get(DOMAIN, {}).get(self._entry_id)
+        for item in plan_session_resume(sessions, dt_util.now()):
+            zone = item["zone"]
+            if item["action"] == "resume":
+                remaining = item["remaining_minutes"]
+                meta = item.get("session") or {}
+                base_name = (meta.get("schedule_name") or "").strip()
+                # Stash meta so the resumed run records under its schedule (marked
+                # resumed) and isn't mistaken for a fresh chunk block.
+                if isinstance(entry_data, dict):
+                    entry_data.setdefault("pending_run_meta", {})[zone] = {
+                        "schedule_id": meta.get("schedule_id"),
+                        "schedule_name": f"{base_name} (resumed)" if base_name else "Resumed",
+                        "requested_minutes": remaining,
+                        "triggers": {
+                            "resumed": {"after_restart": True, "remaining_minutes": remaining}
+                        },
+                    }
+                await self._hass.services.async_call(
+                    DOMAIN, "run_zone", {"entity_id": zone, "minutes": remaining}, blocking=False
+                )
+                _LOGGER.info(
+                    "Restart fail-over: resuming %s for %d more min (to its planned end)",
+                    zone,
+                    remaining,
+                )
+            else:
+                self._config.get("active_run_sessions", {}).pop(zone, None)
+                await self._hass.services.async_call(
+                    "switch", "turn_off", {"entity_id": zone}, blocking=False
+                )
+                self._run_history.complete_run(zone, ended_at=dt_util.now())
+                _LOGGER.info(
+                    "Restart fail-over: %s was already past its planned end — "
+                    "closed out + valve off",
+                    zone,
+                )
+        await self.async_save_config()
+        await self.async_save_run_history()

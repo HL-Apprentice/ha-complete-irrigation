@@ -11,8 +11,53 @@ Re-exported via coordinator.py to preserve every existing import path.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
+from datetime import datetime
 from typing import Any
+
+
+def plan_session_resume(
+    sessions: dict[str, dict],
+    now: datetime,
+    *,
+    min_resume_seconds: int = 60,
+    hard_cap_minutes: int = 480,
+) -> list[dict]:
+    """v1.30 restart fail-over — decide, per persisted active-run session, whether
+    to RESUME it (the run was interrupted by an HA restart and still has time left
+    before its scheduled end) or CLOSE it (it would have finished during the
+    outage). Pure; the coordinator does the actual HA I/O.
+
+    Each session carries at least ``deadline`` (ISO timestamp of the run's planned
+    end) and optionally ``total_minutes``. Returns one dict per zone:
+        {zone, action: "resume"|"close", remaining_minutes, session}.
+    A session with a missing/unparseable deadline (or a tz mismatch vs ``now``) is
+    CLOSED — fail safe: turn the valve off rather than resume on bad data."""
+    out: list[dict] = []
+    for zone, s in sorted(sessions.items()):
+        s = s or {}
+        try:
+            deadline = datetime.fromisoformat(s["deadline"])
+            remaining = (deadline - now).total_seconds()
+        except (KeyError, TypeError, ValueError):
+            out.append({"zone": zone, "action": "close", "remaining_minutes": 0, "session": s})
+            continue
+        if remaining > min_resume_seconds:
+            total = s.get("total_minutes")
+            cap = int(total) if isinstance(total, int | float) and total > 0 else hard_cap_minutes
+            remaining_min = max(1, min(cap, math.ceil(remaining / 60)))
+            out.append(
+                {
+                    "zone": zone,
+                    "action": "resume",
+                    "remaining_minutes": remaining_min,
+                    "session": s,
+                }
+            )
+        else:
+            out.append({"zone": zone, "action": "close", "remaining_minutes": 0, "session": s})
+    return out
 
 
 def build_weekly_zone_summary(
