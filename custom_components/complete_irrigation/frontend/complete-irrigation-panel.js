@@ -233,6 +233,8 @@
       this._yardReports = [];
       this._yardEto = null;
       this._yardEff = null;
+      this._yardEtoStatus = null; // v1.28 — {eto_source, eto_auto, eto_manual, eto_auto_value, eto_auto_at, weather_entity}
+      this._pendingAutoEto = null; // v1.28 — optimistic auto-ET toggle state while a toggle call is in flight
       this._yardLoaded = false;
       this._plantEditor = null; // null = form hidden; object = add/edit draft
 
@@ -752,6 +754,9 @@
           this._notifyDraft[idx] = t.value;
         }
         return;  // no re-render — the dropdown already shows the chosen value
+      }
+      if (action === "toggle-auto-eto") {
+        return this._toggleAutoEto(!!t.checked);
       }
       if (action === "history-filter-zone") {
         this._historyFilters.zone = t.value;
@@ -1402,6 +1407,18 @@
         this._yardReports = (reportRes && reportRes.reports) || [];
         this._yardEto = reportRes ? reportRes.eto_in_week : null;
         this._yardEff = reportRes ? reportRes.drip_efficiency : null;
+        // v1.28 — auto-ETo source/values (manual field is eto_manual so the
+        // input shows the editable fallback, not the auto-computed number).
+        this._yardEtoStatus = reportRes
+          ? {
+              eto_source: reportRes.eto_source,
+              eto_auto: reportRes.eto_auto,
+              eto_manual: reportRes.eto_manual,
+              eto_auto_value: reportRes.eto_auto_value,
+              eto_auto_at: reportRes.eto_auto_at,
+              weather_entity: reportRes.weather_entity,
+            }
+          : null;
         this._yardLoaded = true;
         this._scheduleRender();
       } catch (err) {
@@ -1834,6 +1851,26 @@
         await this._fetchYard();
       } catch (err) {
         alert("Failed to set ET: " + (err?.message || err));
+      }
+    }
+
+    async _toggleAutoEto(checked) {
+      // v1.28 — flip auto ETo (FAO-56 from the weather forecast) on/off. The
+      // backend awaits its immediate refresh before returning, so the refetch
+      // right after sees the fresh figure with no timing race. We hold an
+      // optimistic pending state so a background re-render can't visually snap
+      // the checkbox back to the old value while the call is in flight.
+      this._pendingAutoEto = !!checked;
+      this._renderNow();
+      try {
+        await this._hass.callService("complete_irrigation", "set_weather_config", {
+          eto_auto: !!checked,
+        });
+      } catch (err) {
+        alert("Failed to toggle auto ET: " + (err?.message || err));
+      } finally {
+        this._pendingAutoEto = null;
+        await this._fetchYard();
       }
     }
 
@@ -4416,8 +4453,35 @@
       if (!this._yardLoaded) {
         return `<div class="placeholder"><p>Loading yard…</p></div>`;
       }
-      const eto = this._yardEto != null ? this._yardEto : "";
       const eff = this._yardEff != null ? Math.round(this._yardEff * 100) : 90;
+      // v1.28 — auto (FAO-56 from weather) vs manual reference ET. The number
+      // input edits the MANUAL fallback; the effective value (auto when fresh,
+      // else manual) is what the report up top is computed against.
+      const st = this._yardEtoStatus || {};
+      // Optimistic: reflect the user's in-flight toggle intent until the
+      // authoritative value returns, so a background re-render can't snap back.
+      const autoOn = this._pendingAutoEto != null ? this._pendingAutoEto : !!st.eto_auto;
+      const effVal = this._yardEto != null ? Number(this._yardEto) : null;
+      const manualVal =
+        st.eto_manual != null ? st.eto_manual : this._yardEto != null ? this._yardEto : "";
+      const usingAuto = st.eto_source === "auto" && st.eto_auto_value != null;
+      let autoAtTxt = "";
+      if (st.eto_auto_at) {
+        const d = new Date(st.eto_auto_at);
+        if (!isNaN(d)) autoAtTxt = d.toLocaleString();
+      }
+      const wEnt = st.weather_entity ? escapeHtml(st.weather_entity) : "your weather entity";
+      const autoNote = autoOn
+        ? `<p class="muted yard-eto-auto">` +
+          (usingAuto
+            ? `Currently <strong>${effVal != null ? effVal.toFixed(2) : "—"} in/week</strong>, ` +
+              `computed from ${wEnt}` +
+              (autoAtTxt ? ` (updated ${escapeHtml(autoAtTxt)})` : "") +
+              `.`
+            : `Waiting on a usable forecast from ${wEnt} — using your manual value ` +
+              `below until one is available.`) +
+          ` Falls back to the manual value if the forecast is unavailable or stale.</p>`
+        : "";
       return (
         `<div class="yard-intro">` +
         `<h2>🪴 Yard</h2>` +
@@ -4426,14 +4490,18 @@
         `</div>` +
         // Reference ET control
         `<div class="card yard-eto">` +
-        `<label>Reference ET (inches / week)</label>` +
+        `<label class="enabled-check"><input type="checkbox" data-action="toggle-auto-eto"${
+          autoOn ? " checked" : ""
+        } /> Auto reference ET from weather forecast (FAO-56)</label>` +
+        autoNote +
+        `<label>${autoOn ? "Manual fallback (inches / week)" : "Reference ET (inches / week)"}</label>` +
         `<div class="yard-eto-row">` +
         `<input type="number" name="eto_in_week" min="0.1" max="10" step="0.1" value="${escapeAttr(
-          String(eto)
+          String(manualVal)
         )}" />` +
         `<button class="btn btn-primary" data-action="apply-eto">Apply</button>` +
         `<span class="muted">Drives every plant's weekly need (drip efficiency ${eff}%). ` +
-        `Raise it in summer, lower in winter.</span>` +
+        `${autoOn ? "Used whenever the forecast can't be read." : "Raise it in summer, lower in winter."}</span>` +
         `</div>` +
         `</div>` +
         // Add-plant button or the inline editor form

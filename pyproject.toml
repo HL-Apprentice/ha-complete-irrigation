@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "complete_irrigation"
-version = "1.27.0"
+version = "1.28.0"
 description = "Home Assistant custom integration for complete irrigation control"
 readme = "README.md"
 license = { text = "MIT" }
@@ -27,6 +27,9 @@ filterwarnings = [
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# Vendored third-party code (PyETO, BSD-3-Clause) — not ours to restyle; keep it
+# byte-for-byte upstream + carry its license (pyeto/LICENSE.txt).
+extend-exclude = ["custom_components/complete_irrigation/pyeto"]
 
 [tool.ruff.lint]
 select = [
