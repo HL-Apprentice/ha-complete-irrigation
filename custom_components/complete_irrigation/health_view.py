@@ -142,8 +142,9 @@ class IrrigationHealthView(HomeAssistantView):
             for s in coord.schedule_store.all()
         ]
 
-        # Plants + drips/volume per loop (WUCOLS x ETo design).
-        eto = float(coord.config.get("eto_in_week", 1.5))
+        # Plants + drips/volume per loop (WUCOLS x ETo design). v1.28 —
+        # effective_eto() is the auto FAO-56 figure when enabled+fresh, else manual.
+        eto = float(coord.effective_eto())
         efficiency = float(coord.config.get("drip_efficiency", DEFAULT_EFFICIENCY))
         try:
             loops = [
@@ -185,6 +186,7 @@ class IrrigationHealthView(HomeAssistantView):
                 },
                 "schedules": schedules,
                 "loops": loops,
+                "eto": coord.eto_status(),
                 "recent_runs": recent,
                 "health": {
                     "ok": not issues,
