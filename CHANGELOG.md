@@ -4,6 +4,40 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.30.0 — 2026-06-25
+
+### Added — restart fail-over (resume an interrupted run)
+
+- **If Home Assistant restarts mid-run, the run now resumes until its scheduled
+  end** instead of being lost. Each in-progress run persists a session (its full
+  duration + planned end); on startup the integration waits ~30 s for switch
+  integrations to come back, then for each session: if it's still within its
+  window, it resumes the **remaining** time (re-chunking a long run correctly,
+  not just the current block); if it's already past its end, it closes the run
+  out and forces the valve off. This also clears any "zombie" running record.
+  Fails safe — a session with bad/missing data is closed (valve off), never
+  resumed on a guess.
+
+### Fixed — run-state display fidelity
+
+- **Today zone card no longer shows "Idle" while the schedule shows "Running
+  now."** A chunked run's 30 s inter-block gaps (and Rachio state-poll lag) read
+  the switch as off; the card now also shows Running when the zone is in a live
+  planned-run window — the same signal the calendar uses — so the two agree.
+- **History triggers column de-cluttered.** It listed every gate on every row
+  ("moisture, wind, hot_weather"), including disabled / no-effect breadcrumbs.
+  Now only triggers that actually gated or adjusted the run are shown; the full
+  blob is still available on expand.
+- **Chunked runs collapse into one History row with a progress bar.** A long run
+  delivered as N blocks ("Citrus (block 1/5)") is now one session row showing
+  completed / total blocks, instead of N separate rows.
+
+### Changed — CI
+
+- HACS validation is scoped to pushes on `main` + tags (plus the daily schedule
+  and manual dispatch). It no longer red-X's on transient feature-branch pushes
+  whose ref is deleted at squash-merge.
+
 ## v1.29.0 — 2026-06-25
 
 ### Added — per-plant top-up recommendations on shared loops
