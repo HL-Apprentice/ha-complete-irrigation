@@ -23,11 +23,18 @@ jobs:
 
   hacs:
     name: HACS validation
-    # Skip on pull_request: hacs/action re-fetches the PR head branch from the
-    # GitHub API, which 404s ("branch removed / not compliant") if the PR was
-    # merged + branch-deleted while this job sat queued. Push events on the
-    # branch, on main, and on tags still validate the structure.
-    if: github.event_name != 'pull_request'
+    # hacs/action re-fetches the ref from the GitHub API, which 404s
+    # ("branch removed / not compliant") if the ref was deleted while the job
+    # sat queued — exactly what happens to a feature branch on squash-merge
+    # (--delete-branch) and to a PR head. So run HACS ONLY where the ref is
+    # durable: pushes to main + tags, plus the daily schedule and manual
+    # dispatch. PRs and feature-branch pushes skip it (the structure is still
+    # validated on main + every release tag).
+    if: >-
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' &&
+       (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
