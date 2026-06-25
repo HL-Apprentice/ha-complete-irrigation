@@ -4634,6 +4634,28 @@
       const warnings = (r.warnings || [])
         .map((w) => `<li>⚠ ${escapeHtml(w)}</li>`)
         .join("");
+      const topups = (r.topups || [])
+        .map((t) => {
+          const over = (t.overwater || [])
+            .filter((o) => o.extra_frac > 0.05)
+            .map((o) => `${escapeHtml(o.plant_name)} +${Math.round(o.extra_frac * 100)}%`)
+            .join(", ");
+          if (!t.feasible || t.extra_runs_per_week < 1) {
+            return (
+              `<li>💧 <strong>${escapeHtml(t.plant_name)}</strong> is short ` +
+              `${escapeHtml(String(t.deficit_gal_week))} gal/wk and watering more often ` +
+              `can't close it — give it its own loop or a longer main run.</li>`
+            );
+          }
+          return (
+            `<li>💧 Top-up <strong>${escapeHtml(t.plant_name)}</strong>: add ` +
+            `${t.extra_runs_per_week}&times;/wk &times; ${t.extra_minutes} min on this loop ` +
+            `to close its ${escapeHtml(String(t.deficit_gal_week))} gal/wk shortfall` +
+            (over ? ` <span class="muted">(also waters ${over})</span>` : "") +
+            `.</li>`
+          );
+        })
+        .join("");
       return (
         `<div class="card yard-loop-card">` +
         `<div class="yard-loop-head">` +
@@ -4649,6 +4671,7 @@
             `<thead><tr><th>Plant</th><th>Needs</th><th>Emitters</th><th>Gets</th><th>Status</th></tr></thead>` +
             `<tbody>${plantRows}</tbody></table></div>`
           : "") +
+        (topups ? `<ul class="yard-topups">${topups}</ul>` : "") +
         (warnings ? `<ul class="yard-warnings">${warnings}</ul>` : "") +
         `</div>`
       );
@@ -5178,6 +5201,8 @@
         `.yard-loop-head strong{font-size:14px}` +
         `.yard-warnings{margin:10px 0 0;padding:0;list-style:none;font-size:12px}` +
         `.yard-warnings li{margin:4px 0;color:#c77800}` +
+        `.yard-topups{margin:10px 0 0;padding:0;list-style:none;font-size:12px}` +
+        `.yard-topups li{margin:4px 0;color:#1565c0}` +
         `.yard-badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;white-space:nowrap}` +
         `.yard-badge.ok{background:rgba(67,160,71,0.16);color:#2e7d32}` +
         `.yard-badge.under{background:rgba(249,168,37,0.18);color:#b26a00}` +

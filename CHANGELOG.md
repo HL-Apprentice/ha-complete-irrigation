@@ -4,6 +4,28 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.29.0 — 2026-06-25
+
+### Added — per-plant top-up recommendations on shared loops
+
+- **The Yard report now recommends supplemental short runs for a plant that the
+  loop's main schedule leaves under-watered** — the classic "thirsty plant on a
+  shared loop" (e.g. a poor-soil potted plant that wants ~1 min/day sitting on the
+  Shrubs loop). The fix for that plant is watering more *often*, not more emitters,
+  so a top-up adds short whole-loop runs up to a daily cadence to close its weekly
+  deficit.
+- **Honest about the cost:** because running the loop waters *every* plant on it, each
+  top-up reports the extra water its co-plants receive (e.g. "also waters Rosemary
+  +25%"), so you can weigh a top-up against splitting the loop. When frequency alone
+  can't close the deficit (the plant already runs daily, or the gap is too large even
+  at a max-length top-up), it says so and points you to a dedicated loop / longer main
+  run instead of inventing an absurd runtime.
+- **Advisory by design:** top-ups are *computed and surfaced* (Yard tab + `yard_report`
+  WS + `health.json`), not auto-fired — execution stays on the proven schedule path.
+  Materializing a top-up as a real supplemental schedule is a planned follow-up.
+- Pure logic in `hydraulics.recommend_topups()` (HA-free, unit-tested): 6 new tests
+  (403 total).
+
 ## v1.28.0 — 2026-06-23
 
 ### Added — automatic reference ET from the weather forecast (FAO-56)
