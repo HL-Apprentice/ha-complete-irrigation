@@ -18,6 +18,7 @@ All schedule CRUD operations persist immediately via coordinator.async_save().
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from dataclasses import replace
 from datetime import timedelta
@@ -655,6 +656,47 @@ def _record_run_start_to_history(
     )
 
 
+_BLOCK_NAME_RE = re.compile(r"\(block (\d+)/(\d+)\)\s*$")
+
+
+def _record_active_session(
+    hass: HomeAssistant,
+    coord,
+    *,
+    zone: str,
+    total_minutes: int,
+    started_at,
+    meta: dict[str, Any] | None,
+    source: str,
+) -> None:
+    """v1.30 restart fail-over — persist the LOGICAL run (its full duration +
+    planned end) so an HA restart can resume it. Stored in coordinator config,
+    keyed by zone; cleared when the whole run ends. Block sub-calls do NOT call
+    this — the parent logical run already covers the session."""
+    if coord is None:
+        return
+    deadline = started_at + timedelta(minutes=int(total_minutes))
+    coord.config.setdefault("active_run_sessions", {})[zone] = {
+        "total_minutes": int(total_minutes),
+        "started_at": started_at.isoformat(),
+        "deadline": deadline.isoformat(),
+        "schedule_id": (meta or {}).get("schedule_id"),
+        "schedule_name": (meta or {}).get("schedule_name", ""),
+        "source": source,
+    }
+    hass.async_create_task(coord.async_save_config())
+
+
+def _clear_active_session(hass: HomeAssistant, coord, zone: str) -> None:
+    """Drop the persisted active session for a zone (run finished / stopped /
+    aborted) so a later restart doesn't resume an already-done run."""
+    if coord is None:
+        return
+    sessions = coord.config.get("active_run_sessions")
+    if sessions and sessions.pop(zone, None) is not None:
+        hass.async_create_task(coord.async_save_config())
+
+
 def _dispatch_run_blocks(
     hass: HomeAssistant,
     entity_id: str,
@@ -759,6 +801,18 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         if len(blocks) > 1:
             gap_s = int(cfg.get("block_gap_seconds", DEFAULT_BLOCK_GAP_SECONDS))
             base_meta = entry_data.get("pending_run_meta", {}).pop(entity_id, None)
+            # v1.30 restart fail-over — record the session for the WHOLE chunked
+            # run (full minutes) before dispatching blocks, so a restart mid-
+            # session resumes the remaining total time, not just the current block.
+            _record_active_session(
+                hass,
+                entry_data.get("coordinator"),
+                zone=entity_id,
+                total_minutes=minutes,
+                started_at=dt_util.utcnow(),
+                meta=base_meta,
+                source=SOURCE_SCHEDULED if base_meta else SOURCE_MANUAL,
+            )
             _LOGGER.info(
                 "%s (%s min) exceeds the %d-min controller cap — delivering as "
                 "%d blocks with a %ds gap",
@@ -810,6 +864,26 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         meta = entry_data.get("pending_run_meta", {}).pop(entity_id, None)
         source = SOURCE_SCHEDULED if meta else SOURCE_MANUAL
 
+        # v1.30 restart fail-over — record the session for the LOGICAL run so a
+        # restart can resume it. A block sub-call ("(block i/n)") belongs to a
+        # parent session already recorded by the chunking branch, so we don't
+        # re-record it; we only flag whether THIS activation is the run's last,
+        # so its auto-stop clears the session.
+        _block_m = _BLOCK_NAME_RE.search((meta or {}).get("schedule_name", "")) if meta else None
+        if _block_m:
+            is_final_activation = int(_block_m.group(1)) == int(_block_m.group(2))
+        else:
+            is_final_activation = True
+            _record_active_session(
+                hass,
+                coord,
+                zone=entity_id,
+                total_minutes=minutes,
+                started_at=now,
+                meta=meta,
+                source=source,
+            )
+
         try:
             await hass.services.async_call(
                 "switch",
@@ -859,6 +933,11 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             if coord is not None:
                 coord.run_history.complete_run(entity_id, ended_at=dt_util.utcnow())
                 await coord.async_save_run_history()
+            # v1.30 — clear the restart-resume session only when the WHOLE run is
+            # done (a single run, or the final block of a chunked run); an
+            # intermediate block keeps the session so a restart still resumes.
+            if is_final_activation:
+                _clear_active_session(hass, coord, entity_id)
             _LOGGER.info("Manual run for %s expired and was stopped", entity_id)
 
         cancel_timer = async_call_later(hass, minutes * 60, _auto_stop)
@@ -936,6 +1015,9 @@ async def _async_register_services(hass: HomeAssistant) -> None:
                 # Actionable "Run remainder" / "Open Logbook" alert for a
                 # scheduled run cut short below 90% of planned.
                 hass.async_create_task(_maybe_notify_cut_short(coord, rec))
+            # v1.30 — a run that aborted because the switch won't stay on is in an
+            # error state; don't auto-resume it on the next restart.
+            _clear_active_session(hass, coord, entity_id)
             _LOGGER.warning(
                 "Zone %s stayed off after %d re-assert(s) — aborting run",
                 entity_id,
@@ -1042,6 +1124,9 @@ async def _async_register_services(hass: HomeAssistant) -> None:
                 reason="user pressed Stop",
             )
             await coord.async_save_run_history()
+        # v1.30 — a Stop ends the whole run (incl. a chunked session), so drop
+        # the restart-resume session: a later restart must not revive it.
+        _clear_active_session(hass, coord, entity_id)
         _LOGGER.info("Stopped manual run for %s by request", entity_id)
 
     # ── Schedule CRUD ──────────────────────────────────────────────
