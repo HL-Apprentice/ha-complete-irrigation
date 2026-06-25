@@ -144,6 +144,19 @@ def serialize_plant_result(r: PlantWaterResult) -> dict:
     }
 
 
+def serialize_topup(t) -> dict:
+    """JSON-safe dict for one top-up recommendation."""
+    return {
+        "plant_name": t.plant_name,
+        "deficit_gal_week": t.deficit_gal_week,
+        "extra_runs_per_week": t.extra_runs_per_week,
+        "extra_minutes": t.extra_minutes,
+        "delivered_gal_week_after": t.delivered_gal_week_after,
+        "feasible": t.feasible,
+        "overwater": [{"plant_name": n, "extra_frac": f} for n, f in t.overwater],
+    }
+
+
 def serialize_loop_report(rep: LoopReport) -> dict:
     """JSON-safe dict for a per-loop design report (for ws_api / the panel)."""
     return {
@@ -155,4 +168,5 @@ def serialize_loop_report(rep: LoopReport) -> dict:
         "warnings": list(rep.warnings),
         "suggested_runtime_minutes": rep.suggested_runtime_minutes,
         "plants": [serialize_plant_result(p) for p in rep.plants],
+        "topups": [serialize_topup(t) for t in rep.topups],
     }

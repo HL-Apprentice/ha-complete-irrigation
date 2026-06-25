@@ -17,14 +17,17 @@ from custom_components.complete_irrigation.hydraulics import (
     STATUS_OK,
     STATUS_OVER,
     STATUS_UNDER,
+    TOPUP_MAX_MINUTES,
     Loop,
     Plant,
+    PlantWaterResult,
     build_loop_report,
     classify,
     delivered_gal_week,
     evaluate_plant,
     find_design_conflicts,
     recommend_emitters,
+    recommend_topups,
     required_total_gph,
     suggest_runtime,
     weekly_need_gal,
@@ -33,6 +36,20 @@ from custom_components.complete_irrigation.hydraulics import (
 
 def _plant(cat="moderate", area=100.0, loop="L"):
     return Plant(name=f"{cat}-plant", wucols_category=cat, canopy_area_sqft=area, loop_id=loop)
+
+
+def _result(name, need, delivered, emitter_gph, status):
+    """Hand-built PlantWaterResult so top-up logic is tested in isolation."""
+    return PlantWaterResult(
+        plant=Plant(name=name, wucols_category="moderate", canopy_area_sqft=100.0, loop_id="L"),
+        need_gal_week=need,
+        required_gph=1.0,
+        emitters=((1, 1.0),),
+        emitter_gph=emitter_gph,
+        delivered_gal_week=delivered,
+        status=status,
+        pct_off=((delivered - need) / need) if need else 0.0,
+    )
 
 
 # ── WUCOLS x ETo need formula ───────────────────────────────────────
@@ -183,3 +200,96 @@ def test_suggested_runtime_reduces_quantization_error():
     suggested = suggest_runtime(loop, plants, 1.8, 0.9)
     assert total_err(suggested) <= total_err(loop.runtime_minutes) + 1e-9
     assert not math.isnan(total_err(suggested))
+
+
+# ── top-up short runs (supplemental frequency for UNDER plants) ──────
+
+
+def test_no_topup_for_ok_or_over_plants():
+    loop = Loop("L", 30, 3)
+    res = [
+        _result("fine", 10.0, 10.0, 2.0, STATUS_OK),
+        _result("flooded", 10.0, 15.0, 2.0, STATUS_OVER),
+    ]
+    assert recommend_topups(loop, res) == []
+
+
+def test_feasible_topup_closes_deficit():
+    # need 20, main delivers 14 (UNDER by 6); loop runs 3x/wk -> 4 extra runs to
+    # reach daily; at 2 GPH, 45 min/run delivers exactly the 6 gal deficit.
+    loop = Loop("L", 30, 3)
+    plans = recommend_topups(loop, [_result("thirsty", 20.0, 14.0, 2.0, STATUS_UNDER)])
+    assert len(plans) == 1
+    p = plans[0]
+    assert p.plant_name == "thirsty"
+    assert p.deficit_gal_week == 6.0
+    assert p.extra_runs_per_week == 4  # 7 - 3
+    assert p.extra_minutes == 45
+    assert p.feasible is True
+    assert p.delivered_gal_week_after == pytest.approx(20.0, abs=0.2)
+
+
+def test_topup_infeasible_when_already_daily():
+    # Loop already runs daily -> added frequency can't help; flag own-loop.
+    loop = Loop("L", 30, 7)
+    plans = recommend_topups(loop, [_result("x", 20.0, 14.0, 2.0, STATUS_UNDER)])
+    assert len(plans) == 1
+    assert plans[0].extra_runs_per_week == 0
+    assert plans[0].feasible is False
+
+
+def test_topup_infeasible_when_deficit_too_large():
+    # A giant deficit can't be closed by frequency within the minute cap.
+    loop = Loop("L", 30, 3)
+    plans = recommend_topups(loop, [_result("giant", 1000.0, 10.0, 2.0, STATUS_UNDER)])
+    assert plans[0].extra_runs_per_week == 4
+    assert plans[0].feasible is False
+    assert plans[0].extra_minutes == TOPUP_MAX_MINUTES  # clamped, still short
+    assert plans[0].delivered_gal_week_after < 1000.0
+
+
+def test_topup_reports_overwater_cost_to_coplants():
+    # Topping up the thirsty plant runs the whole loop, watering its co-plant too.
+    loop = Loop("L", 30, 3)
+    res = [
+        _result("thirsty", 20.0, 14.0, 2.0, STATUS_UNDER),
+        _result("neighbor", 12.0, 12.0, 1.0, STATUS_OK),
+    ]
+    plans = recommend_topups(loop, res)
+    assert len(plans) == 1
+    over = dict(plans[0].overwater)
+    assert "neighbor" in over
+    # 4 extra runs x 1 GPH x 45/60 h = 3 gal extra on a 12-gal need = +25%.
+    assert over["neighbor"] == pytest.approx(0.25, abs=0.02)
+
+
+def test_build_loop_report_attaches_topups():
+    # End-to-end: a thirsty plant on a short, infrequent loop yields a top-up.
+    loop = Loop("zone.shrubs", 10, 2)
+    plants = [_plant("high", 600.0), _plant("very_low", 20.0)]
+    rep = build_loop_report(loop, plants, eto=2.0, efficiency=0.9)
+    under = [r for r in rep.plants if r.status == STATUS_UNDER]
+    assert under, "expected at least one UNDER plant for this stressed loop"
+    assert len(rep.topups) == len(under)
+    assert all(t.plant_name for t in rep.topups)
+
+
+def test_topup_integer_cadence_for_fractional_runs_per_week():
+    # Real schedules give fractional runs_per_week (every-other-day = 3.5/wk).
+    # The added-runs cadence must be a whole integer, not "3.5x/wk".
+    loop = Loop("L", 30, 3.5)
+    plans = recommend_topups(loop, [_result("thirsty", 20.0, 14.0, 2.0, STATUS_UNDER)])
+    assert len(plans) == 1
+    p = plans[0]
+    assert isinstance(p.extra_runs_per_week, int)
+    assert p.extra_runs_per_week == round(7 - 3.5)  # 4
+    assert p.feasible is True
+    assert p.delivered_gal_week_after == pytest.approx(20.0, abs=0.3)
+
+
+def test_topup_integer_cadence_through_build_loop_report():
+    # The float cadence reaches recommend_topups via build_loop_report too.
+    loop = Loop("zone.beds", 12, 2.5)  # ~ every-third-day primary
+    rep = build_loop_report(loop, [_plant("high", 500.0)], eto=2.0, efficiency=0.9)
+    for t in rep.topups:
+        assert isinstance(t.extra_runs_per_week, int)

@@ -52,6 +52,18 @@ _MISMATCH_RATIO = 5  # thirstiest needs >=5x the least -> split the loop
 # Runtime search bounds for suggest_runtime (minutes): start, stop, step.
 _RUNTIME_SEARCH = (5, 305, 5)
 
+# Top-up (supplemental short runs). A plant flagged UNDER by the loop's main
+# schedule is usually thirstier-by-CADENCE than its co-plants (the classic
+# "poor-soil potted plant needing ~1 min/day on the Shrubs loop") — the fix is
+# watering more OFTEN, not more emitters. A top-up adds short runs of the WHOLE
+# loop (everyone on it gets water) to close the under plant's weekly deficit,
+# bringing it toward daily watering. We compute + surface this; execution stays
+# on the proven schedule path. The honest cost — extra water to co-plants — is
+# reported so the user can decide vs. splitting the loop.
+TOPUP_TARGET_RUNS_PER_WEEK = 7  # daily — the densest cadence top-ups aim for
+TOPUP_MAX_MINUTES = 60  # beyond this, frequency alone won't fix it -> own loop
+TOPUP_MIN_MINUTES = 1
+
 STATUS_OK = "OK"
 STATUS_UNDER = "UNDER"
 STATUS_OVER = "OVER"
@@ -101,12 +113,28 @@ class PlantWaterResult:
 
 
 @dataclass(frozen=True)
+class TopUpPlan:
+    """A supplemental short-run recommendation to close one UNDER plant's weekly
+    deficit by watering the loop more often. Advisory — the user/scheduler decides
+    whether to apply it (it over-waters the loop's other plants by `overwater`)."""
+
+    plant_name: str
+    deficit_gal_week: float  # how far the main schedule leaves this plant short
+    extra_runs_per_week: int  # added whole-loop runs (0 when frequency can't help)
+    extra_minutes: int  # minutes per added run
+    delivered_gal_week_after: float  # this plant's main + top-up delivery
+    feasible: bool  # False -> needs its own loop / longer main runtime instead
+    overwater: tuple[tuple[str, float], ...]  # (co-plant name, extra fraction over its need)
+
+
+@dataclass(frozen=True)
 class LoopReport:
     loop: Loop
     plants: tuple[PlantWaterResult, ...]
     total_flow_gph: float
     warnings: tuple[str, ...]
     suggested_runtime_minutes: int
+    topups: tuple[TopUpPlan, ...] = ()
 
 
 # ── core formulas ───────────────────────────────────────────────────
@@ -233,6 +261,70 @@ def suggest_runtime(loop: Loop, plants: list[Plant], eto: float, efficiency: flo
     return best_min
 
 
+def recommend_topups(loop: Loop, results: list[PlantWaterResult]) -> list[TopUpPlan]:
+    """Supplemental short-run plan for every plant the loop's main schedule leaves
+    UNDER. Closes the weekly deficit by adding whole-loop runs up to a daily cadence
+    (more frequency, not more emitters) and reports the over-water cost to co-plants.
+
+    `extra_runs_per_week = 0` + `feasible = False` means the plant already runs at
+    (or above) the target cadence, so frequency can't help — it needs a longer main
+    runtime or its own loop (the emitter/mismatch warnings cover that case)."""
+    # Whole number of ADDED runs. loop.runs_per_week can be fractional (every-
+    # other-day = 3.5/wk), so round to an integer cadence — "3.5x/wk" is a
+    # nonsensical recommendation and the field is typed int. Minutes are solved
+    # against this integer count below, so the delivered gallons stay consistent.
+    extra_runs = round(TOPUP_TARGET_RUNS_PER_WEEK - loop.runs_per_week)
+    plans: list[TopUpPlan] = []
+    for r in results:
+        if r.status != STATUS_UNDER:
+            continue
+        deficit = r.need_gal_week - r.delivered_gal_week
+        if deficit <= 0 or r.emitter_gph <= 0:
+            continue
+        if extra_runs <= 0:
+            plans.append(
+                TopUpPlan(
+                    plant_name=r.plant.name,
+                    deficit_gal_week=round(deficit, 1),
+                    extra_runs_per_week=0,
+                    extra_minutes=0,
+                    delivered_gal_week_after=round(r.delivered_gal_week, 1),
+                    feasible=False,
+                    overwater=(),
+                )
+            )
+            continue
+        # Minutes per added run to deliver the deficit across the added runs, at
+        # this plant's already-recommended emitter flow. Clamp to the sane window:
+        # if even a max-length top-up can't close it, `feasible` is False and the
+        # delivered-after figure honestly shows it still falls short (-> own loop).
+        raw_minutes = (deficit / extra_runs) / r.emitter_gph * 60.0
+        feasible = raw_minutes <= TOPUP_MAX_MINUTES
+        minutes = max(TOPUP_MIN_MINUTES, min(TOPUP_MAX_MINUTES, round(raw_minutes)))
+        topup_gal = extra_runs * r.emitter_gph * (minutes / 60.0)
+        # Running the whole loop waters everyone — the honest cost to co-plants.
+        overwater = tuple(
+            (
+                o.plant.name,
+                round(extra_runs * o.emitter_gph * (minutes / 60.0) / o.need_gal_week, 3),
+            )
+            for o in results
+            if o is not r and o.need_gal_week > 0
+        )
+        plans.append(
+            TopUpPlan(
+                plant_name=r.plant.name,
+                deficit_gal_week=round(deficit, 1),
+                extra_runs_per_week=extra_runs,
+                extra_minutes=minutes,
+                delivered_gal_week_after=round(r.delivered_gal_week + topup_gal, 1),
+                feasible=feasible,
+                overwater=overwater,
+            )
+        )
+    return plans
+
+
 def build_loop_report(loop: Loop, plants: list[Plant], eto: float, efficiency: float) -> LoopReport:
     results = [evaluate_plant(p, loop, eto, efficiency) for p in plants]
     total_flow = sum(r.emitter_gph for r in results)
@@ -250,4 +342,5 @@ def build_loop_report(loop: Loop, plants: list[Plant], eto: float, efficiency: f
         total_flow_gph=total_flow,
         warnings=tuple(warnings),
         suggested_runtime_minutes=suggest_runtime(loop, plants, eto, efficiency),
+        topups=tuple(recommend_topups(loop, results)),
     )
