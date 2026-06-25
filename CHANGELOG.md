@@ -4,6 +4,26 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.30.0 — 2026-06-25
+
+### Added — 2D yard map with draggable plant markers
+
+- **A new aerial yard map in the Yard tab.** "Set up yard map" fetches a high-resolution
+  aerial photo of your property — **Esri World Imagery, no API key**, centered on your Home
+  Assistant location — and caches it locally as the backdrop. Place each plant as a marker
+  on the image and **drag it to its real spot**; positions persist.
+- **Plants gain a map position.** `PlantRecord` now carries normalized `map_x` / `map_y`
+  (each 0–1, independent of screen size); pre-v1.30 records load as "unplaced." Drag a
+  marker (or tap an unplaced plant to drop it at center) and `update_plant` saves it.
+- **New `set_yard_map` service** (center defaults to your HA latitude/longitude; optional
+  `span_m`, default 60 m). The fetch is server-side and degrades gracefully — a network or
+  service error leaves the previous map untouched and never crashes.
+- **Georeferencing groundwork:** a pure, unit-tested `yard_map.py` converts between GPS
+  coordinates and normalized map positions (exact + linear at yard scale). This is the same
+  math future EXIF-GPS auto-placement will reuse to drop a marker from a photo's embedded
+  location. The integration stays **dependency-free** (no imaging libraries).
+- 12 new tests (georeferencing + plant coordinates); 417 total.
+
 ## v1.29.0 — 2026-06-25
 
 ### Added — per-plant top-up recommendations on shared loops

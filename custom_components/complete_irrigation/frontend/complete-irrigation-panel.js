@@ -235,6 +235,9 @@
       this._yardEff = null;
       this._yardEtoStatus = null; // v1.28 — {eto_source, eto_auto, eto_manual, eto_auto_value, eto_auto_at, weather_entity}
       this._pendingAutoEto = null; // v1.28 — optimistic auto-ET toggle state while a toggle call is in flight
+      this._yardMap = null; // v1.30 — {image_path, bbox, width, height, center_lat/lon, span_m, version}
+      this._mapDrag = null; // v1.30 — in-flight marker drag {plantId, el, rect}
+      this._mapBusy = false; // v1.30 — set_yard_map fetch in flight
       this._yardLoaded = false;
       this._plantEditor = null; // null = form hidden; object = add/edit draft
 
@@ -288,6 +291,9 @@
       this._onSubmit = this._onSubmit.bind(this);
       this._onChange = this._onChange.bind(this);
       this._onInput = this._onInput.bind(this);
+      this._onMapPointerDown = this._onMapPointerDown.bind(this);
+      this._onMapPointerMove = this._onMapPointerMove.bind(this);
+      this._onMapPointerUp = this._onMapPointerUp.bind(this);
 
       // v1.19.0 — scroll-position preservation across renders. _render()
       // rebuilds the whole shadow DOM via innerHTML, which resets every
@@ -382,6 +388,12 @@
       this.shadowRoot.addEventListener("submit", this._onSubmit);
       this.shadowRoot.addEventListener("change", this._onChange);
       this.shadowRoot.addEventListener("input", this._onInput);
+      // v1.30 — yard-map marker drag (pointer events; move/up on the shadow
+      // root so a fast drag that leaves the marker still tracks + releases).
+      this.shadowRoot.addEventListener("pointerdown", this._onMapPointerDown);
+      this.shadowRoot.addEventListener("pointermove", this._onMapPointerMove);
+      this.shadowRoot.addEventListener("pointerup", this._onMapPointerUp);
+      this.shadowRoot.addEventListener("pointercancel", this._onMapPointerUp);
       // v1.19.0 — scroll events don't bubble, but they DO run the
       // capture phase, so a capture listener on the shadow root sees
       // scrolls from every descendant (main, day-cal-grid, modals…).
@@ -398,6 +410,10 @@
       this.shadowRoot.removeEventListener("submit", this._onSubmit);
       this.shadowRoot.removeEventListener("change", this._onChange);
       this.shadowRoot.removeEventListener("input", this._onInput);
+      this.shadowRoot.removeEventListener("pointerdown", this._onMapPointerDown);
+      this.shadowRoot.removeEventListener("pointermove", this._onMapPointerMove);
+      this.shadowRoot.removeEventListener("pointerup", this._onMapPointerUp);
+      this.shadowRoot.removeEventListener("pointercancel", this._onMapPointerUp);
       this.shadowRoot.removeEventListener("scroll", this._onAnyScroll, true);
       this._stopNowLineTimer();
       if (this._deferredRenderTimer) {
@@ -530,6 +546,8 @@
         if (action === "delete-plant")
           return this._deletePlant(node.dataset.plantId, node.dataset.plantName);
         if (action === "apply-eto") return this._applyEto();
+        if (action === "setup-yard-map") return this._setupYardMap();
+        if (action === "place-plant") return this._placePlant(node.dataset.plantId);
         if (action === "toggle-theme") return this._cycleTheme();
         if (action === "open-banner-settings") {
           this._bannerModalOpen = true;
@@ -1083,6 +1101,10 @@
     }
 
     _safeRender() {
+      // v1.30 — never rebuild the DOM out from under an active marker drag;
+      // it would orphan the element being dragged. The pointer-up handler
+      // refetches + re-renders once the drag finishes.
+      if (this._mapDrag) return;
       // v1.19.0 — innerHTML rebuild resets every scroll container to
       // the top. Save positions before, restore after, so background
       // renders (hass updates, the 60s now-line tick) are invisible
@@ -1419,6 +1441,7 @@
               weather_entity: reportRes.weather_entity,
             }
           : null;
+        this._yardMap = reportRes ? reportRes.yard_map || null : null; // v1.30
         this._yardLoaded = true;
         this._scheduleRender();
       } catch (err) {
@@ -1870,6 +1893,85 @@
         alert("Failed to toggle auto ET: " + (err?.message || err));
       } finally {
         this._pendingAutoEto = null;
+        await this._fetchYard();
+      }
+    }
+
+    async _setupYardMap() {
+      // v1.30 — fetch + cache the aerial backdrop (centered on the HA location).
+      if (this._mapBusy) return;
+      this._mapBusy = true;
+      this._renderNow();
+      try {
+        await this._hass.callService("complete_irrigation", "set_yard_map", {});
+      } catch (err) {
+        alert("Failed to fetch the aerial image: " + (err?.message || err));
+      } finally {
+        this._mapBusy = false;
+        await this._fetchYard();
+      }
+    }
+
+    async _placePlant(plantId) {
+      // v1.30 — drop an unplaced plant at the map center so it becomes a
+      // draggable marker; the user then drags it to the right spot.
+      if (!plantId) return;
+      try {
+        await this._hass.callService("complete_irrigation", "update_plant", {
+          plant_id: plantId,
+          map_x: 0.5,
+          map_y: 0.5,
+        });
+        await this._fetchYard();
+      } catch (err) {
+        alert("Failed to place plant: " + (err?.message || err));
+      }
+    }
+
+    _onMapPointerDown(e) {
+      // v1.30 — begin dragging a plant marker. We mutate the live element during
+      // the drag (no re-render) and persist on release.
+      const marker = e.target?.closest?.('[data-action="map-marker"]');
+      if (!marker) return;
+      const wrap = marker.closest(".yard-map-wrap");
+      if (!wrap) return;
+      e.preventDefault();
+      const rect = wrap.getBoundingClientRect();
+      this._mapDrag = { plantId: marker.dataset.plantId, el: marker, rect, x: null, y: null };
+      marker.classList.add("dragging");
+      try {
+        marker.setPointerCapture(e.pointerId);
+      } catch (_e) {
+        /* not all targets support capture; window listeners cover it */
+      }
+    }
+
+    _onMapPointerMove(e) {
+      const d = this._mapDrag;
+      if (!d) return;
+      const x = Math.min(1, Math.max(0, (e.clientX - d.rect.left) / d.rect.width));
+      const y = Math.min(1, Math.max(0, (e.clientY - d.rect.top) / d.rect.height));
+      d.x = x;
+      d.y = y;
+      d.el.style.left = (x * 100).toFixed(3) + "%";
+      d.el.style.top = (y * 100).toFixed(3) + "%";
+    }
+
+    async _onMapPointerUp() {
+      const d = this._mapDrag;
+      this._mapDrag = null;
+      if (!d) return;
+      d.el.classList.remove("dragging");
+      if (d.x == null || d.y == null) return; // a tap with no movement — leave as-is
+      try {
+        await this._hass.callService("complete_irrigation", "update_plant", {
+          plant_id: d.plantId,
+          map_x: d.x,
+          map_y: d.y,
+        });
+        await this._fetchYard();
+      } catch (err) {
+        alert("Failed to save marker position: " + (err?.message || err));
         await this._fetchYard();
       }
     }
@@ -4488,6 +4590,8 @@
         `<p class="muted">Place each plant on its zone (drip loop) and the calculator sizes ` +
         `emitters so every plant gets the right water — even when they share a loop.</p>` +
         `</div>` +
+        // v1.30 — aerial yard map with draggable plant markers
+        this._renderYardMap() +
         // Reference ET control
         `<div class="card yard-eto">` +
         `<label class="enabled-check"><input type="checkbox" data-action="toggle-auto-eto"${
@@ -4512,6 +4616,60 @@
         this._renderPlantList() +
         // Per-loop design report
         this._renderYardReport()
+      );
+    }
+
+    _renderYardMap() {
+      const m = this._yardMap;
+      const setupBtn = this._mapBusy
+        ? `<button class="btn" disabled>Fetching aerial…</button>`
+        : `<button class="btn" data-action="setup-yard-map">${
+            m && m.image_path ? "Refresh aerial" : "Set up yard map"
+          }</button>`;
+      if (!m || !m.image_path) {
+        return (
+          `<div class="card yard-map-card">` +
+          `<div class="yard-map-head"><strong>🗺️ Yard map</strong>${setupBtn}</div>` +
+          `<p class="muted">Fetch an aerial photo of your property (centered on your Home ` +
+          `Assistant location) to place plant markers on it.</p>` +
+          `</div>`
+        );
+      }
+      const plants = this._plants || [];
+      const placed = plants.filter((p) => p.map_x != null && p.map_y != null);
+      const unplaced = plants.filter((p) => p.map_x == null || p.map_y == null);
+      const markers = placed
+        .map(
+          (p) =>
+            `<button class="yard-map-marker" data-action="map-marker" data-plant-id="${escapeAttr(
+              p.id
+            )}" style="left:${(p.map_x * 100).toFixed(3)}%;top:${(p.map_y * 100).toFixed(
+              3
+            )}%" title="${escapeAttr(p.name)} — drag to reposition">` +
+            `<span class="yard-map-dot"></span>` +
+            `<span class="yard-map-label">${escapeHtml(p.name)}</span>` +
+            `</button>`
+        )
+        .join("");
+      const chips = unplaced
+        .map(
+          (p) =>
+            `<button class="yard-chip" data-action="place-plant" data-plant-id="${escapeAttr(
+              p.id
+            )}">+ ${escapeHtml(p.name)}</button>`
+        )
+        .join("");
+      return (
+        `<div class="card yard-map-card">` +
+        `<div class="yard-map-head"><strong>🗺️ Yard map</strong>${setupBtn}</div>` +
+        `<div class="yard-map-wrap" style="aspect-ratio:${m.width} / ${m.height}">` +
+        `<img class="yard-map-img" src="${escapeAttr(m.image_path)}" alt="Aerial view of the yard" draggable="false" />` +
+        markers +
+        `</div>` +
+        (chips
+          ? `<div class="yard-map-unplaced"><span class="muted">Tap to place:</span> ${chips}</div>`
+          : `<p class="muted yard-map-hint">Drag a marker to reposition it.</p>`) +
+        `</div>`
       );
     }
 
@@ -5203,6 +5361,18 @@
         `.yard-warnings li{margin:4px 0;color:#c77800}` +
         `.yard-topups{margin:10px 0 0;padding:0;list-style:none;font-size:12px}` +
         `.yard-topups li{margin:4px 0;color:#1565c0}` +
+        // v1.30 — yard map
+        `.yard-map-card{padding:14px 16px}` +
+        `.yard-map-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}` +
+        `.yard-map-wrap{position:relative;width:100%;border-radius:8px;overflow:hidden;background:#1b1b1b;touch-action:none;user-select:none}` +
+        `.yard-map-img{display:block;width:100%;height:100%;object-fit:cover;pointer-events:none}` +
+        `.yard-map-marker{position:absolute;transform:translate(-50%,-50%);background:none;border:none;padding:0;cursor:grab;display:flex;flex-direction:column;align-items:center;gap:2px;z-index:2}` +
+        `.yard-map-marker.dragging{cursor:grabbing;z-index:5}` +
+        `.yard-map-dot{width:16px;height:16px;border-radius:50%;background:#e53935;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.5)}` +
+        `.yard-map-label{font-size:11px;font-weight:600;color:#fff;background:rgba(0,0,0,0.55);padding:1px 5px;border-radius:6px;white-space:nowrap;max-width:120px;overflow:hidden;text-overflow:ellipsis}` +
+        `.yard-map-unplaced{margin-top:10px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}` +
+        `.yard-chip{font-size:12px;padding:3px 9px;border-radius:12px;border:1px solid var(--ci-border,#444);background:var(--ci-card-2,#2a2a2a);color:var(--ci-text,#eee);cursor:pointer}` +
+        `.yard-map-hint{margin:8px 0 0;font-size:12px}` +
         `.yard-badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;white-space:nowrap}` +
         `.yard-badge.ok{background:rgba(67,160,71,0.16);color:#2e7d32}` +
         `.yard-badge.under{background:rgba(249,168,37,0.18);color:#b26a00}` +

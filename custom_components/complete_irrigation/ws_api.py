@@ -261,6 +261,7 @@ async def yard_report(hass, connection, msg):
         {
             "reports": [serialize_loop_report(r) for r in reports],
             "drip_efficiency": eff,
+            "yard_map": coord.config.get("yard_map"),  # v1.30 — aerial backdrop config
             **status,
         },
     )
