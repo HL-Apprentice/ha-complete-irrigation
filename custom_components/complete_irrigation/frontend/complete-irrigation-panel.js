@@ -234,6 +234,7 @@
       this._yardEto = null;
       this._yardEff = null;
       this._yardEtoStatus = null; // v1.28 — {eto_source, eto_auto, eto_manual, eto_auto_value, eto_auto_at, weather_entity}
+      this._pendingAutoEto = null; // v1.28 — optimistic auto-ET toggle state while a toggle call is in flight
       this._yardLoaded = false;
       this._plantEditor = null; // null = form hidden; object = add/edit draft
 
@@ -1855,17 +1856,20 @@
 
     async _toggleAutoEto(checked) {
       // v1.28 — flip auto ETo (FAO-56 from the weather forecast) on/off. The
-      // backend fetches a fresh figure immediately when turned on; the manual
-      // value below stays the fallback for when the forecast can't be read.
+      // backend awaits its immediate refresh before returning, so the refetch
+      // right after sees the fresh figure with no timing race. We hold an
+      // optimistic pending state so a background re-render can't visually snap
+      // the checkbox back to the old value while the call is in flight.
+      this._pendingAutoEto = !!checked;
+      this._renderNow();
       try {
         await this._hass.callService("complete_irrigation", "set_weather_config", {
           eto_auto: !!checked,
         });
-        // Give the immediate refresh a beat to land before refetching.
-        await new Promise((r) => setTimeout(r, 600));
-        await this._fetchYard();
       } catch (err) {
         alert("Failed to toggle auto ET: " + (err?.message || err));
+      } finally {
+        this._pendingAutoEto = null;
         await this._fetchYard();
       }
     }
@@ -4454,7 +4458,9 @@
       // input edits the MANUAL fallback; the effective value (auto when fresh,
       // else manual) is what the report up top is computed against.
       const st = this._yardEtoStatus || {};
-      const autoOn = !!st.eto_auto;
+      // Optimistic: reflect the user's in-flight toggle intent until the
+      // authoritative value returns, so a background re-render can't snap back.
+      const autoOn = this._pendingAutoEto != null ? this._pendingAutoEto : !!st.eto_auto;
       const effVal = this._yardEto != null ? Number(this._yardEto) : null;
       const manualVal =
         st.eto_manual != null ? st.eto_manual : this._yardEto != null ? this._yardEto : "";

@@ -43,7 +43,7 @@ from .coordinator_logic import (
     compute_low_moisture_offenders,
     detect_sensor_offline_transitions,
 )
-from .et_calc import select_eto, weekly_eto_inches_from_forecast
+from .et_calc import SANE_ETO_MAX, select_eto, weekly_eto_inches_from_forecast
 from .hydraulics import DEFAULT_ETO_IN_WEEK
 from .moisture_gate import COMBINE_AVERAGE, combine_moisture, evaluate_moisture
 from .notifications import (
@@ -1362,8 +1362,16 @@ class ScheduleCoordinator:
         except Exception as err:
             _LOGGER.warning("auto-ETo: computation failed for %s: %s", entity, err)
             return
-        if eto <= 0:
-            _LOGGER.debug("auto-ETo: %s forecast yielded 0 — keeping fallback", entity)
+        # Reject anything outside the sane envelope the manual field enforces —
+        # a flaky forecast (provider field-swap, unit glitch) must never become
+        # the design basis. Keep the previous value / manual fallback instead.
+        if not (0 < eto <= SANE_ETO_MAX):
+            _LOGGER.warning(
+                "auto-ETo: %.2f in/week from %s is out of sane range (0, %.0f] — keeping fallback",
+                eto,
+                entity,
+                SANE_ETO_MAX,
+            )
             return
         self._auto_eto_in_week = round(eto, 3)
         self._auto_eto_at = now_local

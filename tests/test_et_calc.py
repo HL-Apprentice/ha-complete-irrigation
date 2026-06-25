@@ -196,3 +196,23 @@ def test_select_eto_always_returns_positive():
     ):
         value, _ = select_eto(default=DEF, **kw)
         assert value > 0
+
+
+def test_select_eto_rejects_out_of_range_auto():
+    # A fresh-but-absurd auto value (> sane max) must fall back to manual.
+    assert select_eto(
+        manual=2.0, auto_value=50.0, auto_enabled=True, auto_age_hours=1.0, default=DEF
+    ) == (2.0, "manual")
+    # Exactly at the ceiling is still accepted.
+    assert select_eto(
+        manual=2.0, auto_value=10.0, auto_enabled=True, auto_age_hours=1.0, default=DEF
+    ) == (10.0, "auto")
+
+
+def test_weekly_eto_wraps_year_end_day_of_year():
+    # A forecast spanning year-end (doy 363 + 6 = 369) must NOT trip PyETO's
+    # 1..366 day-of-year range check — it should wrap and still produce a
+    # positive weekly value instead of raising.
+    days = [_phx_day() for _ in range(7)]
+    wk = weekly_eto_inches(days, latitude_deg=33.4, altitude_m=337, start_day_of_year=363)
+    assert wk > 0

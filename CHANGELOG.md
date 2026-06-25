@@ -20,10 +20,13 @@ project uses [Semantic Versioning](https://semver.org/).
   it yields a sane ETo even on a sparse forecast. Computation is unit-aware
   (handles °F/°C and mph / km/h / kn / etc.) and uses your HA latitude + elevation.
 - **Graceful by design:** `effective_eto()` falls back to your manual `eto_in_week`
-  whenever auto is off, has never produced a value, or the last value is stale
-  (older than 36 h — so a weather feed going dark can't strand watering on a
-  days-old number). The design math always gets a positive number; it never
-  raises. The manual field becomes the labeled fallback when auto is on.
+  whenever auto is off, has never produced a value, is stale (older than 36 h — so
+  a weather feed going dark can't strand watering on a days-old number), or is
+  **outside the sane 0–10 in/week envelope** the manual field already enforces (so a
+  flaky forecast — a provider field-swap or unit glitch — can never over-water the
+  yard). The design math always gets a positive number; it never raises. The manual
+  field becomes the labeled fallback when auto is on. A forecast spanning year-end
+  is handled (day-of-year wraps 1–366 instead of tripping the ETo range check).
 - **New `set_weather_config` fields:** `eto_auto` (bool) and `weather_entity`
   (which `weather.*` entity to read; defaults to the first available). The
   `health.json` feed gains an `eto` block (source / manual / auto value +

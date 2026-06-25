@@ -117,7 +117,10 @@ def weekly_eto_inches(
             d,
             latitude_deg=latitude_deg,
             altitude_m=altitude_m,
-            day_of_year=start_day_of_year + i,
+            # Wrap into 1..366 — a forecast spanning year-end (e.g. doy 363 + 6)
+            # would otherwise exceed 366 and trip PyETO's day-of-year range
+            # check, silently killing auto-ETo for the last week of December.
+            day_of_year=((start_day_of_year - 1 + i) % 366) + 1,
             coastal=coastal,
         )
         for i, d in enumerate(days)
@@ -204,6 +207,10 @@ def weekly_eto_inches_from_forecast(
 # ── Source selection (auto vs manual) — pure policy, HA-free ──────────
 
 DEFAULT_AUTO_STALE_HOURS = 36.0
+# Same sane envelope the MANUAL eto_in_week field enforces (services schema
+# Range(min=0.1, max=10)). The auto path must honor the same bound so a flaky
+# forecast can't push an out-of-range value into the water math.
+SANE_ETO_MAX = 10.0
 
 
 def select_eto(
@@ -214,14 +221,17 @@ def select_eto(
     auto_age_hours: float | None,
     default: float,
     stale_hours: float = DEFAULT_AUTO_STALE_HOURS,
+    max_in_week: float = SANE_ETO_MAX,
 ) -> tuple[float, str]:
     """Pick the reference ETo (in/week) the design math should use, with graceful
     fallback. Returns (value, source) where source is 'auto' or 'manual'.
 
-    Auto wins ONLY when it's enabled, positive, and fresh (age <= stale_hours, so a
-    dark weather feed can't strand us on a days-old number). Otherwise the manual
-    value — or `default` when manual is missing/invalid/non-positive. Never raises,
-    always returns a positive value, so callers can trust it for water math."""
+    Auto wins ONLY when it's enabled, fresh (age <= stale_hours, so a dark weather
+    feed can't strand us on a days-old number), AND within the sane envelope
+    (0 < value <= max_in_week — an out-of-range forecast is a guess, not data).
+    Otherwise the manual value — or `default` when manual is missing/invalid/
+    non-positive. Never raises, always returns a positive value, so callers can
+    trust it for water math."""
     try:
         m = float(manual) if manual is not None else default
     except (TypeError, ValueError):
@@ -232,7 +242,7 @@ def select_eto(
         return m, "manual"
     if (
         auto_value is not None
-        and auto_value > 0
+        and 0 < auto_value <= max_in_week
         and auto_age_hours is not None
         and auto_age_hours <= stale_hours
     ):

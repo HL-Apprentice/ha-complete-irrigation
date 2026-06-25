@@ -1374,9 +1374,11 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         await coord.async_save_config()
         # v1.28 — if auto ETo just turned on (or the weather entity changed
         # while it's on), fetch a fresh figure now rather than waiting for the
-        # daily 03:00 refresh.
+        # daily 03:00 refresh. Await it (don't fire-and-forget) so the service
+        # only returns once the new value is stored — the Yard UI's refetch
+        # right after this call then sees the fresh figure with no timing race.
         if coord.config.get("eto_auto") and (not eto_was_auto or "weather_entity" in data):
-            hass.async_create_task(coord._refresh_auto_eto())
+            await coord._refresh_auto_eto()
         _LOGGER.info("Weather config updated: %s", data)
 
     async def handle_set_zone_moisture(call: ServiceCall) -> None:
