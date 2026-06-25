@@ -272,3 +272,24 @@ def test_build_loop_report_attaches_topups():
     assert under, "expected at least one UNDER plant for this stressed loop"
     assert len(rep.topups) == len(under)
     assert all(t.plant_name for t in rep.topups)
+
+
+def test_topup_integer_cadence_for_fractional_runs_per_week():
+    # Real schedules give fractional runs_per_week (every-other-day = 3.5/wk).
+    # The added-runs cadence must be a whole integer, not "3.5x/wk".
+    loop = Loop("L", 30, 3.5)
+    plans = recommend_topups(loop, [_result("thirsty", 20.0, 14.0, 2.0, STATUS_UNDER)])
+    assert len(plans) == 1
+    p = plans[0]
+    assert isinstance(p.extra_runs_per_week, int)
+    assert p.extra_runs_per_week == round(7 - 3.5)  # 4
+    assert p.feasible is True
+    assert p.delivered_gal_week_after == pytest.approx(20.0, abs=0.3)
+
+
+def test_topup_integer_cadence_through_build_loop_report():
+    # The float cadence reaches recommend_topups via build_loop_report too.
+    loop = Loop("zone.beds", 12, 2.5)  # ~ every-third-day primary
+    rep = build_loop_report(loop, [_plant("high", 500.0)], eto=2.0, efficiency=0.9)
+    for t in rep.topups:
+        assert isinstance(t.extra_runs_per_week, int)

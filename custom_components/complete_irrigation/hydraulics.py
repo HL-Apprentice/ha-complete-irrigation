@@ -269,7 +269,11 @@ def recommend_topups(loop: Loop, results: list[PlantWaterResult]) -> list[TopUpP
     `extra_runs_per_week = 0` + `feasible = False` means the plant already runs at
     (or above) the target cadence, so frequency can't help — it needs a longer main
     runtime or its own loop (the emitter/mismatch warnings cover that case)."""
-    extra_runs = TOPUP_TARGET_RUNS_PER_WEEK - loop.runs_per_week
+    # Whole number of ADDED runs. loop.runs_per_week can be fractional (every-
+    # other-day = 3.5/wk), so round to an integer cadence — "3.5x/wk" is a
+    # nonsensical recommendation and the field is typed int. Minutes are solved
+    # against this integer count below, so the delivered gallons stay consistent.
+    extra_runs = round(TOPUP_TARGET_RUNS_PER_WEEK - loop.runs_per_week)
     plans: list[TopUpPlan] = []
     for r in results:
         if r.status != STATUS_UNDER:
