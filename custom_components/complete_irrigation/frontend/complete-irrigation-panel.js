@@ -3582,15 +3582,23 @@
           let cls = "day-cal-pill";
           let status = "";
           if (isToday) {
+            const inWindow =
+              r.start_minutes <= nowMin && nowMin < r.start_minutes + r.duration_minutes;
+            // v1.30 — only claim "Running now" when an active SESSION confirms the
+            // zone is actually watering (same truth the Today card uses). A run
+            // gated off at fire time (rain/moisture/wind) sits in its planned
+            // window but never created a session, so it shows "Scheduled", not
+            // "Running now" — keeping the card and calendar in agreement.
+            const sess = this._activeSessions[r.zone_entity_id];
+            const sessionActive = sess != null && sess > Date.now();
             if (r.start_minutes + r.duration_minutes < nowMin) {
               cls += " past";
               status = " · Past";
-            } else if (
-              r.start_minutes <= nowMin &&
-              nowMin < r.start_minutes + r.duration_minutes
-            ) {
+            } else if (inWindow && sessionActive) {
               cls += " live";
               status = " · Running now";
+            } else if (inWindow) {
+              status = " · Scheduled";
             }
           }
           const endMin = r.start_minutes + r.duration_minutes;
@@ -3778,13 +3786,14 @@
         const abortedAny = blocks.some((b) => b.status === "aborted");
         const delivered = blocks.reduce((s, b) => s + (b.actual_minutes || 0), 0);
         const pct = Math.round((completed / Math.max(1, n)) * 100);
+        // Only "running" when a block actually IS running. A status filter can
+        // drop a session's running block, leaving completed<n with none running —
+        // that must NOT default to a permanent false "Running" badge.
         const sessStatus = runningAny
           ? "running"
-          : completed >= n
-            ? "completed"
-            : abortedAny
-              ? "aborted"
-              : "running";
+          : abortedAny
+            ? "aborted"
+            : "completed";
         const meaningful = Array.from(
           new Set(blocks.flatMap((b) => this._meaningfulTriggerKeys(b.triggers)))
         );
