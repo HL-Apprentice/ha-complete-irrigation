@@ -265,6 +265,10 @@
 
       // Local manual-run countdowns: entity_id -> deadline epoch ms
       this._localRuns = {};
+      // v1.30 — active run SESSIONS: entity_id -> whole-run deadline epoch ms.
+      // Spans a chunked run's inter-block gaps; a gated (never-fired) run has no
+      // session, so this is the truthful "is the zone running" signal for the card.
+      this._activeSessions = {};
       // The total run length for each active run, in minutes. Lets the
       // tile show "4:52 left of 10 min" instead of just "4:52 left".
       this._localRunDurations = {};
@@ -1593,6 +1597,14 @@
             }
           }
         }
+        // v1.30 — rebuild the active-session map fresh each fetch (a cleared
+        // session disappears; entries also self-expire at their deadline).
+        const sessions = {};
+        for (const s of resp?.sessions || []) {
+          const dl = new Date(s.deadline).getTime();
+          if (Number.isFinite(dl) && dl > Date.now()) sessions[s.entity_id] = dl;
+        }
+        this._activeSessions = sessions;
         if (
           Object.keys(this._localRuns).length > 0 &&
           !this._countdownTimer
@@ -3008,28 +3020,6 @@
       return `<div class="empty"><p>No zones configured. Re-run setup from Settings → Devices & services.</p></div>`;
     }
 
-    _zoneRunningNowPerPlan(entityId) {
-      // v1.30 — true if a non-skipped planned run for this zone is in its live
-      // window right now (same signal the Today calendar uses for "Running
-      // now"). Skipped runs are already excluded from _plannedRunsByDate.
-      const now = new Date();
-      const iso =
-        now.getFullYear() +
-        "-" +
-        String(now.getMonth() + 1).padStart(2, "0") +
-        "-" +
-        String(now.getDate()).padStart(2, "0");
-      const todays = this._plannedRunsByDate && this._plannedRunsByDate.get(iso);
-      if (!todays || !todays.length) return false;
-      const nowMin = now.getHours() * 60 + now.getMinutes();
-      return todays.some(
-        (r) =>
-          r.zone_entity_id === entityId &&
-          r.start_minutes <= nowMin &&
-          nowMin < r.start_minutes + r.duration_minutes
-      );
-    }
-
     _groupHistoryRows(records) {
       // v1.30 — collapse a chunked run's consecutive "Base (block i/n)" records
       // into one session group. Records are newest-first, so a session reads as
@@ -3054,15 +3044,30 @@
         const base = m[1];
         const idx = parseInt(m[2], 10);
         const n = parseInt(m[3], 10);
+        const startMs = Date.parse(r.started_at);
+        // A block joins the current group only if it's the same (zone, base, n),
+        // its index is strictly lower (newest-first => descending within a
+        // session), AND it started within ~2h of the group's earliest block.
+        // The index check alone splits adjacent sessions (1 then n breaks
+        // descending), but a status/zone filter can drop the boundary block and
+        // leave two sessions' blocks adjacent with still-descending indices — the
+        // time guard catches that (real consecutive blocks are <~1h apart).
+        const closeInTime =
+          group &&
+          isFinite(startMs) &&
+          isFinite(group.minStartMs) &&
+          group.minStartMs - startMs <= 2 * 60 * 60 * 1000;
         if (
           group &&
           group.zone_entity_id === r.zone_entity_id &&
           group.base === base &&
           group.n === n &&
-          idx < group.minIdx
+          idx < group.minIdx &&
+          closeInTime
         ) {
           group.blocks.push(r);
           group.minIdx = idx;
+          if (isFinite(startMs)) group.minStartMs = Math.min(group.minStartMs, startMs);
         } else {
           close();
           group = {
@@ -3070,6 +3075,7 @@
             base,
             n,
             minIdx: idx,
+            minStartMs: isFinite(startMs) ? startMs : Infinity,
             zone_entity_id: r.zone_entity_id,
             zone_name: r.zone_name,
             schedule_id: r.schedule_id,
@@ -3102,28 +3108,6 @@
       return keep;
     }
 
-    _zoneRunningNowPerPlan(entityId) {
-      // v1.30 — true if a non-skipped planned run for this zone is in its live
-      // window right now (same signal the Today calendar uses for "Running
-      // now"). Skipped runs are already excluded from _plannedRunsByDate.
-      const now = new Date();
-      const iso =
-        now.getFullYear() +
-        "-" +
-        String(now.getMonth() + 1).padStart(2, "0") +
-        "-" +
-        String(now.getDate()).padStart(2, "0");
-      const todays = this._plannedRunsByDate && this._plannedRunsByDate.get(iso);
-      if (!todays || !todays.length) return false;
-      const nowMin = now.getHours() * 60 + now.getMinutes();
-      return todays.some(
-        (r) =>
-          r.zone_entity_id === entityId &&
-          r.start_minutes <= nowMin &&
-          nowMin < r.start_minutes + r.duration_minutes
-      );
-    }
-
     _renderZoneTile(zone) {
       const isHidden = this._hiddenZones.has(zone.entityId);
       const countdown = this._localRuns[zone.entityId];
@@ -3142,12 +3126,15 @@
         ? ` of ${totalMinutes} min`
         : "";
 
-      // v1.30 — the raw switch reads OFF during a chunked run's inter-block
-      // gaps and during Rachio state-poll lag, which made the card say "Idle"
-      // while the Today calendar said "Running now". Treat the zone as running
-      // when the schedule's live window covers now too, so the two can't disagree.
-      const runningPerPlan = !zone.on && zone.available && this._zoneRunningNowPerPlan(zone.entityId);
-      const showRunning = zone.on || runningPerPlan;
+      // v1.30 — the raw switch reads OFF during a chunked run's inter-block gaps
+      // and during Rachio state-poll lag, which made the card say "Idle" while a
+      // run was actually in progress. Use the active SESSION (whole-run, spans
+      // gaps) as the truth — NOT the schedule projection, which would also light
+      // up for a rain/moisture/wind-GATED run that never fired.
+      const sess = this._activeSessions[zone.entityId];
+      const sessionActive = sess != null && sess > Date.now();
+      const runningOffSwitch = !zone.on && zone.available && sessionActive;
+      const showRunning = zone.on || runningOffSwitch;
 
       let statusClass, statusLabel;
       if (!zone.available) {
@@ -3158,9 +3145,9 @@
         statusLabel = isCountingDown
           ? `Running — ${cdSpan} left${totalLabel}`
           : "Running";
-      } else if (runningPerPlan) {
+      } else if (runningOffSwitch) {
         statusClass = "running";
-        statusLabel = "Running"; // per the schedule (switch off between blocks)
+        statusLabel = "Running"; // active session — switch off between blocks
       } else {
         statusClass = "idle";
         statusLabel = "Idle";
