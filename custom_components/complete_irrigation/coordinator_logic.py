@@ -38,7 +38,10 @@ def plan_session_resume(
     for zone, s in sorted(sessions.items()):
         s = s or {}
         try:
-            deadline = datetime.fromisoformat(s["deadline"])
+            # Resume against the gap-FREE water_deadline so re-added inter-block
+            # gaps can't accumulate as extra water across repeated restarts; fall
+            # back to the gap-inclusive deadline for pre-fix / single-run sessions.
+            deadline = datetime.fromisoformat(s.get("water_deadline") or s["deadline"])
             remaining = (deadline - now).total_seconds()
         except (KeyError, TypeError, ValueError):
             out.append({"zone": zone, "action": "close", "remaining_minutes": 0, "session": s})

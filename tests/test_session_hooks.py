@@ -55,7 +55,9 @@ def test_record_session_deadline_includes_gap_allowance():
     )
     sess = coord.config["active_run_sessions"]["switch.citrus"]
     assert sess["total_minutes"] == 240  # water minutes (resume cap)
+    # deadline is gap-inclusive; water_deadline is gaps-free (resume math).
     assert sess["deadline"] == (started + timedelta(minutes=240, seconds=120)).isoformat()
+    assert sess["water_deadline"] == (started + timedelta(minutes=240)).isoformat()
 
 
 def test_clear_session_removes_it():
@@ -92,3 +94,29 @@ def test_scheduled_chunked_run_flags_block_subcall(monkeypatch):
     base_meta = {"schedule_id": "s1", "schedule_name": "Trees"}
     services._dispatch_run_blocks(_hass_no_op(), "switch.trees", entry, [58, 58], 30, base_meta)
     assert entry["block_subcall"]["switch.trees"] == {"idx": 1, "n": 2}
+
+
+def test_logical_run_supersede_cancels_in_flight_chunk_blocks(monkeypatch):
+    # The HIGH gate fix: a single (non-block) run started over an in-flight chunked
+    # run must cancel that chunk's pending block timers, so orphaned blocks can't
+    # re-open the valve untracked after the shared session is cleared.
+    cancels = []
+
+    def _fake_acl(_h, _d, _cb):
+        c = MagicMock()
+        cancels.append(c)
+        return c
+
+    monkeypatch.setattr(services, "async_call_later", _fake_acl)
+    entry: dict = {}
+    services._dispatch_run_blocks(_hass_no_op(), "switch.z", entry, [58, 58, 58], 30, None)
+    assert len(entry["block_timers"]["switch.z"]) == 2  # blocks 2 & 3 pending
+
+    # block 1's run_zone consumes block-1's marker (a block sub-call, not final):
+    assert services._session_decision_for_run(entry, "switch.z") == (True, False)
+    # Now a fresh LOGICAL run arrives (no marker) — not a block sub-call ...
+    assert services._session_decision_for_run(entry, "switch.z") == (False, True)
+    # ... so handle_run_zone runs the supersede: cancel the chunk's pending blocks.
+    services._cancel_block_timers(entry, "switch.z")
+    assert all(c.called for c in cancels)
+    assert "switch.z" not in entry.get("block_timers", {})

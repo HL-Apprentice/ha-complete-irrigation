@@ -676,11 +676,17 @@ def _record_active_session(
     a chunked run's planned end reflects its real (gap-inclusive) completion time."""
     if coord is None:
         return
+    # deadline = gap-INCLUSIVE wall-clock end (for the Today card / countdown).
+    # water_deadline = gap-FREE end (started + water minutes) used by the restart
+    # resume math, so re-added gaps on each resume can never accumulate as extra
+    # water across repeated restarts (resume converges to the same water owed).
     deadline = started_at + timedelta(minutes=int(total_minutes), seconds=int(extra_seconds))
+    water_deadline = started_at + timedelta(minutes=int(total_minutes))
     coord.config.setdefault("active_run_sessions", {})[zone] = {
         "total_minutes": int(total_minutes),
         "started_at": started_at.isoformat(),
         "deadline": deadline.isoformat(),
+        "water_deadline": water_deadline.isoformat(),
         "schedule_id": (meta or {}).get("schedule_id"),
         "schedule_name": (meta or {}).get("schedule_name", ""),
         "source": source,
@@ -856,6 +862,16 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         _cancel_handles(entry_data, entity_id)
         _clear_external_off(entry_data, entity_id)
 
+        # v1.30 — decide session record-vs-skip up front (consumes the block
+        # marker). A NON-block (logical) run must SUPERSEDE any in-flight CHUNKED
+        # run on this zone: cancel its pending block timers (advance the
+        # generation) so its orphaned blocks become no-ops instead of re-opening
+        # the valve untracked after this run clears the shared session. A block
+        # sub-call must NOT cancel — those pending timers are its own siblings.
+        _is_block_subcall, is_final_activation = _session_decision_for_run(entry_data, entity_id)
+        if not _is_block_subcall:
+            _cancel_block_timers(entry_data, entity_id)
+
         # Hard-failure guard (PRD #43): if the underlying switch entity is
         # missing or already unavailable, refuse to run and notify the user
         # immediately instead of silently logging.
@@ -874,11 +890,13 @@ async def _async_register_services(hass: HomeAssistant) -> None:
                 f"Cannot start {friendly} — the zone switch is "
                 f"{'missing from HA' if state is None else 'unavailable'}.",
             )
-            # v1.30 — drop any stashed meta (incl. a restart-resume "(resumed)"
-            # stash) + block marker so a refused start can't misattribute the
-            # next run on this zone.
+            # v1.30 — drop any stashed meta so a refused start can't misattribute
+            # the next run, and clear the session for a refused LOGICAL run or
+            # FINAL block (a stale session = false "Running" + a phantom restart
+            # resume). An intermediate block keeps the parent session intact.
             entry_data.get("pending_run_meta", {}).pop(entity_id, None)
-            entry_data.get("block_subcall", {}).pop(entity_id, None)
+            if not _is_block_subcall or is_final_activation:
+                _clear_active_session(hass, coord, entity_id)
             return
 
         # Record the run + turn the switch on.
@@ -895,12 +913,9 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         meta = entry_data.get("pending_run_meta", {}).pop(entity_id, None)
         source = SOURCE_SCHEDULED if meta else SOURCE_MANUAL
 
-        # v1.30 restart fail-over — record the session for the LOGICAL run so a
-        # restart can resume it. A block sub-call (flagged by _dispatch_run_blocks
-        # for manual AND scheduled chunked runs) belongs to a parent session
-        # already recorded by the chunking branch, so we don't re-record it; only
-        # the final block clears it (see _session_decision_for_run).
-        _is_block_subcall, is_final_activation = _session_decision_for_run(entry_data, entity_id)
+        # v1.30 restart fail-over — record the session for the LOGICAL run (the
+        # record-vs-skip + supersede decision was made above). A block sub-call
+        # belongs to a parent session already recorded by the chunking branch.
         if not _is_block_subcall:
             _record_active_session(
                 hass,
