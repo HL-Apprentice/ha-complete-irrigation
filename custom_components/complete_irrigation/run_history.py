@@ -193,7 +193,10 @@ class RunHistoryStore:
                 existing.with_changes(
                     ended_at=started_at.astimezone(UTC).isoformat(),
                     status=STATUS_COMPLETED,
-                    actual_minutes=existing.requested_minutes,
+                    # An interrupted run delivered only the ELAPSED wall time, not
+                    # its full requested minutes — over-reporting actual water
+                    # would mislead the design math + the LLM monitor.
+                    actual_minutes=_minutes_between(existing.started_at, started_at),
                 ),
             )
         rec = RunHistoryRecord(

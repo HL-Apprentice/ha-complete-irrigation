@@ -82,3 +82,26 @@ def test_multiple_sessions_each_decided():
 
 def test_empty_sessions_is_empty_plan():
     assert plan_session_resume({}, NOW) == []
+
+
+def test_resume_prefers_gap_free_water_deadline():
+    # deadline (gap-inclusive) is further out than water_deadline (gaps-free);
+    # resume must use the WATER deadline so re-added gaps don't become water.
+    sessions = {
+        "switch.citrus": {
+            "deadline": (NOW + timedelta(minutes=42)).isoformat(),  # +2 min of gaps
+            "water_deadline": (NOW + timedelta(minutes=40)).isoformat(),
+            "total_minutes": 240,
+        }
+    }
+    plan = plan_session_resume(sessions, NOW)
+    assert plan[0]["action"] == "resume"
+    assert plan[0]["remaining_minutes"] == 40  # water, not 42
+
+
+def test_falls_back_to_deadline_when_no_water_deadline():
+    # Pre-fix / single-run sessions have only `deadline`.
+    sessions = {"switch.z": {"deadline": (NOW + timedelta(minutes=15)).isoformat()}}
+    plan = plan_session_resume(sessions, NOW)
+    assert plan[0]["action"] == "resume"
+    assert plan[0]["remaining_minutes"] == 15
