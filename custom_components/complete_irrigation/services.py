@@ -18,7 +18,6 @@ All schedule CRUD operations persist immediately via coordinator.async_save().
 from __future__ import annotations
 
 import logging
-import re
 import uuid
 from dataclasses import replace
 from datetime import timedelta
@@ -656,9 +655,6 @@ def _record_run_start_to_history(
     )
 
 
-_BLOCK_NAME_RE = re.compile(r"\(block (\d+)/(\d+)\)\s*$")
-
-
 def _record_active_session(
     hass: HomeAssistant,
     coord,
@@ -668,14 +664,19 @@ def _record_active_session(
     started_at,
     meta: dict[str, Any] | None,
     source: str,
+    extra_seconds: int = 0,
 ) -> None:
     """v1.30 restart fail-over — persist the LOGICAL run (its full duration +
     planned end) so an HA restart can resume it. Stored in coordinator config,
     keyed by zone; cleared when the whole run ends. Block sub-calls do NOT call
-    this — the parent logical run already covers the session."""
+    this — the parent logical run already covers the session.
+
+    `total_minutes` is the WATER time (the resume cap, so a re-chunk re-adds gaps);
+    `extra_seconds` is the inter-block gap wall-clock added to the DEADLINE only, so
+    a chunked run's planned end reflects its real (gap-inclusive) completion time."""
     if coord is None:
         return
-    deadline = started_at + timedelta(minutes=int(total_minutes))
+    deadline = started_at + timedelta(minutes=int(total_minutes), seconds=int(extra_seconds))
     coord.config.setdefault("active_run_sessions", {})[zone] = {
         "total_minutes": int(total_minutes),
         "started_at": started_at.isoformat(),
@@ -695,6 +696,22 @@ def _clear_active_session(hass: HomeAssistant, coord, zone: str) -> None:
     sessions = coord.config.get("active_run_sessions")
     if sessions and sessions.pop(zone, None) is not None:
         hass.async_create_task(coord.async_save_config())
+
+
+def _session_decision_for_run(entry_data: dict[str, Any], entity_id: str) -> tuple[bool, bool]:
+    """v1.30 — for a run_zone call, return (is_block_subcall, is_final_activation),
+    consuming the block marker set by _dispatch_run_blocks.
+
+    - Not a block sub-call -> (False, True): a logical run; record its session and
+      its auto-stop clears the session.
+    - Block i/n -> (True, i == n): a chunked sub-call; the parent already recorded
+      the session, so DON'T re-record; only the final block (i == n) clears it.
+    This is the guard that stops a MANUAL chunked run (whose blocks carry no
+    schedule name) from overwriting + prematurely clearing its own session."""
+    info = entry_data.get("block_subcall", {}).pop(entity_id, None)
+    if info:
+        return True, int(info["idx"]) == int(info["n"])
+    return False, True
 
 
 def _dispatch_run_blocks(
@@ -746,6 +763,12 @@ def _dispatch_run_blocks(
                 meta["schedule_name"] = f"{base_name} (block {idx}/{n})"
                 meta["requested_minutes"] = bm
                 entry_data.setdefault("pending_run_meta", {})[entity_id] = meta
+            # v1.30 — mark this run_zone call as a block sub-call so it doesn't
+            # re-record / clear the parent's restart-resume session. Set for the
+            # MANUAL case too (base_meta is None there, so the "(block i/n)" name
+            # isn't present) — otherwise a manual chunked run's session would be
+            # overwritten with one block + cleared after block 1.
+            entry_data.setdefault("block_subcall", {})[entity_id] = {"idx": idx, "n": n}
             hass.async_create_task(
                 hass.services.async_call(
                     DOMAIN,
@@ -812,6 +835,9 @@ async def _async_register_services(hass: HomeAssistant) -> None:
                 started_at=dt_util.utcnow(),
                 meta=base_meta,
                 source=SOURCE_SCHEDULED if base_meta else SOURCE_MANUAL,
+                # The real completion is later than the water minutes by the gaps
+                # between the n blocks — fold them into the deadline.
+                extra_seconds=(len(blocks) - 1) * gap_s,
             )
             _LOGGER.info(
                 "%s (%s min) exceeds the %d-min controller cap — delivering as "
@@ -848,6 +874,11 @@ async def _async_register_services(hass: HomeAssistant) -> None:
                 f"Cannot start {friendly} — the zone switch is "
                 f"{'missing from HA' if state is None else 'unavailable'}.",
             )
+            # v1.30 — drop any stashed meta (incl. a restart-resume "(resumed)"
+            # stash) + block marker so a refused start can't misattribute the
+            # next run on this zone.
+            entry_data.get("pending_run_meta", {}).pop(entity_id, None)
+            entry_data.get("block_subcall", {}).pop(entity_id, None)
             return
 
         # Record the run + turn the switch on.
@@ -865,15 +896,12 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         source = SOURCE_SCHEDULED if meta else SOURCE_MANUAL
 
         # v1.30 restart fail-over — record the session for the LOGICAL run so a
-        # restart can resume it. A block sub-call ("(block i/n)") belongs to a
-        # parent session already recorded by the chunking branch, so we don't
-        # re-record it; we only flag whether THIS activation is the run's last,
-        # so its auto-stop clears the session.
-        _block_m = _BLOCK_NAME_RE.search((meta or {}).get("schedule_name", "")) if meta else None
-        if _block_m:
-            is_final_activation = int(_block_m.group(1)) == int(_block_m.group(2))
-        else:
-            is_final_activation = True
+        # restart can resume it. A block sub-call (flagged by _dispatch_run_blocks
+        # for manual AND scheduled chunked runs) belongs to a parent session
+        # already recorded by the chunking branch, so we don't re-record it; only
+        # the final block clears it (see _session_decision_for_run).
+        _is_block_subcall, is_final_activation = _session_decision_for_run(entry_data, entity_id)
+        if not _is_block_subcall:
             _record_active_session(
                 hass,
                 coord,

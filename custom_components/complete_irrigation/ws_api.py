@@ -88,25 +88,37 @@ async def get_active_runs(hass, connection, msg):
     this on connect (and after every run/stop) to hydrate countdowns —
     so a page reload mid-run, or a run started via Developer Tools,
     both see the auto-stop deadline.
+
+    v1.30 — ALSO returns `sessions`: zones with an active run SESSION and the whole
+    run's deadline. A chunked run is one session spanning all its blocks + the 30s
+    inter-block gaps; the per-block manual run (in `runs`) clears between blocks, so
+    `sessions` is what tells the Today card the zone is still running through a gap —
+    WITHOUT falsely showing a rain/moisture/wind-GATED run as running (a gated run
+    never creates a session). `runs` still drives the per-block countdown.
     """
     from . import _SHARED_KEY
 
     runs = []
+    sessions_out = []
     for key, data in hass.data.get(DOMAIN, {}).items():
         if key == _SHARED_KEY:
             continue
         tracker = data.get("manual_runs")
-        if tracker is None:
-            continue
-        for r in tracker.active():
-            runs.append(
-                {
-                    "entity_id": r.entity_id,
-                    "deadline": r.deadline().isoformat(),
-                    "duration_minutes": int(r.duration.total_seconds() // 60),
-                }
-            )
-    connection.send_result(msg["id"], {"runs": runs})
+        if tracker is not None:
+            for r in tracker.active():
+                runs.append(
+                    {
+                        "entity_id": r.entity_id,
+                        "deadline": r.deadline().isoformat(),
+                        "duration_minutes": int(r.duration.total_seconds() // 60),
+                    }
+                )
+        coord = data.get("coordinator")
+        sessions = (coord.config.get("active_run_sessions") if coord else None) or {}
+        for zone, sess in sessions.items():
+            if isinstance(sess, dict) and sess.get("deadline"):
+                sessions_out.append({"entity_id": zone, "deadline": sess["deadline"]})
+    connection.send_result(msg["id"], {"runs": runs, "sessions": sessions_out})
 
 
 @websocket_api.require_admin
