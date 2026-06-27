@@ -1423,7 +1423,9 @@ class ScheduleCoordinator:
         from homeassistant.util import dt as dt_util
 
         sessions = dict(self._config.get("active_run_sessions") or {})
-        if zones is not None:
+        if zones is None:
+            self._resume_attempts = 0  # fresh resume sequence (also reset per HA start)
+        else:
             sessions = {z: s for z, s in sessions.items() if z in zones}
         if not sessions:
             return
@@ -1444,6 +1446,9 @@ class ScheduleCoordinator:
                 # refuse) or dropping it.
                 st = self._hass.states.get(zone)
                 if st is None or st.state in ("unavailable", "unknown"):
+                    # Mark the session gated so the UI doesn't show a false
+                    # "Running" while the valve is actually off waiting to retry.
+                    live[zone]["resuming_gated"] = True
                     deferred.append(zone)
                     continue
                 remaining = item["remaining_minutes"]
@@ -1474,7 +1479,14 @@ class ScheduleCoordinator:
                 # did NOT start -> re-defer for retry rather than leave a stale
                 # session showing a false "Running".
                 after = (self._config.get("active_run_sessions") or {}).get(zone)
-                if after is not None and after.get("started_at") == before_started:
+                if after is None:
+                    # Cleared externally (e.g. the user pressed Stop) during the
+                    # resume — respect it; don't claim it resumed.
+                    continue
+                if after.get("started_at") == before_started:
+                    # run_zone refused (switch dropped after the gate) — the run did
+                    # NOT start; mark gated + re-defer rather than show false "Running".
+                    after["resuming_gated"] = True
                     deferred.append(zone)
                     continue
                 _LOGGER.info(
