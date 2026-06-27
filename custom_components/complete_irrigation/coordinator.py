@@ -1409,16 +1409,22 @@ class ScheduleCoordinator:
 
     # ── Restart fail-over (v1.30) ─────────────────────────────────
 
-    async def _resume_interrupted_runs(self, _now=None) -> None:
+    async def _resume_interrupted_runs(self, _now=None, zones=None) -> None:
         """Resume (or close out) runs interrupted by an HA restart. For each
         persisted session: still within its planned window -> re-fire run_zone
         for the remaining minutes (re-chunks a giant); past its end -> drop it,
         force the valve off, and complete any 'zombie' running record. Bad/garbage
-        session data fails safe to close (never resumes on a guess)."""
+        session data fails safe to close (never resumes on a guess).
+
+        `zones` (set) scopes a RETRY to only the zones that were deferred last time
+        (switch not yet available), so a retry never re-fires zones already resumed.
+        """
         from homeassistant.helpers.event import async_call_later
         from homeassistant.util import dt as dt_util
 
         sessions = dict(self._config.get("active_run_sessions") or {})
+        if zones is not None:
+            sessions = {z: s for z, s in sessions.items() if z in zones}
         if not sessions:
             return
         entry_data = self._hass.data.get(DOMAIN, {}).get(self._entry_id)
@@ -1475,9 +1481,12 @@ class ScheduleCoordinator:
         await self.async_save_run_history()
 
         # Switch not ready for some zones — keep their sessions and retry, up to
-        # a bounded number of attempts, instead of losing the run.
+        # a bounded number of attempts, instead of losing the run. The retry is
+        # SCOPED to just the deferred zones so it never re-fires zones already
+        # resumed above (which would needlessly cancel + restart their timers).
         if deferred and self._resume_attempts < _RESUME_MAX_ATTEMPTS:
             self._resume_attempts += 1
+            deferred_set = set(deferred)
             _LOGGER.info(
                 "Restart fail-over: %s switch(es) not ready, retry %d/%d in %ds",
                 len(deferred),
@@ -1488,12 +1497,29 @@ class ScheduleCoordinator:
             self._cancel_resume = async_call_later(
                 self._hass,
                 _RESUME_RETRY_SECONDS,
-                lambda _now: self._hass.async_create_task(self._resume_interrupted_runs()),
+                lambda _now: self._hass.async_create_task(
+                    self._resume_interrupted_runs(zones=deferred_set)
+                ),
             )
         elif deferred:
+            # Out of retries — DON'T leave a zombie session (it would show a false
+            # "Running" on the card for hours). Drop it, force the valve off as a
+            # safety, and record the run as aborted.
             _LOGGER.warning(
                 "Restart fail-over: gave up resuming %s after %d attempts — switch "
-                "still unavailable; session(s) will expire at their deadline",
+                "still unavailable; closing out + valve off",
                 deferred,
                 _RESUME_MAX_ATTEMPTS,
             )
+            for zone in deferred:
+                self._config.get("active_run_sessions", {}).pop(zone, None)
+                await self._hass.services.async_call(
+                    "switch", "turn_off", {"entity_id": zone}, blocking=False
+                )
+                self._run_history.abort_run(
+                    zone,
+                    ended_at=dt_util.now(),
+                    reason="restart resume gave up — switch unavailable",
+                )
+            await self.async_save_config()
+            await self.async_save_run_history()

@@ -102,3 +102,34 @@ async def test_resume_defers_and_retries_when_switch_unavailable(monkeypatch):
     assert not any(c.args[1] == "run_zone" for c in calls)  # didn't fire into a dead switch
     assert "switch.citrus" in coord._config["active_run_sessions"]  # session KEPT
     assert scheduled and coord._resume_attempts == 1  # a bounded retry was armed
+
+
+async def test_retry_is_scoped_to_deferred_zones():
+    # Multi-model fix: a retry must only re-process the deferred zones, never
+    # re-fire a zone already resumed on the first pass.
+    coord = _coord_with_sessions(
+        {"switch.z": {"deadline": (dt_util.now() + timedelta(minutes=40)).isoformat()}}
+    )
+    await coord._resume_interrupted_runs(zones={"switch.other"})  # z is out of scope
+    coord._hass.services.async_call.assert_not_called()
+
+
+async def test_gives_up_cleanly_after_max_retries(monkeypatch):
+    # Multi-model fix: out of retries must NOT leave a zombie session (false
+    # "Running") — clear it, force the valve off, record an abort.
+    from custom_components.complete_irrigation.coordinator import _RESUME_MAX_ATTEMPTS
+
+    coord = _coord_with_sessions(
+        {"switch.z": {"deadline": (dt_util.now() + timedelta(minutes=40)).isoformat()}}
+    )
+    unavailable = MagicMock()
+    unavailable.state = "unavailable"
+    coord._hass.states.get.return_value = unavailable
+    coord._resume_attempts = _RESUME_MAX_ATTEMPTS  # already at the cap
+    coord._run_history.abort_run = MagicMock()
+    monkeypatch.setattr("homeassistant.helpers.event.async_call_later", lambda *a, **k: MagicMock())
+    await coord._resume_interrupted_runs()
+    assert "switch.z" not in coord._config.get("active_run_sessions", {})  # no zombie
+    calls = coord._hass.services.async_call.call_args_list
+    assert any(c.args[0] == "switch" and c.args[1] == "turn_off" for c in calls)  # valve off
+    coord._run_history.abort_run.assert_called_once()
