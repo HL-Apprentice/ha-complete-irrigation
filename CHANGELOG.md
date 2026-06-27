@@ -6,6 +6,14 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ## Unreleased — photo DB + security hardening
 
+### Fixed — schedule editor number inputs no longer clip 2-digit values
+
+- The compact hour/minute and per-zone duration boxes in the schedule editor were
+  cutting off two-digit numbers ("30" showed as "3C") — the browser's number-spinner
+  arrows plus padding left no room for the digits, especially in the HA macOS app's
+  WKWebView. The spinner arrows are now hidden (the min/max/step already constrain the
+  value) and the boxes are sized so the full number is always visible.
+
 ### Added — per-plant photo history (groundwork for biannual vision health)
 
 - **Plants can carry a photo history** for monitoring health over time. A new
