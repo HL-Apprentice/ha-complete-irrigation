@@ -85,6 +85,7 @@ SERVICE_SET_GENERAL_CONFIG = "set_general_config"
 SERVICE_ADD_PLANT = "add_plant"
 SERVICE_UPDATE_PLANT = "update_plant"
 SERVICE_DELETE_PLANT = "delete_plant"
+SERVICE_SET_YARD_MAP = "set_yard_map"  # v1.30 — fetch + cache the aerial backdrop
 
 MAX_SCHEDULE_DURATION_MIN = 480  # 8 hours — safety cap for scheduled runs
 
@@ -433,6 +434,8 @@ _ADD_PLANT_SCHEMA = vol.Schema(
     }
 )
 
+_MAP_COORD = vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0))
+
 _UPDATE_PLANT_SCHEMA = vol.Schema(
     {
         vol.Required("plant_id"): cv.string,
@@ -440,10 +443,22 @@ _UPDATE_PLANT_SCHEMA = vol.Schema(
         vol.Optional("wucols_category"): vol.In(_WUCOLS_CATEGORIES),
         vol.Optional("canopy_area_sqft"): _CANOPY_AREA,
         vol.Optional("zone_entity_id"): cv.entity_id,
+        # v1.30 — normalized yard-map position (set when a marker is dragged/placed).
+        vol.Optional("map_x"): _MAP_COORD,
+        vol.Optional("map_y"): _MAP_COORD,
     }
 )
 
 _DELETE_PLANT_SCHEMA = vol.Schema({vol.Required("plant_id"): cv.string})
+
+# v1.30 — fetch + cache the aerial backdrop. Center defaults to the HA location.
+_SET_YARD_MAP_SCHEMA = vol.Schema(
+    {
+        vol.Optional("latitude"): vol.All(vol.Coerce(float), vol.Range(min=-90, max=90)),
+        vol.Optional("longitude"): vol.All(vol.Coerce(float), vol.Range(min=-180, max=180)),
+        vol.Optional("span_m"): vol.All(vol.Coerce(float), vol.Range(min=10, max=500)),
+    }
+)
 
 
 def _find_coordinator(hass: HomeAssistant):
@@ -1409,7 +1424,14 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             return
         overrides = {
             k: data[k]
-            for k in ("name", "wucols_category", "canopy_area_sqft", "zone_entity_id")
+            for k in (
+                "name",
+                "wucols_category",
+                "canopy_area_sqft",
+                "zone_entity_id",
+                "map_x",
+                "map_y",
+            )
             if k in data
         }
         # replace() re-runs PlantRecord validation on the merged record.
@@ -1428,6 +1450,81 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         if coord.plants.delete(data["plant_id"]):
             await coord.async_save_plants()
             _LOGGER.info("Deleted plant %s", data["plant_id"])
+
+    async def handle_set_yard_map(call: ServiceCall) -> None:
+        if not await _require_admin_if_configured(hass, call):
+            return
+        data = _SET_YARD_MAP_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None:
+            return
+        import os
+
+        import aiohttp
+        from homeassistant.helpers.aiohttp_client import async_get_clientsession
+        from homeassistant.util import dt as dt_util
+
+        from .yard_map import bbox_from_center, esri_export_url, image_size_for_bbox
+
+        lat = data.get("latitude", hass.config.latitude)
+        lon = data.get("longitude", hass.config.longitude)
+        span = float(data.get("span_m", 60.0))
+        if lat is None or lon is None:
+            _LOGGER.warning("set_yard_map: no location — set HA latitude/longitude or pass them")
+            return
+
+        bbox = bbox_from_center(float(lat), float(lon), span)
+        width, height = image_size_for_bbox(bbox)
+        url = esri_export_url(bbox, width, height)
+
+        session = async_get_clientsession(hass)
+        try:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                if resp.status != 200:
+                    _LOGGER.warning("set_yard_map: aerial service returned HTTP %s", resp.status)
+                    return
+                content = await resp.read()
+        except Exception as err:  # network / timeout / client errors — never crash
+            _LOGGER.warning("set_yard_map: aerial fetch failed: %s", err)
+            return
+        if not content or len(content) < 1024:
+            _LOGGER.warning("set_yard_map: aerial fetch returned too little data")
+            return
+
+        abs_dir = hass.config.path("www", "complete_irrigation")
+        abs_path = os.path.join(abs_dir, "yard_map.jpg")
+
+        def _save() -> None:
+            os.makedirs(abs_dir, exist_ok=True)
+            with open(abs_path, "wb") as fh:
+                fh.write(content)
+
+        try:
+            await hass.async_add_executor_job(_save)
+        except OSError as err:
+            _LOGGER.warning("set_yard_map: could not write image: %s", err)
+            return
+
+        version = dt_util.utcnow().strftime("%Y%m%d%H%M%S")
+        coord.config["yard_map"] = {
+            "center_lat": float(lat),
+            "center_lon": float(lon),
+            "span_m": span,
+            "bbox": {
+                "west": bbox.west,
+                "south": bbox.south,
+                "east": bbox.east,
+                "north": bbox.north,
+            },
+            "width": width,
+            "height": height,
+            "image_path": f"/local/complete_irrigation/yard_map.jpg?v={version}",
+            "version": version,
+        }
+        await coord.async_save_config()
+        _LOGGER.info(
+            "Yard map updated (%dx%d) centered %.5f,%.5f span %.0fm", width, height, lat, lon, span
+        )
 
     hass.services.async_register(DOMAIN, SERVICE_RUN_ZONE, handle_run_zone, schema=_RUN_ZONE_SCHEMA)
     hass.services.async_register(
@@ -1468,6 +1565,9 @@ async def _async_register_services(hass: HomeAssistant) -> None:
     )
     hass.services.async_register(
         DOMAIN, SERVICE_DELETE_PLANT, handle_delete_plant, schema=_DELETE_PLANT_SCHEMA
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_SET_YARD_MAP, handle_set_yard_map, schema=_SET_YARD_MAP_SCHEMA
     )
 
     # ── Weather + per-zone moisture configuration ──────────────────
@@ -1728,6 +1828,7 @@ def _async_unregister_services(hass: HomeAssistant) -> None:
         SERVICE_ADD_PLANT,
         SERVICE_UPDATE_PLANT,
         SERVICE_DELETE_PLANT,
+        SERVICE_SET_YARD_MAP,
     ):
         if hass.services.has_service(DOMAIN, svc):
             hass.services.async_remove(DOMAIN, svc)

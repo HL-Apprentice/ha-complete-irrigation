@@ -86,6 +86,36 @@ def test_to_calc_plant_bridges_to_hydraulics():
     assert p.plant_factor == 0.8  # high
 
 
+# ── v1.30 map coordinates ───────────────────────────────────────────
+
+
+def test_map_coords_default_to_unplaced():
+    r = _rec()
+    assert r.map_x is None and r.map_y is None
+
+
+def test_map_coords_round_trip():
+    r = PlantRecord("p1", "Lemon", "high", 100.0, "switch.citrus", map_x=0.25, map_y=0.8)
+    assert PlantRecord.from_dict(r.to_dict()) == r
+
+
+def test_pre_v130_record_loads_as_unplaced():
+    data = _rec().to_dict()
+    data.pop("map_x", None)
+    data.pop("map_y", None)
+    rec = PlantRecord.from_dict(data)  # must not raise
+    assert rec.map_x is None and rec.map_y is None
+
+
+def test_map_coords_out_of_range_rejected():
+    import pytest
+
+    with pytest.raises(ValueError):
+        PlantRecord("p1", "Lemon", "high", 100.0, "switch.citrus", map_x=1.4, map_y=0.5)
+    with pytest.raises(ValueError):
+        PlantRecord("p1", "Lemon", "high", 100.0, "switch.citrus", map_x=0.5, map_y=-0.1)
+
+
 # ── PlantStore CRUD ─────────────────────────────────────────────────
 
 
