@@ -80,3 +80,25 @@ async def test_noop_when_no_sessions():
     coord = _coord_with_sessions({})
     await coord._resume_interrupted_runs()
     coord._hass.services.async_call.assert_not_called()
+
+
+async def test_resume_defers_and_retries_when_switch_unavailable(monkeypatch):
+    # The re-gate fix: a slow switch reconnect at resume time must NOT lose the
+    # run — keep the session and retry, never fire run_zone into an unavailable
+    # switch (which would refuse) and never drop the session.
+    coord = _coord_with_sessions(
+        {"switch.citrus": {"deadline": (dt_util.now() + timedelta(minutes=40)).isoformat()}}
+    )
+    unavailable = MagicMock()
+    unavailable.state = "unavailable"
+    coord._hass.states.get.return_value = unavailable
+    scheduled = []
+    monkeypatch.setattr(
+        "homeassistant.helpers.event.async_call_later",
+        lambda *a, **k: scheduled.append(a) or MagicMock(),
+    )
+    await coord._resume_interrupted_runs()
+    calls = coord._hass.services.async_call.call_args_list
+    assert not any(c.args[1] == "run_zone" for c in calls)  # didn't fire into a dead switch
+    assert "switch.citrus" in coord._config["active_run_sessions"]  # session KEPT
+    assert scheduled and coord._resume_attempts == 1  # a bounded retry was armed
