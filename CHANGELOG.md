@@ -4,6 +4,41 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## Unreleased — photo DB + security hardening
+
+### Added — per-plant photo history (groundwork for biannual vision health)
+
+- **Plants can carry a photo history** for monitoring health over time. A new
+  `add_plant_photo` service stores an image (base64) under
+  `www/complete_irrigation/plants/<id>/`, newest-first, capped per plant; the
+  plant's first photo with embedded GPS can auto-place its map marker (EXIF-GPS),
+  and every later update is tied to the **selected** plant (selection owns
+  identity, manual drag owns position).
+
+### Security — recursive multi-model audit (Grok + Gemini + Qwen + Claude)
+
+- **Access control, secure-by-default.** Services that mutate configuration,
+  delete data, write files, or make outbound requests now require an **admin**
+  user unconditionally (schedule/plant CRUD, the `set_*_config` setters,
+  `start_establishment`, `clear_run_history`, `add_plant_photo`, `set_yard_map`).
+  Operational controls a household member legitimately uses (`run_zone`,
+  `stop_zone`, `run_schedule`, `set_schedule_enabled`, `set_zone_moisture`,
+  `clear_rain_lockout`, `test_notification`) stay on the opt-in
+  `admin_only_services` gate. The admin check **passes system/automation
+  context**, so no Home Assistant automation is affected — only non-admin *users*
+  are blocked from reconfiguring or destroying data.
+- **Path-traversal hardening.** A plant `id` is used as a filesystem path
+  segment, so it is now constrained to a safe slug (`[A-Za-z0-9_-]{1,64}`) at
+  record construction *and* on `.storage` load — a tampered store entry with
+  `../` / slashes / an absolute path is rejected (dropped on load), and
+  `add_plant_photo` adds a realpath-containment check at the write itself.
+- **Upload validation.** `add_plant_photo` (and the fetched yard aerial) now
+  verify image **magic bytes** (JPEG/PNG/GIF/WEBP/BMP) before writing, so a
+  crafted SVG/HTML payload can't be stored as a `.jpg` and served from `/local`
+  (stored-XSS / content-sniffing vector).
+- 11 new security tests; the audit ran three adversarial rounds to a clean
+  consensus (all engines `secure`) and passed the HA Docker smoke test.
+
 ## v1.31.0 — 2026-06-27
 
 ### Added — 2D yard map with draggable plant markers
