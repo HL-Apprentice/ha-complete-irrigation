@@ -113,7 +113,9 @@ async def test_resume_defers_and_retries_when_switch_unavailable(monkeypatch):
     await coord._resume_interrupted_runs()
     calls = coord._hass.services.async_call.call_args_list
     assert not any(c.args[1] == "run_zone" for c in calls)  # didn't fire into a dead switch
-    assert "switch.citrus" in coord._config["active_run_sessions"]  # session KEPT
+    sess = coord._config["active_run_sessions"].get("switch.citrus")
+    assert sess is not None  # session KEPT
+    assert sess.get("resuming_gated") is True  # marked gated -> UI won't show false "Running"
     assert scheduled and coord._resume_attempts == 1  # a bounded retry was armed
 
 
@@ -171,7 +173,8 @@ async def test_gives_up_cleanly_after_max_retries(monkeypatch):
     coord._resume_attempts = _RESUME_MAX_ATTEMPTS  # already at the cap
     coord._run_history.abort_run = MagicMock()
     monkeypatch.setattr("homeassistant.helpers.event.async_call_later", lambda *a, **k: MagicMock())
-    await coord._resume_interrupted_runs()
+    # zones= (a RETRY) so the initial-pass attempt reset doesn't fire.
+    await coord._resume_interrupted_runs(zones={"switch.z"})
     assert "switch.z" not in coord._config.get("active_run_sessions", {})  # no zombie
     calls = coord._hass.services.async_call.call_args_list
     assert any(c.args[0] == "switch" and c.args[1] == "turn_off" for c in calls)  # valve off
