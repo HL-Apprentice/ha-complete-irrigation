@@ -82,8 +82,12 @@ TICK_SECONDS = 60
 _MISSED_LOOKBACK_MIN = 5
 # v1.30 — restart fail-over: how long after startup to wait before resuming an
 # interrupted run, so switch integrations (Rachio etc.) have time to come back
-# online before we re-assert the valve.
+# online before we re-assert the valve. If a zone's switch still isn't available,
+# retry up to _RESUME_MAX_ATTEMPTS times spaced _RESUME_RETRY_SECONDS apart rather
+# than dropping the run (a slow cloud reconnect must not lose a giant's water).
 _RESUME_DELAY_SECONDS = 30
+_RESUME_RETRY_SECONDS = 60
+_RESUME_MAX_ATTEMPTS = 5
 
 # v1.19 — auto-soak defaults + give-up cooldown. After soak_max_cycles
 # fail to raise moisture above min_pct, the zone won't re-attempt for
@@ -231,6 +235,7 @@ class ScheduleCoordinator:
         # v1.30 — restart fail-over: a one-shot timer that resumes any run
         # interrupted by an HA restart (see _resume_interrupted_runs).
         self._cancel_resume = None
+        self._resume_attempts = 0
 
     @property
     def schedule_store(self) -> ScheduleStore:
@@ -1410,31 +1415,45 @@ class ScheduleCoordinator:
         for the remaining minutes (re-chunks a giant); past its end -> drop it,
         force the valve off, and complete any 'zombie' running record. Bad/garbage
         session data fails safe to close (never resumes on a guess)."""
+        from homeassistant.helpers.event import async_call_later
         from homeassistant.util import dt as dt_util
 
         sessions = dict(self._config.get("active_run_sessions") or {})
         if not sessions:
             return
         entry_data = self._hass.data.get(DOMAIN, {}).get(self._entry_id)
+        deferred: list[str] = []  # resumable zones whose switch isn't ready yet
         for item in plan_session_resume(sessions, dt_util.now()):
             zone = item["zone"]
             if item["action"] == "resume":
+                # Gate on switch availability — a slow cloud reconnect (Rachio)
+                # must NOT lose the run. If the switch isn't ready, keep the
+                # session and retry rather than firing run_zone (which would
+                # refuse) or dropping it.
+                st = self._hass.states.get(zone)
+                if st is None or st.state in ("unavailable", "unknown"):
+                    deferred.append(zone)
+                    continue
                 remaining = item["remaining_minutes"]
                 meta = item.get("session") or {}
                 base_name = (meta.get("schedule_name") or "").strip()
                 # Stash meta so the resumed run records under its schedule (marked
-                # resumed) and isn't mistaken for a fresh chunk block.
+                # resumed), keeps its ORIGINAL source (manual stays manual), and
+                # isn't mistaken for a fresh chunk block.
                 if isinstance(entry_data, dict):
                     entry_data.setdefault("pending_run_meta", {})[zone] = {
                         "schedule_id": meta.get("schedule_id"),
                         "schedule_name": f"{base_name} (resumed)" if base_name else "Resumed",
                         "requested_minutes": remaining,
+                        "source": meta.get("source"),
                         "triggers": {
                             "resumed": {"after_restart": True, "remaining_minutes": remaining}
                         },
                     }
+                # Await so the resumed run records its fresh session before we save
+                # config below (no stale-session-on-disk window).
                 await self._hass.services.async_call(
-                    DOMAIN, "run_zone", {"entity_id": zone, "minutes": remaining}, blocking=False
+                    DOMAIN, "run_zone", {"entity_id": zone, "minutes": remaining}, blocking=True
                 )
                 _LOGGER.info(
                     "Restart fail-over: resuming %s for %d more min (to its planned end)",
@@ -1454,3 +1473,27 @@ class ScheduleCoordinator:
                 )
         await self.async_save_config()
         await self.async_save_run_history()
+
+        # Switch not ready for some zones — keep their sessions and retry, up to
+        # a bounded number of attempts, instead of losing the run.
+        if deferred and self._resume_attempts < _RESUME_MAX_ATTEMPTS:
+            self._resume_attempts += 1
+            _LOGGER.info(
+                "Restart fail-over: %s switch(es) not ready, retry %d/%d in %ds",
+                len(deferred),
+                self._resume_attempts,
+                _RESUME_MAX_ATTEMPTS,
+                _RESUME_RETRY_SECONDS,
+            )
+            self._cancel_resume = async_call_later(
+                self._hass,
+                _RESUME_RETRY_SECONDS,
+                lambda _now: self._hass.async_create_task(self._resume_interrupted_runs()),
+            )
+        elif deferred:
+            _LOGGER.warning(
+                "Restart fail-over: gave up resuming %s after %d attempts — switch "
+                "still unavailable; session(s) will expire at their deadline",
+                deferred,
+                _RESUME_MAX_ATTEMPTS,
+            )
