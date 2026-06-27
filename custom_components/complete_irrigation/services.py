@@ -891,12 +891,12 @@ async def _async_register_services(hass: HomeAssistant) -> None:
                 f"{'missing from HA' if state is None else 'unavailable'}.",
             )
             # v1.30 — drop any stashed meta so a refused start can't misattribute
-            # the next run, and clear the session for a refused LOGICAL run or
-            # FINAL block (a stale session = false "Running" + a phantom restart
-            # resume). An intermediate block keeps the parent session intact.
+            # the next run. Do NOT clear the active session here: a restart RESUME
+            # that arrives before the switch is back online would otherwise lose
+            # the run entirely. The resume path gates on switch availability +
+            # retries instead (see coordinator._resume_interrupted_runs); a stale
+            # session self-expires at its deadline.
             entry_data.get("pending_run_meta", {}).pop(entity_id, None)
-            if not _is_block_subcall or is_final_activation:
-                _clear_active_session(hass, coord, entity_id)
             return
 
         # Record the run + turn the switch on.
@@ -909,9 +909,11 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         entry_data["manual_runs"].start(run)
 
         # Pop any pending metadata stashed by the coordinator (scheduled
-        # run) — if present, this is a scheduled call; otherwise manual.
+        # run) — if present, this is a scheduled call; otherwise manual. v1.30 —
+        # a restart resume stashes the ORIGINAL source so a resumed manual run
+        # stays "manual" in history (don't force scheduled just because meta is set).
         meta = entry_data.get("pending_run_meta", {}).pop(entity_id, None)
-        source = SOURCE_SCHEDULED if meta else SOURCE_MANUAL
+        source = (meta or {}).get("source") or (SOURCE_SCHEDULED if meta else SOURCE_MANUAL)
 
         # v1.30 restart fail-over — record the session for the LOGICAL run (the
         # record-vs-skip + supersede decision was made above). A block sub-call
