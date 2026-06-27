@@ -767,7 +767,7 @@ add_plant_photo:
         text:
     image_base64:
       name: Image (base64)
-      description: The JPEG image, base64-encoded (a data: URL prefix is tolerated).
+      description: "The JPEG image, base64-encoded (a data-URL prefix is tolerated)."
       required: true
       selector:
         text:
