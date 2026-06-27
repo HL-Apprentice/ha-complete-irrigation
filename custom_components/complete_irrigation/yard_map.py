@@ -99,3 +99,20 @@ def esri_export_url(bbox: Bbox, width: int, height: int) -> str:
         f"{_ESRI_EXPORT}?bbox={w:.8f},{s:.8f},{e:.8f},{n:.8f}"
         f"&bboxSR=4326&imageSR=4326&size={width},{height}&format=jpg&f=image"
     )
+
+
+def norm_from_yard_map(lat, lon, yard_map_cfg) -> tuple[float, float] | None:
+    """v1.32 — (map_x, map_y) for a GPS coordinate using a stored yard-map config's
+    bbox, or None if the config / bbox / coordinate is missing or invalid. This is
+    the bridge a photo's EXIF GPS uses to auto-place a plant marker. The result is
+    only a GUESS (phone GPS is ~3-5 m); the user can drag to correct."""
+    if not isinstance(yard_map_cfg, dict):
+        return None
+    bb = yard_map_cfg.get("bbox")
+    if not isinstance(bb, dict):
+        return None
+    try:
+        bbox = Bbox(float(bb["west"]), float(bb["south"]), float(bb["east"]), float(bb["north"]))
+        return latlon_to_norm(float(lat), float(lon), bbox)
+    except (KeyError, TypeError, ValueError):
+        return None
