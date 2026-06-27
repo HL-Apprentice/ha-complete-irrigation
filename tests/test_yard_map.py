@@ -13,10 +13,29 @@ from custom_components.complete_irrigation.yard_map import (
     esri_export_url,
     image_size_for_bbox,
     latlon_to_norm,
+    norm_from_yard_map,
     norm_to_latlon,
 )
 
 LAT, LON = 33.4, -111.8  # a Phoenix-area yard
+
+
+def _yard_map_cfg(lat=LAT, lon=LON, span=60):
+    bb = bbox_from_center(lat, lon, span)
+    return {"bbox": {"west": bb.west, "south": bb.south, "east": bb.east, "north": bb.north}}
+
+
+def test_norm_from_yard_map_centers():
+    xy = norm_from_yard_map(LAT, LON, _yard_map_cfg())
+    assert xy is not None
+    assert abs(xy[0] - 0.5) < 1e-9 and abs(xy[1] - 0.5) < 1e-9
+
+
+def test_norm_from_yard_map_bad_config_is_none():
+    for bad in (None, {}, {"bbox": None}, {"bbox": {"west": 1}}, "junk"):
+        assert norm_from_yard_map(LAT, LON, bad) is None
+    # bad coordinate
+    assert norm_from_yard_map("x", None, _yard_map_cfg()) is None
 
 
 def test_bbox_centered_and_square_ground_area():

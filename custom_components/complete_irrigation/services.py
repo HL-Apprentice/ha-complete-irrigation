@@ -86,6 +86,7 @@ SERVICE_ADD_PLANT = "add_plant"
 SERVICE_UPDATE_PLANT = "update_plant"
 SERVICE_DELETE_PLANT = "delete_plant"
 SERVICE_SET_YARD_MAP = "set_yard_map"  # v1.30 — fetch + cache the aerial backdrop
+SERVICE_ADD_PLANT_PHOTO = "add_plant_photo"  # v1.32 — per-plant photo + EXIF-GPS place
 
 MAX_SCHEDULE_DURATION_MIN = 480  # 8 hours — safety cap for scheduled runs
 
@@ -457,6 +458,23 @@ _SET_YARD_MAP_SCHEMA = vol.Schema(
         vol.Optional("latitude"): vol.All(vol.Coerce(float), vol.Range(min=-90, max=90)),
         vol.Optional("longitude"): vol.All(vol.Coerce(float), vol.Range(min=-180, max=180)),
         vol.Optional("span_m"): vol.All(vol.Coerce(float), vol.Range(min=10, max=500)),
+    }
+)
+
+# v1.32 — attach a photo to a plant (for biannual LLM-vision health checks). The
+# image arrives base64-encoded (the panel downsizes it client-side first). lat/lon
+# are the photo's EXIF GPS, used to AUTO-PLACE the marker only if the plant is still
+# unplaced — per the locked workflow, GPS places ONCE; selection (plant_id) owns
+# identity on every update, manual drag owns position.
+_MAX_PHOTO_B64 = 12_000_000  # ~9 MB image; the panel sends much smaller (downsized)
+_MAX_PHOTOS_PER_PLANT = 24
+_ADD_PLANT_PHOTO_SCHEMA = vol.Schema(
+    {
+        vol.Required("plant_id"): cv.string,
+        vol.Required("image_base64"): vol.All(cv.string, vol.Length(min=64, max=_MAX_PHOTO_B64)),
+        vol.Optional("latitude"): vol.All(vol.Coerce(float), vol.Range(min=-90, max=90)),
+        vol.Optional("longitude"): vol.All(vol.Coerce(float), vol.Range(min=-180, max=180)),
+        vol.Optional("note", default=""): vol.All(cv.string, vol.Length(max=200)),
     }
 )
 
@@ -1440,6 +1458,76 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         await coord.async_save_plants()
         _LOGGER.info("Updated plant %s", merged.id)
 
+    async def handle_add_plant_photo(call: ServiceCall) -> None:
+        if not await _require_admin_if_configured(hass, call):
+            return
+        data = _ADD_PLANT_PHOTO_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None:
+            return
+        existing = coord.plants.get(data["plant_id"])
+        if existing is None:
+            _LOGGER.warning("add_plant_photo: no such plant %s", data["plant_id"])
+            return
+
+        import base64
+        import binascii
+        import os
+
+        from homeassistant.util import dt as dt_util
+
+        raw_b64 = data["image_base64"]
+        if "," in raw_b64[:64]:  # tolerate a data:image/...;base64, prefix
+            raw_b64 = raw_b64.split(",", 1)[1]
+        try:
+            image = base64.b64decode(raw_b64, validate=True)
+        except (binascii.Error, ValueError):
+            _LOGGER.warning("add_plant_photo: image_base64 is not valid base64")
+            return
+        if len(image) < 100:
+            _LOGGER.warning("add_plant_photo: decoded image too small")
+            return
+
+        ts = int(dt_util.utcnow().timestamp())
+        abs_dir = hass.config.path("www", "complete_irrigation", "plants", existing.id)
+        fname = f"{ts}.jpg"
+        abs_path = os.path.join(abs_dir, fname)
+
+        def _save() -> None:
+            os.makedirs(abs_dir, exist_ok=True)
+            with open(abs_path, "wb") as fh:
+                fh.write(image)
+
+        try:
+            await hass.async_add_executor_job(_save)
+        except OSError as err:
+            _LOGGER.warning("add_plant_photo: could not write image: %s", err)
+            return
+
+        url_path = f"/local/complete_irrigation/plants/{existing.id}/{fname}"
+        photo = {"ts": ts, "path": url_path, "note": data.get("note", "")}
+        # newest-first, capped.
+        photos = (photo, *existing.photos)[:_MAX_PHOTOS_PER_PLANT]
+        overrides: dict[str, Any] = {"photos": photos}
+
+        # EXIF-GPS auto-place — ONLY if the plant is still unplaced AND we have GPS
+        # AND a yard map exists. GPS places ONCE; the plant_id (selection) owns
+        # identity on every update, manual drag owns position (the locked workflow).
+        if existing.map_x is None and "latitude" in data and "longitude" in data:
+            from .yard_map import norm_from_yard_map
+
+            xy = norm_from_yard_map(
+                data["latitude"], data["longitude"], coord.config.get("yard_map")
+            )
+            if xy is not None:
+                overrides["map_x"], overrides["map_y"] = xy
+                _LOGGER.info("add_plant_photo: auto-placed %s from photo GPS", existing.id)
+
+        merged = replace(existing, **overrides)
+        coord.plants.upsert(merged)
+        await coord.async_save_plants()
+        _LOGGER.info("add_plant_photo: %s now has %d photo(s)", existing.id, len(merged.photos))
+
     async def handle_delete_plant(call: ServiceCall) -> None:
         if not await _require_admin_if_configured(hass, call):
             return
@@ -1568,6 +1656,9 @@ async def _async_register_services(hass: HomeAssistant) -> None:
     )
     hass.services.async_register(
         DOMAIN, SERVICE_SET_YARD_MAP, handle_set_yard_map, schema=_SET_YARD_MAP_SCHEMA
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_ADD_PLANT_PHOTO, handle_add_plant_photo, schema=_ADD_PLANT_PHOTO_SCHEMA
     )
 
     # ── Weather + per-zone moisture configuration ──────────────────
@@ -1829,6 +1920,7 @@ def _async_unregister_services(hass: HomeAssistant) -> None:
         SERVICE_UPDATE_PLANT,
         SERVICE_DELETE_PLANT,
         SERVICE_SET_YARD_MAP,
+        SERVICE_ADD_PLANT_PHOTO,
     ):
         if hass.services.has_service(DOMAIN, svc):
             hass.services.async_remove(DOMAIN, svc)

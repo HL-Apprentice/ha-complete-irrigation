@@ -116,6 +116,41 @@ def test_map_coords_out_of_range_rejected():
         PlantRecord("p1", "Lemon", "high", 100.0, "switch.citrus", map_x=0.5, map_y=-0.1)
 
 
+# ── v1.32 photo history ─────────────────────────────────────────────
+
+
+def test_photos_default_empty():
+    assert _rec().photos == ()
+
+
+def test_photos_round_trip():
+    photos = ({"ts": 100, "path": "/local/x/100.jpg", "note": "spring"},)
+    r = PlantRecord("p1", "Lemon", "high", 100.0, "switch.citrus", photos=photos)
+    rt = PlantRecord.from_dict(r.to_dict())
+    assert rt.photos == photos
+    assert rt == r
+
+
+def test_pre_v132_record_loads_without_photos():
+    data = _rec().to_dict()
+    data.pop("photos", None)
+    assert PlantRecord.from_dict(data).photos == ()
+
+
+def test_invalid_photo_entries_filtered_on_load():
+    data = _rec().to_dict()
+    data["photos"] = [{"ts": 1, "path": "/local/a.jpg"}, {"ts": 2}, "junk", {"path": ""}]
+    # only the one with a non-empty path survives
+    assert PlantRecord.from_dict(data).photos == ({"ts": 1, "path": "/local/a.jpg"},)
+
+
+def test_pathless_photo_rejected_on_construct():
+    import pytest
+
+    with pytest.raises(ValueError):
+        PlantRecord("p1", "Lemon", "high", 100.0, "switch.citrus", photos=({"ts": 1},))
+
+
 # ── PlantStore CRUD ─────────────────────────────────────────────────
 
 

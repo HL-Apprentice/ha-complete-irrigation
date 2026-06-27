@@ -40,6 +40,10 @@ class PlantRecord:
     # edge, each in [0, 1]). None = not placed yet. Independent of pixel size.
     map_x: float | None = None
     map_y: float | None = None
+    # v1.32 — photo history for biannual LLM-vision health checks. Each entry:
+    # {"ts": epoch-int, "path": "/local/.../<id>/<ts>.jpg", "note": str}. Immutable
+    # tuple; newest-first. Absent in older records -> empty.
+    photos: tuple[dict[str, Any], ...] = ()
 
     def __post_init__(self) -> None:
         if not self.id:
@@ -66,6 +70,12 @@ class PlantRecord:
         for axis, val in (("map_x", self.map_x), ("map_y", self.map_y)):
             if val is not None and (not math.isfinite(val) or not (0.0 <= val <= 1.0)):
                 raise ValueError(f"{axis} must be a finite value in [0, 1], got {val}")
+        # Photos: a tuple of {ts, path, ...} dicts (each must at least have a path).
+        if not isinstance(self.photos, tuple):
+            raise ValueError("photos must be a tuple")
+        for p in self.photos:
+            if not isinstance(p, dict) or not p.get("path"):
+                raise ValueError("each photo must be a dict with a non-empty 'path'")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -76,17 +86,20 @@ class PlantRecord:
             "zone_entity_id": self.zone_entity_id,
             "map_x": self.map_x,
             "map_y": self.map_y,
+            "photos": [dict(p) for p in self.photos],
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> PlantRecord:
         # Tolerant read: unknown keys are ignored so a future field (e.g.
         # installed emitters) doesn't break records written today. map_x/map_y
-        # are absent in pre-v1.30 records -> None (unplaced).
+        # are absent in pre-v1.30 records -> None (unplaced); photos pre-v1.32 -> ().
         def _coord(key: str) -> float | None:
             v = data.get(key)
             return None if v is None else float(v)
 
+        raw_photos = data.get("photos") or []
+        photos = tuple(dict(p) for p in raw_photos if isinstance(p, dict) and p.get("path"))
         return cls(
             id=str(data["id"]),
             name=str(data["name"]),
@@ -95,6 +108,7 @@ class PlantRecord:
             zone_entity_id=str(data["zone_entity_id"]),
             map_x=_coord("map_x"),
             map_y=_coord("map_y"),
+            photos=photos,
         )
 
     def to_calc_plant(self) -> Plant:
