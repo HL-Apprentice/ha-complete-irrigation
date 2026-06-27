@@ -65,6 +65,31 @@ def test_rejects_blank_name_and_ids():
         _rec(zone="")
 
 
+def test_rejects_path_traversal_ids():
+    # Security gate: the id is a filesystem path segment for the photo dir, so
+    # anything that could escape it (../, slash, absolute, NUL, dot) must be
+    # rejected on construct AND on .storage load (from_dict -> __post_init__).
+    for bad in ("../evil", "..", "a/b", "/abs", "a\\b", "a.b", "x" * 65, "p\x00"):
+        with pytest.raises(ValueError):
+            _rec(pid=bad)
+        with pytest.raises(ValueError):
+            PlantRecord.from_dict({**_rec().to_dict(), "id": bad})
+
+
+def test_accepts_uuid_hex_id():
+    # Our own ids are uuid4().hex[:12] = [0-9a-f]{12}; must always pass.
+    r = _rec(pid="a1b2c3d4e5f6")
+    assert r.id == "a1b2c3d4e5f6"
+
+
+def test_from_serializable_drops_unsafe_id_record():
+    # A crafted store entry with a traversal id is skipped, not loaded.
+    good = _rec("p1", name="Lemon").to_dict()
+    evil = {**_rec().to_dict(), "id": "../../escape"}
+    restored = PlantStore.from_serializable([good, evil])
+    assert [p.id for p in restored.all()] == ["p1"]
+
+
 def test_round_trip_serialization():
     r = _rec()
     assert PlantRecord.from_dict(r.to_dict()) == r

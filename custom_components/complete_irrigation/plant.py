@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -25,6 +26,15 @@ _LOGGER = logging.getLogger(__name__)
 # .storage load path can't accept absurd / non-finite values (a corrupt or
 # crafted store would otherwise poison the water math + WS JSON).
 _MAX_CANOPY_AREA_SQFT = 100000
+
+# A plant id is used as a FILESYSTEM PATH SEGMENT for its photo directory
+# (www/complete_irrigation/plants/<id>/). Constrain it to a safe slug so a
+# corrupt / crafted .storage record can never carry "../", a slash, or an
+# absolute path into add_plant_photo's file write (path-traversal sink). Our
+# own ids are uuid4().hex[:12] = [0-9a-f]{12}, which always passes; the guard
+# only rejects hand-tampered values, dropping them on load (from_serializable
+# skips records that fail validation) rather than letting them escape the dir.
+_SAFE_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
 
 @dataclass(frozen=True)
@@ -48,6 +58,11 @@ class PlantRecord:
     def __post_init__(self) -> None:
         if not self.id:
             raise ValueError("plant id must be non-empty")
+        if not _SAFE_ID_RE.fullmatch(self.id):
+            # Path-traversal / unsafe-segment guard (the id names a photo dir).
+            raise ValueError(
+                f"plant id must be 1-64 chars of [A-Za-z0-9_-], got {self.id!r}"
+            )
         if not self.name.strip():
             raise ValueError("plant name must be non-empty")
         if self.wucols_category not in WUCOLS_FACTORS:
