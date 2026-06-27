@@ -24,11 +24,23 @@ from custom_components.complete_irrigation.coordinator import ScheduleCoordinato
 
 def _coord_with_sessions(sessions) -> ScheduleCoordinator:
     coord = ScheduleCoordinator(MagicMock(), "e1")
-    coord._hass.services.async_call = AsyncMock()
     coord._hass.data = {DOMAIN: {"e1": {}}}
     coord.async_save_config = AsyncMock()
     coord.async_save_run_history = AsyncMock()
     coord._config["active_run_sessions"] = sessions
+
+    # Simulate run_zone re-recording the session (real run_zone does this on a
+    # successful start) so the coordinator's "did the resume actually start?"
+    # check sees the started_at advance. Tests can override this mock.
+    async def _call(domain, service, data=None, blocking=False):
+        if service == "run_zone" and isinstance(data, dict):
+            z = data.get("entity_id")
+            sess = (coord._config.get("active_run_sessions") or {}).get(z)
+            if sess is not None:
+                sess["started_at"] = f"started-{data.get('minutes')}"
+        return MagicMock()
+
+    coord._hass.services.async_call = AsyncMock(side_effect=_call)
     return coord
 
 
@@ -36,7 +48,8 @@ async def test_resume_fires_run_zone_for_remaining_minutes():
     coord = _coord_with_sessions(
         {
             "switch.citrus": {
-                "deadline": (dt_util.now() + timedelta(minutes=40)).isoformat(),
+                # +30s buffer so the now()-to-now() microseconds don't floor 40 -> 39.
+                "deadline": (dt_util.now() + timedelta(minutes=40, seconds=30)).isoformat(),
                 "total_minutes": 240,
                 "schedule_id": "s1",
                 "schedule_name": "Citrus",
@@ -48,7 +61,7 @@ async def test_resume_fires_run_zone_for_remaining_minutes():
     run_calls = [c for c in calls if c.args[1] == "run_zone"]
     assert len(run_calls) == 1
     assert run_calls[0].args[2]["entity_id"] == "switch.citrus"
-    assert run_calls[0].args[2]["minutes"] == 40
+    assert run_calls[0].args[2]["minutes"] == 40  # floor(40.5) — never rounds UP
     # Resumed meta stashed so it records under the schedule, marked resumed.
     meta = coord._hass.data[DOMAIN]["e1"]["pending_run_meta"]["switch.citrus"]
     assert "(resumed)" in meta["schedule_name"]
@@ -112,6 +125,36 @@ async def test_retry_is_scoped_to_deferred_zones():
     )
     await coord._resume_interrupted_runs(zones={"switch.other"})  # z is out of scope
     coord._hass.services.async_call.assert_not_called()
+
+
+async def test_resume_honors_stop_during_loop():
+    # Gemini's catch: if a session is removed (user Stop) while we await an earlier
+    # zone, the loop must NOT resume it from the stale snapshot.
+    dl = (dt_util.now() + timedelta(minutes=40, seconds=30)).isoformat()
+    coord = _coord_with_sessions({"switch.a": {"deadline": dl}, "switch.b": {"deadline": dl}})
+    on = MagicMock()
+    on.state = "on"
+    coord._hass.states.get.return_value = on
+
+    async def _call(domain, service, data=None, blocking=False):
+        if service == "run_zone" and isinstance(data, dict):
+            z = data.get("entity_id")
+            sess = (coord._config.get("active_run_sessions") or {}).get(z)
+            if sess is not None:
+                sess["started_at"] = f"started-{data.get('minutes')}"
+            if z == "switch.a":  # simulate a Stop on b while we process a
+                coord._config["active_run_sessions"].pop("switch.b", None)
+        return MagicMock()
+
+    coord._hass.services.async_call = AsyncMock(side_effect=_call)
+    await coord._resume_interrupted_runs()
+    run_zones = [
+        c.args[2]["entity_id"]
+        for c in coord._hass.services.async_call.call_args_list
+        if c.args[1] == "run_zone"
+    ]
+    assert "switch.a" in run_zones
+    assert "switch.b" not in run_zones  # stopped mid-loop -> not resurrected
 
 
 async def test_gives_up_cleanly_after_max_retries(monkeypatch):
