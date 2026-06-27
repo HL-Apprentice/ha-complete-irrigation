@@ -116,7 +116,10 @@ async def get_active_runs(hass, connection, msg):
         coord = data.get("coordinator")
         sessions = (coord.config.get("active_run_sessions") if coord else None) or {}
         for zone, sess in sessions.items():
-            if isinstance(sess, dict) and sess.get("deadline"):
+            # Skip a session that's GATED (waiting on an unavailable switch during a
+            # restart resume) — the valve is off, so reporting it would show a false
+            # "Running" on the card until the retry fires.
+            if isinstance(sess, dict) and sess.get("deadline") and not sess.get("resuming_gated"):
                 sessions_out.append({"entity_id": zone, "deadline": sess["deadline"]})
     connection.send_result(msg["id"], {"runs": runs, "sessions": sessions_out})
 
