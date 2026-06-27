@@ -49,7 +49,10 @@ def plan_session_resume(
         if remaining > min_resume_seconds:
             total = s.get("total_minutes")
             cap = int(total) if isinstance(total, int | float) and total > 0 else hard_cap_minutes
-            remaining_min = max(1, min(cap, math.ceil(remaining / 60)))
+            # floor, never ceil: the > min_resume_seconds (60s) guard already makes
+            # this >= 1, and rounding UP would add up to 59s of extra water on every
+            # resume — "never over-water" wins over reclaiming a sub-minute remainder.
+            remaining_min = max(1, min(cap, math.floor(remaining / 60)))
             out.append(
                 {
                     "zone": zone,

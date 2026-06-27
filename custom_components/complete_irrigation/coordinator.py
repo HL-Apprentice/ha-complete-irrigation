@@ -1431,6 +1431,12 @@ class ScheduleCoordinator:
         deferred: list[str] = []  # resumable zones whose switch isn't ready yet
         for item in plan_session_resume(sessions, dt_util.now()):
             zone = item["zone"]
+            live = self._config.get("active_run_sessions") or {}
+            # Honor any intervening change: if the session was cleared while we
+            # awaited an earlier zone (e.g. the user pressed Stop), do NOT resume
+            # it from our stale snapshot — that would resurrect a stopped run.
+            if zone not in live:
+                continue
             if item["action"] == "resume":
                 # Gate on switch availability — a slow cloud reconnect (Rachio)
                 # must NOT lose the run. If the switch isn't ready, keep the
@@ -1456,11 +1462,21 @@ class ScheduleCoordinator:
                             "resumed": {"after_restart": True, "remaining_minutes": remaining}
                         },
                     }
+                before_started = (live.get(zone) or {}).get("started_at")
                 # Await so the resumed run records its fresh session before we save
                 # config below (no stale-session-on-disk window).
                 await self._hass.services.async_call(
                     DOMAIN, "run_zone", {"entity_id": zone, "minutes": remaining}, blocking=True
                 )
+                # Confirm the run actually started: run_zone re-records the session
+                # with a fresh started_at on success. If it's unchanged (run_zone
+                # refused, e.g. the switch dropped between the gate and now), the run
+                # did NOT start -> re-defer for retry rather than leave a stale
+                # session showing a false "Running".
+                after = (self._config.get("active_run_sessions") or {}).get(zone)
+                if after is not None and after.get("started_at") == before_started:
+                    deferred.append(zone)
+                    continue
                 _LOGGER.info(
                     "Restart fail-over: resuming %s for %d more min (to its planned end)",
                     zone,
