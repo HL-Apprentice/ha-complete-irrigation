@@ -4,6 +4,26 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.31.0 — 2026-06-27
+
+### Added — 2D yard map with draggable plant markers
+
+- **A new aerial yard map in the Yard tab.** "Set up yard map" fetches a high-resolution
+  aerial photo of your property — **Esri World Imagery, no API key**, centered on your Home
+  Assistant location — and caches it locally as the backdrop. Place each plant as a marker
+  on the image and **drag it to its real spot**; positions persist.
+- **Plants gain a map position.** `PlantRecord` now carries normalized `map_x` / `map_y`
+  (each 0–1, independent of screen size); pre-v1.31 records load as "unplaced." Drag a
+  marker (or tap an unplaced plant to drop it at center) and `update_plant` saves it.
+- **New `set_yard_map` service** (center defaults to your HA latitude/longitude; optional
+  `span_m`, default 60 m). The fetch is server-side and degrades gracefully — a network or
+  service error leaves the previous map untouched and never crashes.
+- **Georeferencing groundwork:** a pure, unit-tested `yard_map.py` converts between GPS
+  coordinates and normalized map positions (exact + linear at yard scale). This is the same
+  math future EXIF-GPS auto-placement will reuse to drop a marker from a photo's embedded
+  location. The integration stays **dependency-free** (no imaging libraries).
+- 12 new tests (georeferencing + plant coordinates).
+
 ## v1.30.0 — 2026-06-25
 
 ### Added — restart fail-over (resume an interrupted run)
@@ -16,14 +36,16 @@ project uses [Semantic Versioning](https://semver.org/).
   not just the current block); if it's already past its end, it closes the run
   out and forces the valve off. This also clears any "zombie" running record.
   Fails safe — a session with bad/missing data is closed (valve off), never
-  resumed on a guess.
+  resumed on a guess. A switch that's slow to reconnect is retried (bounded), not
+  dropped; a zone waiting to resume shows as idle, never a false "Running".
 
 ### Fixed — run-state display fidelity
 
 - **Today zone card no longer shows "Idle" while the schedule shows "Running
   now."** A chunked run's 30 s inter-block gaps (and Rachio state-poll lag) read
-  the switch as off; the card now also shows Running when the zone is in a live
-  planned-run window — the same signal the calendar uses — so the two agree.
+  the switch as off; the card now uses the active run/session — the same truth the
+  calendar uses — so the two agree (and a rain/moisture/wind-gated run that never
+  fired is not shown as running).
 - **History triggers column de-cluttered.** It listed every gate on every row
   ("moisture, wind, hot_weather"), including disabled / no-effect breadcrumbs.
   Now only triggers that actually gated or adjusted the run are shown; the full

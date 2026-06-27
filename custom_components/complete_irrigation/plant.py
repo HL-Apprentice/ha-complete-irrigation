@@ -36,6 +36,10 @@ class PlantRecord:
     wucols_category: str
     canopy_area_sqft: float
     zone_entity_id: str
+    # v1.30 — normalized position on the yard map (fraction from the west / north
+    # edge, each in [0, 1]). None = not placed yet. Independent of pixel size.
+    map_x: float | None = None
+    map_y: float | None = None
 
     def __post_init__(self) -> None:
         if not self.id:
@@ -58,6 +62,10 @@ class PlantRecord:
             )
         if not self.zone_entity_id:
             raise ValueError("zone_entity_id must be non-empty")
+        # Map coordinates: either both set + finite + in [0, 1], or both None.
+        for axis, val in (("map_x", self.map_x), ("map_y", self.map_y)):
+            if val is not None and (not math.isfinite(val) or not (0.0 <= val <= 1.0)):
+                raise ValueError(f"{axis} must be a finite value in [0, 1], got {val}")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -66,18 +74,27 @@ class PlantRecord:
             "wucols_category": self.wucols_category,
             "canopy_area_sqft": self.canopy_area_sqft,
             "zone_entity_id": self.zone_entity_id,
+            "map_x": self.map_x,
+            "map_y": self.map_y,
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> PlantRecord:
-        # Tolerant read: unknown keys are ignored so a future field (e.g. map
-        # location, installed emitters) doesn't break records written today.
+        # Tolerant read: unknown keys are ignored so a future field (e.g.
+        # installed emitters) doesn't break records written today. map_x/map_y
+        # are absent in pre-v1.30 records -> None (unplaced).
+        def _coord(key: str) -> float | None:
+            v = data.get(key)
+            return None if v is None else float(v)
+
         return cls(
             id=str(data["id"]),
             name=str(data["name"]),
             wucols_category=str(data["wucols_category"]),
             canopy_area_sqft=float(data["canopy_area_sqft"]),
             zone_entity_id=str(data["zone_entity_id"]),
+            map_x=_coord("map_x"),
+            map_y=_coord("map_y"),
         )
 
     def to_calc_plant(self) -> Plant:

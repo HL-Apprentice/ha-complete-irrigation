@@ -680,6 +680,26 @@ update_plant:
       selector:
         entity:
           domain: switch
+    map_x:
+      name: Map X (0-1)
+      description: Normalized yard-map position from the west edge (set by dragging the marker).
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 1
+          step: 0.0001
+          mode: box
+    map_y:
+      name: Map Y (0-1)
+      description: Normalized yard-map position from the north edge (set by dragging the marker).
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 1
+          step: 0.0001
+          mode: box
 
 delete_plant:
   name: Delete plant
@@ -691,3 +711,42 @@ delete_plant:
       required: true
       selector:
         text:
+
+set_yard_map:
+  name: Set yard map
+  description: >
+    Fetch an aerial image of the property (Esri World Imagery, no API key) and cache it
+    as the yard-map backdrop. Centers on your Home Assistant location unless you pass
+    coordinates. The plant markers are positioned over this image.
+  fields:
+    latitude:
+      name: Center latitude
+      description: Defaults to your Home Assistant latitude.
+      required: false
+      selector:
+        number:
+          min: -90
+          max: 90
+          step: 0.000001
+          mode: box
+    longitude:
+      name: Center longitude
+      description: Defaults to your Home Assistant longitude.
+      required: false
+      selector:
+        number:
+          min: -180
+          max: 180
+          step: 0.000001
+          mode: box
+    span_m:
+      name: Span (meters)
+      description: Width/height of the area to capture, in meters (default 60).
+      required: false
+      selector:
+        number:
+          min: 10
+          max: 500
+          step: 5
+          mode: box
+          unit_of_measurement: "m"
