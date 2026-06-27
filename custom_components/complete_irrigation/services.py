@@ -539,6 +539,53 @@ async def _require_admin_if_configured(hass: HomeAssistant, call) -> bool:
     return False
 
 
+async def _require_admin(hass: HomeAssistant, call) -> bool:
+    """v1.32 — UNCONDITIONAL admin gate, independent of admin_only_services.
+
+    Used by the services that write arbitrary file BYTES to disk and/or make
+    an outbound HTTP fetch (add_plant_photo, set_yard_map). Those are the
+    integration's only arbitrary-file-write + outbound-request surface and have
+    no legitimate non-admin use case, so a low-privileged authenticated user
+    must never reach them (closes the path-traversal / stored-file / disk-DoS
+    vectors at the access layer). System-initiated calls (no user_id) still
+    pass — only an admin can author automations/scripts in HA, so a no-user
+    context is already admin-authored.
+
+    Returns True to proceed, False if rejected (handlers early-return on False).
+    """
+    user_id = getattr(call.context, "user_id", None)
+    if not user_id:
+        return True  # system / automation context (admin-authored in HA)
+    user = await hass.auth.async_get_user(user_id)
+    if user and user.is_admin:
+        return True
+    _LOGGER.warning(
+        "Rejected %s.%s from non-admin user %s (admin-only: writes files / fetches URLs)",
+        call.domain,
+        call.service,
+        user_id,
+    )
+    return False
+
+
+# Magic-byte signatures for the image formats a browser will render from /local.
+# We validate decoded upload bytes against these before writing so a crafted
+# SVG/HTML payload can't be stored as a .jpg and served back (content-sniffing /
+# stored-XSS vector). Order: JPEG, PNG, GIF87a/89a, WEBP (RIFF....WEBP), BMP.
+def _looks_like_image(data: bytes) -> bool:
+    if len(data) < 12:
+        return False
+    if data[:3] == b"\xff\xd8\xff":  # JPEG
+        return True
+    if data[:8] == b"\x89PNG\r\n\x1a\n":  # PNG
+        return True
+    if data[:6] in (b"GIF87a", b"GIF89a"):  # GIF
+        return True
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":  # WEBP
+        return True
+    return data[:2] == b"BM"  # BMP
+
+
 def _cancel_handles(entry_data: dict[str, Any], entity_id: str) -> None:
     """Cancel and remove any pending timer + state listener for this entity."""
     handles = entry_data.setdefault("cancel_handles", {})
@@ -1210,7 +1257,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
     # ── Schedule CRUD ──────────────────────────────────────────────
 
     async def handle_add_schedule(call: ServiceCall) -> None:
-        if not await _require_admin_if_configured(hass, call):
+        if not await _require_admin(hass, call):  # config write — admin only
             return
         data = _ADD_SCHEDULE_SCHEMA(dict(call.data))
         coord = _find_coordinator(hass)
@@ -1257,7 +1304,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         _LOGGER.info("Added schedule %s (%s) mode=%s", schedule.id, schedule.name, schedule.mode)
 
     async def handle_update_schedule(call: ServiceCall) -> None:
-        if not await _require_admin_if_configured(hass, call):
+        if not await _require_admin(hass, call):  # config write — admin only
             return
         data = _UPDATE_SCHEDULE_SCHEMA(dict(call.data))
         coord = _find_coordinator(hass)
@@ -1308,7 +1355,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         _LOGGER.info("Updated schedule %s", merged.id)
 
     async def handle_delete_schedule(call: ServiceCall) -> None:
-        if not await _require_admin_if_configured(hass, call):
+        if not await _require_admin(hass, call):  # destructive — admin only
             return
         data = _DELETE_SCHEDULE_SCHEMA(dict(call.data))
         coord = _find_coordinator(hass)
@@ -1411,7 +1458,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
     # ── v2: plant CRUD (plant-aware irrigation) ────────────────────
 
     async def handle_add_plant(call: ServiceCall) -> None:
-        if not await _require_admin_if_configured(hass, call):
+        if not await _require_admin(hass, call):  # config write — admin only
             return
         data = _ADD_PLANT_SCHEMA(dict(call.data))
         coord = _find_coordinator(hass)
@@ -1430,7 +1477,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         _LOGGER.info("Added plant %s (%s) on %s", plant.id, plant.name, plant.zone_entity_id)
 
     async def handle_update_plant(call: ServiceCall) -> None:
-        if not await _require_admin_if_configured(hass, call):
+        if not await _require_admin(hass, call):  # config write — admin only
             return
         data = _UPDATE_PLANT_SCHEMA(dict(call.data))
         coord = _find_coordinator(hass)
@@ -1459,7 +1506,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         _LOGGER.info("Updated plant %s", merged.id)
 
     async def handle_add_plant_photo(call: ServiceCall) -> None:
-        if not await _require_admin_if_configured(hass, call):
+        if not await _require_admin(hass, call):  # writes file bytes — admin only
             return
         data = _ADD_PLANT_PHOTO_SCHEMA(dict(call.data))
         coord = _find_coordinator(hass)
@@ -1487,11 +1534,25 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         if len(image) < 100:
             _LOGGER.warning("add_plant_photo: decoded image too small")
             return
+        if not _looks_like_image(image):
+            # Reject non-images so a crafted SVG/HTML can't be stored as .jpg and
+            # served from /local (content-sniffing / stored-XSS vector).
+            _LOGGER.warning("add_plant_photo: payload is not a recognized image")
+            return
 
         ts = int(dt_util.utcnow().timestamp())
-        abs_dir = hass.config.path("www", "complete_irrigation", "plants", existing.id)
+        plants_root = hass.config.path("www", "complete_irrigation", "plants")
+        abs_dir = os.path.join(plants_root, existing.id)
         fname = f"{ts}.jpg"
         abs_path = os.path.join(abs_dir, fname)
+        # Defense-in-depth at the filesystem sink: the id is charset-validated on
+        # construct/load, but verify the resolved write path can't escape the
+        # plants dir even if that guard were ever bypassed (path traversal).
+        if os.path.commonpath(
+            [os.path.realpath(abs_dir), os.path.realpath(plants_root)]
+        ) != os.path.realpath(plants_root):
+            _LOGGER.error("add_plant_photo: refusing unsafe path for id %r", existing.id)
+            return
 
         def _save() -> None:
             os.makedirs(abs_dir, exist_ok=True)
@@ -1529,7 +1590,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         _LOGGER.info("add_plant_photo: %s now has %d photo(s)", existing.id, len(merged.photos))
 
     async def handle_delete_plant(call: ServiceCall) -> None:
-        if not await _require_admin_if_configured(hass, call):
+        if not await _require_admin(hass, call):  # destructive — admin only
             return
         data = _DELETE_PLANT_SCHEMA(dict(call.data))
         coord = _find_coordinator(hass)
@@ -1540,7 +1601,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             _LOGGER.info("Deleted plant %s", data["plant_id"])
 
     async def handle_set_yard_map(call: ServiceCall) -> None:
-        if not await _require_admin_if_configured(hass, call):
+        if not await _require_admin(hass, call):  # writes file + outbound fetch — admin only
             return
         data = _SET_YARD_MAP_SCHEMA(dict(call.data))
         coord = _find_coordinator(hass)
@@ -1577,6 +1638,11 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             return
         if not content or len(content) < 1024:
             _LOGGER.warning("set_yard_map: aerial fetch returned too little data")
+            return
+        if not _looks_like_image(content):
+            # The aerial host returns image bytes; an error page (HTML, HTTP 200)
+            # must not be saved as yard_map.jpg and served from /local.
+            _LOGGER.warning("set_yard_map: aerial fetch did not return an image")
             return
 
         abs_dir = hass.config.path("www", "complete_irrigation")
@@ -1664,7 +1730,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
     # ── Weather + per-zone moisture configuration ──────────────────
 
     async def handle_set_weather_config(call: ServiceCall) -> None:
-        if not await _require_admin_if_configured(hass, call):
+        if not await _require_admin(hass, call):  # config write — admin only
             return
         data = _SET_WEATHER_CONFIG_SCHEMA(dict(call.data))
         coord = _find_coordinator(hass)
@@ -1745,7 +1811,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
     )
 
     async def handle_set_notification_config(call: ServiceCall) -> None:
-        if not await _require_admin_if_configured(hass, call):
+        if not await _require_admin(hass, call):  # config write — admin only
             return
         data = _SET_NOTIFICATION_CONFIG_SCHEMA(dict(call.data))
         coord = _find_coordinator(hass)
@@ -1786,7 +1852,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
     )
 
     async def handle_set_conflict_policy(call: ServiceCall) -> None:
-        if not await _require_admin_if_configured(hass, call):
+        if not await _require_admin(hass, call):  # config write — admin only
             return
         data = _SET_CONFLICT_POLICY_SCHEMA(dict(call.data))
         coord = _find_coordinator(hass)
@@ -1809,7 +1875,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         Each entry in _GENERAL_CONFIG_FIELDS describes how to persist
         one accepted key. v1.16: loop-driven so a new field is a 2-line
         table edit instead of another `if` arm."""
-        if not await _require_admin_if_configured(hass, call):
+        if not await _require_admin(hass, call):  # config write — admin only
             return
         data = _SET_GENERAL_CONFIG_SCHEMA(dict(call.data))
         coord = _find_coordinator(hass)
@@ -1829,7 +1895,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
     )
 
     async def handle_start_establishment(call: ServiceCall) -> None:
-        if not await _require_admin_if_configured(hass, call):
+        if not await _require_admin(hass, call):  # config write — admin only
             return
         from datetime import date, time, timedelta
 
@@ -1880,7 +1946,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
     )
 
     async def handle_clear_run_history(_call: ServiceCall) -> None:
-        if not await _require_admin_if_configured(hass, _call):
+        if not await _require_admin(hass, _call):  # destructive — admin only
             return
         coord = _find_coordinator(hass)
         if coord is None:
