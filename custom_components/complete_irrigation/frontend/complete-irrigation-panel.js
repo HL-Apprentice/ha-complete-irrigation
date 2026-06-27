@@ -5716,6 +5716,15 @@
         `.extra-step-row > select{min-width:0}` +
         `.extra-step-dur{display:flex;align-items:center;gap:4px}` +
         `.extra-step-dur input{width:54px;text-align:center}` +
+        // v1.32 — the compact h/m and per-zone duration inputs were clipping
+        // 2-digit values ("30" -> "3C"): the native number-spinner arrows plus
+        // padding ate the interior width. Hide the spinners (min/max/step already
+        // constrain the value, and WKWebView in the HA macOS app renders fat
+        // steppers) and trim the side padding so the digits fit. `.modal …`
+        // outranks the base `.modal input[type=number]` rule.
+        `.modal .duration-row input,.modal .extra-step-dur input,.modal .schedule-time-row input[type=number]{appearance:textfield;-moz-appearance:textfield;padding-left:6px;padding-right:6px;min-width:2.6em}` +
+        `.modal .duration-row input::-webkit-inner-spin-button,.modal .duration-row input::-webkit-outer-spin-button,.modal .extra-step-dur input::-webkit-inner-spin-button,.modal .extra-step-dur input::-webkit-outer-spin-button,.modal .schedule-time-row input[type=number]::-webkit-inner-spin-button,.modal .schedule-time-row input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}` +
+        `.modal .extra-step-dur input{width:3.6em;flex:0 0 auto}` +
         `.weekday-group{display:flex;flex-wrap:wrap;gap:6px}` +
         `.weekday-shortcuts{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px}` +
         `.weekday-shortcuts .btn{font-size:11px;padding:4px 8px}` +
