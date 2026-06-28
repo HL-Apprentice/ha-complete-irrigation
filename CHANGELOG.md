@@ -22,6 +22,13 @@ project uses [Semantic Versioning](https://semver.org/).
   plant's first photo with embedded GPS can auto-place its map marker (EXIF-GPS),
   and every later update is tied to the **selected** plant (selection owns
   identity, manual drag owns position).
+- **Photo upload + gallery in the Yard tab.** Editing a plant now shows an "Add
+  photo" button and a thumbnail gallery of its history. Pick or snap a photo and
+  the panel reads its GPS (if present), downsizes it client-side (longest edge
+  1280 px, JPEG) to keep the upload small, and calls `add_plant_photo`. If the
+  plant isn't placed on the map yet and the photo carries location data, it drops
+  the marker for you — drag to fine-tune. The downsize re-encodes through a canvas,
+  so the stored image carries no embedded EXIF/GPS.
 
 ### Security — recursive multi-model audit (Grok + Gemini + Qwen + Claude)
 
