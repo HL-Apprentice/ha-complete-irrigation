@@ -6,6 +6,20 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ## Unreleased — photo DB + security hardening
 
+### Added — one-zone-at-a-time across LIVE runs
+
+- **A scheduled run now waits for a run already in progress instead of firing a
+  second zone into it.** Rachio (and most controllers) water one zone at a time;
+  the conflict resolver already serialized *scheduled* runs, but a **manual run**,
+  or a run **resumed after a restart**, was invisible to it. Those in-progress runs
+  are now fed to the resolver as fixed "committed" blockers (from the live run
+  registry), so a due schedule is **deferred past them** — never overlapped. The
+  block honors the inter-zone buffer at the boundary (a run scheduled right as a
+  live one ends still lands a couple minutes later, not the same second), and a
+  committed run is never re-fired even if it started moments ago. A run record with
+  corrupt timestamps fails safe (it can't freeze all watering) but is now logged so
+  the rare unsafe state is visible. 11 new tests; reviewed by a 3-model panel.
+
 ### Fixed — schedule editor number inputs no longer clip 2-digit values
 
 - The compact hour/minute and per-zone duration boxes in the schedule editor were
