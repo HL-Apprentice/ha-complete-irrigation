@@ -23,12 +23,15 @@ for the serialization core; never-drop/compression added in v1.20.
 
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import replace
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from .const import DEFAULT_BUFFER_MINUTES, DEFAULT_CASCADE_CAP_HOURS, DEFAULT_COMPRESS_FLOOR_PCT
 from .run_planner import PlannedRun
+
+_LOGGER = logging.getLogger(__name__)
 
 POLICY_DEFER_NEW = "defer_new"
 POLICY_SHIFT_EXISTING_EARLIER = "shift_existing"
@@ -48,6 +51,78 @@ REASON_DEFERRED_LATE = "deferred-late"  # past the cap — alert-worthy, still r
 # it as a fixed blocker — never moved, never compressed — so in-progress
 # long runs are respected without re-planning (and losing) deferred runs.
 REASON_COMMITTED = "committed"
+
+# How many minutes PAST its end a finished committed run stays a one-zone blocker:
+# its inter-zone buffer PLUS this catch margin (>= one coordinator tick, TICK_SECONDS
+# = 60s). The margin is load-bearing: the resolver defers a blocked run to
+# (committed end + buffer); if the blocker vanished at exactly that instant the run's
+# placement would snap back to its past scheduled time and the coordinator's half-open
+# (last, now] window would never fire it (stranded). Holding the blocker a tick longer
+# guarantees a tick fires the deferred run while it is still pinned in place — without
+# clamping placements to `now` (which would re-fire every already-fired run each tick).
+_BLOCKER_CATCH_MARGIN_MINUTES = 2
+
+
+def committed_runs_from_sessions(
+    sessions: dict, now: datetime, buffer_minutes: int = DEFAULT_BUFFER_MINUTES
+) -> list[PlannedRun]:
+    """v1.21 — turn the live ``active_run_sessions`` registry (zone -> session dict,
+    persisted by the run services) into ``REASON_COMMITTED`` PlannedRuns the resolver
+    treats as fixed one-zone-at-a-time blockers. This is what makes a NEW scheduled
+    run DEFER past an in-progress run (manual, scheduled, or resumed-after-restart)
+    instead of firing a second zone into a controller that runs one zone at a time.
+
+    Each session's busy interval is ``[started_at, deadline)`` — the gap-INCLUSIVE
+    end, so a chunked run's inter-block gaps still count as controller-busy (we never
+    slip a different zone into the gap between blocks). A session is dropped only once
+    its inter-zone buffer PLUS a catch margin has elapsed
+    (``deadline + buffer + catch_margin <= now``): the buffer makes a run scheduled
+    right after a live one land ``buffer`` minutes later, and the catch margin (>= one
+    tick) keeps the blocker alive a beat past the deferred run's slot so that run is
+    fired before its blocker clears — never snapped back to its past scheduled time and
+    lost. Sessions with missing / unparseable / tz-naive timestamps are skipped — fail
+    safe: one bad record must never freeze all watering — but logged at WARNING,
+    because a still-running zone silently losing its blocker is how two zones overlap.
+    """
+    out: list[PlannedRun] = []
+    if not isinstance(sessions, dict):
+        return out
+    keep = timedelta(minutes=max(0, buffer_minutes) + _BLOCKER_CATCH_MARGIN_MINUTES)
+    for zone, s in sessions.items():
+        if not zone or not isinstance(s, dict):
+            continue
+        try:
+            started = datetime.fromisoformat(s["started_at"])
+            deadline = datetime.fromisoformat(s.get("deadline") or s["water_deadline"])
+        except (KeyError, TypeError, ValueError):
+            _LOGGER.warning(
+                "active session for %s has missing/unparseable timestamps; ignoring it "
+                "as a one-zone blocker (watering overlap is possible if it is still "
+                "running): %s",
+                zone,
+                s,
+            )
+            continue
+        if started.tzinfo is None or deadline.tzinfo is None or now.tzinfo is None:
+            _LOGGER.warning(
+                "active session for %s has tz-naive timestamps; ignoring it as a "
+                "one-zone blocker (watering overlap possible if it is still running)",
+                zone,
+            )
+            continue
+        if deadline + keep <= now:
+            continue  # finished AND its inter-zone buffer elapsed — no longer a blocker
+        out.append(
+            PlannedRun(
+                zone_entity_id=str(zone),
+                start_at=started,
+                duration_minutes=max(1, math.ceil((deadline - started).total_seconds() / 60)),
+                schedule_id=s.get("schedule_id") or "",
+                schedule_name=s.get("schedule_name") or "",
+                reason=REASON_COMMITTED,
+            )
+        )
+    return out
 
 
 def resolve_conflicts(

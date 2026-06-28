@@ -23,7 +23,9 @@ from .conflict_resolver import (
     POLICY_DEFER_NEW,
     POLICY_SHIFT_EXISTING_EARLIER,
     POLICY_SPLIT_DIFFERENCE,
+    REASON_COMMITTED,
     REASON_DEFERRED_LATE,
+    committed_runs_from_sessions,
     resolve_conflicts,
 )
 from .const import (
@@ -661,20 +663,41 @@ class ScheduleCoordinator:
         # Unknown / missing → keep safe default of POLICY_DEFER_NEW.
         configured = self._config.get("conflict_policy", POLICY_DEFER_NEW)
         policy = configured if configured in _VALID_CONFLICT_POLICIES else POLICY_DEFER_NEW
-        # v1.20 — NEVER-DROP. A run that can't be placed within the cascade
-        # cap is deferred *late* and still fires, instead of being skipped.
-        # Compression (shrinking the long runs to keep a squeezed run on
-        # time) is intentionally OFF here for now: shrinking a run that has
-        # already started would mis-model the controller and could fire a
-        # zone into a still-running one. It lands in v1.21 alongside
-        # in-progress-run tracking (the resolver + sim already support it,
-        # gated by compress_floor_pct < 100 + REASON_COMMITTED blockers).
+        # v1.21 — one-zone-at-a-time across LIVE runs. Feed the resolver the runs
+        # already in progress (manual, scheduled, or resumed after a restart) as
+        # fixed COMMITTED blockers, so a due scheduled run is DEFERRED past them
+        # instead of firing a second zone into a controller that runs one zone at a
+        # time. The live registry is active_run_sessions (persisted by the run
+        # services). A manual run is invisible to next_runs (it's not a schedule),
+        # so this is the only thing that stops a schedule colliding with it.
+        committed = committed_runs_from_sessions(
+            self._config.get("active_run_sessions") or {}, now
+        )
+        if committed:
+            # Drop the already-fired scheduled occurrence a committed session stands
+            # in for (its start is in the past) so the resolver models ONE busy
+            # interval, not the committed run plus its adjustable twin. A FUTURE
+            # occurrence of the same schedule stays — it must route around the run.
+            fired = {(c.schedule_id, c.zone_entity_id) for c in committed if c.schedule_id}
+            upcoming = [
+                r
+                for r in upcoming
+                if (r.schedule_id, r.zone_entity_id) not in fired or r.start_at > now
+            ]
+        # v1.20 — NEVER-DROP. A run that can't be placed within the cascade cap is
+        # deferred *late* and still fires, instead of being skipped. Compression
+        # (shrinking adjustable runs) stays OFF (compress_floor_pct=100): we only
+        # DEFER around committed runs, never compress one that has already started.
         resolved = resolve_conflicts(
-            upcoming,
+            committed + upcoming,
             policy,
             compress_floor_pct=100,  # 100 = no compression (defer-late only)
         )
         due = due_runs_since(resolved, last, now)
+        # Committed runs are blockers ONLY — never (re)fire one even if its actual
+        # start_at falls inside this tick's (last, now] window (e.g. a manual run
+        # that started seconds ago would otherwise be double-fired).
+        due = [r for r in due if r.reason != REASON_COMMITTED]
 
         for run in due:
             # v1.20 — the resolver never drops a run anymore (compress →
