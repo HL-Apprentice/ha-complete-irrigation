@@ -1362,6 +1362,77 @@ class ScheduleCoordinator:
             "weather_entity": self._resolve_weather_entity(),
         }
 
+    def _zone_moisture_band(self, zone_id: str) -> str:
+        """Current moisture band for a zone (a moisture_gate BAND_* string), or ""
+        when there's no usable reading. Read-only — reuses the same reading +
+        evaluate_moisture machinery as the watering gate, for the advisory plan."""
+        zone_cfg = (self._config.get("zones") or {}).get(zone_id) or {}
+        if not zone_cfg.get("moisture_entities") or zone_cfg.get("moisture_disabled"):
+            return ""
+        current, analysis_ids, _readings, _excl = self._zone_moisture_reading(zone_cfg)
+        if not analysis_ids or current is None:
+            return ""
+        return evaluate_moisture(
+            current=current,
+            min_pct=float(zone_cfg.get("min_pct", DEFAULT_ZONE_MIN_PCT)),
+            target=float(zone_cfg.get("target_pct", DEFAULT_ZONE_TARGET_PCT)),
+            max_pct=float(zone_cfg.get("max_pct", DEFAULT_ZONE_MAX_PCT)),
+            base_minutes=10,
+        ).band
+
+    def build_today_plan(self, now=None):
+        """v1.33 — the advisory daily plan: today's planned runs prioritized by
+        urgency (weekly water deficit + ET demand + moisture band), with skip
+        recommendations for saturated zones. ADVISORY ONLY — it never changes what
+        fires; it's surfaced via health.json, the panel, and the LLM advisor. Never
+        raises (returns an empty plan on any data gap)."""
+        from homeassistant.util import dt as dt_util
+
+        from .daily_planner import DailyPlan, ZoneSignal, build_daily_plan
+        from .hydraulics import DEFAULT_EFFICIENCY
+        from .plant_design import build_yard_report
+
+        try:
+            now = now or dt_util.now()
+            start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            end_of_day = start_of_day + timedelta(days=1)
+            zb = self._config.get("zone_buffer_seconds")
+            planned = next_runs(
+                self._store.enabled_schedules(),
+                from_dt=start_of_day,
+                until_dt=end_of_day,
+                zone_buffer_seconds=int(zb) if zb is not None else None,
+            )
+            eto = float(self.effective_eto())
+            eto_factor = max(0.0, min(1.0, eto / SANE_ETO_MAX)) if SANE_ETO_MAX else 0.0
+            efficiency = float(self._config.get("drip_efficiency", DEFAULT_EFFICIENCY))
+            # Per-zone weekly water-deficit fraction, from the hydraulics yard report.
+            deficit_frac: dict[str, float] = {}
+            for rep in build_yard_report(
+                self.plants.all(), self._store.all(), eto, efficiency
+            ):
+                need = sum(p.need_gal_week for p in rep.plants)
+                delivered = sum(p.delivered_gal_week for p in rep.plants)
+                deficit_frac[rep.loop.id] = (
+                    max(0.0, (need - delivered) / need) if need > 0 else 0.0
+                )
+            signals: dict[str, ZoneSignal] = {}
+            zone_names: dict[str, str] = {}
+            for r in planned:
+                z = r.zone_entity_id
+                if z not in signals:
+                    signals[z] = ZoneSignal(
+                        deficit_frac=deficit_frac.get(z, 0.0),
+                        band=self._zone_moisture_band(z),
+                        eto_factor=eto_factor,
+                    )
+                    st = self._hass.states.get(z) if self._hass else None
+                    zone_names[z] = (st.attributes.get("friendly_name") if st else None) or z
+            return build_daily_plan(planned, signals=signals, zone_names=zone_names, now=now)
+        except Exception:  # advisory only — must never break health.json / the panel
+            _LOGGER.exception("build_today_plan failed; returning empty plan")
+            return DailyPlan(items=(), summary="Daily plan unavailable.")
+
     async def _refresh_auto_eto(self, now=None) -> None:
         """Recompute the auto ETo from the weather entity's daily forecast.
 

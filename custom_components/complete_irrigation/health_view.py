@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING
 from homeassistant.components.http import HomeAssistantView
 
 from .const import DOMAIN
+from .daily_planner import serialize_daily_plan
 from .hydraulics import DEFAULT_EFFICIENCY
 from .plant_design import build_yard_report, serialize_loop_report
 from .run_history import STATUS_ABORTED, STATUS_COMPLETED, STATUS_SKIPPED
@@ -187,6 +188,10 @@ class IrrigationHealthView(HomeAssistantView):
                 "schedules": schedules,
                 "loops": loops,
                 "eto": coord.eto_status(),
+                # v1.33 — advisory daily plan (today's runs prioritized by urgency,
+                # with skip hints for saturated zones). The LLM advisor reads this
+                # and may propose a re-ordering, validated against the rail.
+                "daily_plan": serialize_daily_plan(coord.build_today_plan(now)),
                 "recent_runs": recent,
                 "health": {
                     "ok": not issues,

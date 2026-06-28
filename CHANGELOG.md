@@ -6,6 +6,20 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ## Unreleased — photo DB + security hardening
 
+### Added — daily plan (advisory "Today's Plan", groundwork for the LLM scheduler)
+
+- **A prioritized daily briefing of the day's watering.** Each day's planned runs
+  are ranked by urgency — combining each zone's weekly water deficit, the current ET
+  demand, and live moisture — so the driest / most heat-stressed zones surface first,
+  and a saturated zone is flagged to **skip today**. It's **advisory only**: nothing
+  about what actually fires changes (the scheduler, moisture/weather gates, and the
+  one-zone resolver still own watering) — the plan is guidance, exposed in the
+  health feed for the LLM advisor and (next) the panel.
+- **A safety rail for the LLM advisor.** The local model may re-order the day by its
+  own reasoning, but only within bounds: it must keep the same set of zones and can
+  never un-skip a saturated zone or invent a run — otherwise the deterministic order
+  stands. The model can make the plan smarter; it can't make it unsafe. 16 new tests.
+
 ### Added — one-zone-at-a-time across LIVE runs
 
 - **A scheduled run now waits for a run already in progress instead of firing a
