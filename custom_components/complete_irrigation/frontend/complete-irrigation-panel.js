@@ -131,7 +131,120 @@
       wucols_category: "moderate",
       canopy_area_sqft: "",
       zone_entity_id: "",
+      photos: [], // v1.32 — gallery of {ts, path, note} for the open editor
     };
+  }
+
+  // v1.32 — a human label for a stored photo ({ts: epoch-seconds, note}).
+  function photoLabel(p) {
+    const d = p && p.ts ? new Date(p.ts * 1000) : null;
+    const when = d ? d.toLocaleDateString() : "";
+    const note = (p && p.note) || "";
+    return note ? `${when} — ${note}` : when;
+  }
+
+  // v1.32 — minimal EXIF GPS reader: scan a JPEG ArrayBuffer for the APP1/TIFF
+  // GPS IFD and return decimal {lat, lon}, or null if absent/unparseable. No
+  // dependency — we only need lat/lon for first-time auto-placement (phone GPS
+  // is ~3-5 m and the user can drag to correct), so a tolerant best-effort read
+  // is enough. Returns null on anything unexpected rather than throwing.
+  function exifGps(buf) {
+    try {
+      const view = new DataView(buf);
+      const len = view.byteLength;
+      if (len < 4 || view.getUint16(0) !== 0xffd8) return null; // not a JPEG
+      let off = 2;
+      while (off + 4 <= len) {
+        const marker = view.getUint16(off);
+        if (marker === 0xffda) break; // start of scan — no metadata past here
+        if ((marker & 0xff00) !== 0xff00) return null; // misaligned
+        if (marker !== 0xffe1) {
+          off += 2 + view.getUint16(off + 2); // skip non-APP1 segment
+          continue;
+        }
+        const segLen = view.getUint16(off + 2);
+        const tiff = off + 4;
+        if (tiff + 8 > len || view.getUint32(tiff) !== 0x45786966) {
+          off += 2 + segLen; // APP1 but not "Exif" — keep scanning
+          continue;
+        }
+        const t0 = tiff + 6; // TIFF header start
+        const le = view.getUint16(t0) === 0x4949; // II = little-endian
+        const u16 = (o) => view.getUint16(o, le);
+        const u32 = (o) => view.getUint32(o, le);
+        if (u16(t0 + 2) !== 0x002a) return null;
+        const ifd0 = t0 + u32(t0 + 4);
+        let gpsIfd = 0;
+        const n0 = u16(ifd0);
+        for (let i = 0; i < n0; i++) {
+          const ent = ifd0 + 2 + i * 12;
+          if (u16(ent) === 0x8825) {
+            gpsIfd = t0 + u32(ent + 8);
+            break;
+          }
+        }
+        if (!gpsIfd || gpsIfd + 2 > len) return null;
+        const rational = (o) => u32(o) / (u32(o + 4) || 1);
+        const dms = (o) => rational(o) + rational(o + 8) / 60 + rational(o + 16) / 3600;
+        let latRef, lonRef, lat, lon;
+        const n = u16(gpsIfd);
+        for (let i = 0; i < n; i++) {
+          const ent = gpsIfd + 2 + i * 12;
+          const tag = u16(ent);
+          const valOff = t0 + u32(ent + 8);
+          if (tag === 1) latRef = String.fromCharCode(view.getUint8(ent + 8));
+          else if (tag === 2) lat = dms(valOff);
+          else if (tag === 3) lonRef = String.fromCharCode(view.getUint8(ent + 8));
+          else if (tag === 4) lon = dms(valOff);
+        }
+        if (lat == null || lon == null) return null;
+        if (latRef === "S") lat = -lat;
+        if (lonRef === "W") lon = -lon;
+        if (!isFinite(lat) || !isFinite(lon)) return null;
+        return { lat, lon };
+      }
+    } catch (_) {
+      /* malformed EXIF — treat as no GPS */
+    }
+    return null;
+  }
+
+  // v1.32 — load an image File, downscale so the longer edge <= maxPx, and return
+  // base64 JPEG (no data: prefix). Keeps uploads small and strips EXIF from the
+  // stored bytes (we already pulled GPS separately). The backend re-validates the
+  // JPEG magic bytes, so canvas output (real image/jpeg) passes.
+  function downscaleToJpegB64(file, maxPx, quality) {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        let w = img.naturalWidth || img.width;
+        let h = img.naturalHeight || img.height;
+        if (!w || !h) return reject(new Error("empty image"));
+        if (w > maxPx || h > maxPx) {
+          if (w >= h) {
+            h = Math.round((h * maxPx) / w);
+            w = maxPx;
+          } else {
+            w = Math.round((w * maxPx) / h);
+            h = maxPx;
+          }
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+        const dataUrl = canvas.toDataURL("image/jpeg", quality || 0.82);
+        const comma = dataUrl.indexOf(",");
+        resolve(comma >= 0 ? dataUrl.slice(comma + 1) : "");
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        reject(new Error("could not decode the image"));
+      };
+      img.src = url;
+    });
   }
 
   function emptyEditor() {
@@ -539,6 +652,7 @@
               wucols_category: p.wucols_category,
               canopy_area_sqft: p.canopy_area_sqft,
               zone_entity_id: p.zone_entity_id,
+              photos: Array.isArray(p.photos) ? p.photos : [],
             };
           }
           return this._renderNow();
@@ -768,6 +882,12 @@
           this._plantEditor[t.name] = t.value;
         }
         return; // value already shown by the control; no re-render
+      }
+      if (action === "photo-file") {
+        const file = t.files && t.files[0];
+        if (file) this._addPlantPhoto(file, t.dataset.plantId);
+        t.value = ""; // allow re-selecting the same file
+        return;
       }
       if (action === "notify-target-change") {
         const idx = parseInt(t.dataset.idx, 10);
@@ -4893,12 +5013,84 @@
           .join("") +
         `</select></div>` +
         `</div>` +
+        // v1.32 — photo history (only on a saved plant; you attach photos to an id).
+        (e.id ? this._renderPhotoSection(e) : "") +
         `<div class="yard-form-actions">` +
         `<button class="btn btn-primary" type="submit">${e.id ? "Save" : "Add plant"}</button>` +
         `<button class="btn btn-small" type="button" data-action="cancel-plant">Cancel</button>` +
         `</div>` +
         `</form>`
       );
+    }
+
+    _renderPhotoSection(e) {
+      const photos = Array.isArray(e.photos) ? e.photos : [];
+      const thumbs = photos.length
+        ? photos
+            .map(
+              (p) =>
+                `<a class="plant-photo-thumb" href="${escapeAttr(p.path)}" target="_blank" ` +
+                `rel="noopener" title="${escapeAttr(photoLabel(p))}">` +
+                `<img src="${escapeAttr(p.path)}" alt="${escapeAttr(
+                  e.name
+                )} photo" loading="lazy" draggable="false" />` +
+                `</a>`
+            )
+            .join("")
+        : `<p class="muted plant-photo-empty">No photos yet — add one to track this plant's health over time.</p>`;
+      const busy = !!this._photoBusy;
+      return (
+        `<div class="plant-photos">` +
+        `<label class="plant-photos-title">Photos (${photos.length})</label>` +
+        `<div class="plant-photo-grid">${thumbs}</div>` +
+        `<label class="btn btn-small plant-photo-add${busy ? " is-busy" : ""}">` +
+        (busy ? "Uploading…" : "+ Add photo") +
+        `<input type="file" accept="image/*" data-action="photo-file" data-plant-id="${escapeAttr(
+          e.id
+        )}"${busy ? " disabled" : ""} hidden />` +
+        `</label>` +
+        `<span class="muted plant-photo-hint">A photo with location data places this plant ` +
+        `on the map automatically (first photo only); after that, drag the marker to adjust.</span>` +
+        `</div>`
+      );
+    }
+
+    async _addPlantPhoto(file, plantId) {
+      if (!file || !plantId || this._photoBusy) return;
+      this._photoBusy = true;
+      this._renderNow();
+      try {
+        // Pull EXIF GPS from the ORIGINAL bytes first (canvas re-encoding strips it).
+        let gps = null;
+        try {
+          gps = exifGps(await file.arrayBuffer());
+        } catch (_) {
+          /* no or malformed EXIF — fine, just no auto-placement */
+        }
+        const b64 = await downscaleToJpegB64(file, 1280, 0.82);
+        if (!b64 || b64.length < 64) throw new Error("could not read the image");
+        const payload = { plant_id: plantId, image_base64: b64 };
+        // Auto-place ONLY when the plant is still unplaced (the locked workflow:
+        // GPS places once; selection owns identity; manual drag owns position).
+        const plant = (this._plants || []).find((p) => p.id === plantId);
+        const unplaced = !plant || plant.map_x == null || plant.map_y == null;
+        if (gps && unplaced) {
+          payload.latitude = gps.lat;
+          payload.longitude = gps.lon;
+        }
+        await this._hass.callService("complete_irrigation", "add_plant_photo", payload);
+        await this._fetchYard();
+        // Re-sync the open editor's gallery from the refreshed plant list.
+        if (this._plantEditor && this._plantEditor.id === plantId) {
+          const fresh = (this._plants || []).find((p) => p.id === plantId);
+          this._plantEditor.photos = fresh && Array.isArray(fresh.photos) ? fresh.photos : [];
+        }
+      } catch (err) {
+        alert("Failed to add photo: " + (err?.message || err));
+      } finally {
+        this._photoBusy = false;
+        this._renderNow();
+      }
     }
 
     _renderPlantList() {
@@ -5525,6 +5717,16 @@
         `.plant-form input,.plant-form select{width:100%;padding:8px 10px;border:1px solid var(--ci-border);border-radius:6px;background:var(--ci-input-bg);color:inherit;font:inherit;box-sizing:border-box}` +
         `.yard-form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}` +
         `.yard-form-actions{display:flex;gap:8px;margin-top:14px}` +
+        // v1.32 — per-plant photo gallery in the edit form
+        `.plant-photos{margin-top:14px;border-top:1px solid var(--ci-border);padding-top:12px}` +
+        `.plant-photos-title{display:block;font-size:12px;color:var(--ci-text-2);margin-bottom:8px}` +
+        `.plant-photo-grid{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}` +
+        `.plant-photo-thumb{display:block;width:72px;height:72px;border-radius:8px;overflow:hidden;border:1px solid var(--ci-border);background:var(--ci-hover)}` +
+        `.plant-photo-thumb img{width:100%;height:100%;object-fit:cover;display:block}` +
+        `.plant-photo-empty{margin:0 0 10px;font-size:12px}` +
+        `.plant-photo-add{cursor:pointer;display:inline-block}` +
+        `.plant-photo-add.is-busy{opacity:0.6;cursor:default}` +
+        `.plant-photo-hint{display:block;margin-top:8px;font-size:11px}` +
         `.yard-h3{margin:18px 0 8px;font-size:14px}` +
         `.yard-table-wrap{overflow-x:auto}` +
         `.yard-table{width:100%;border-collapse:collapse;font-size:13px}` +
