@@ -13,8 +13,8 @@ project uses [Semantic Versioning](https://semver.org/).
   demand, and live moisture — so the driest / most heat-stressed zones surface first,
   and a saturated zone is flagged to **skip today**. It's **advisory only**: nothing
   about what actually fires changes (the scheduler, moisture/weather gates, and the
-  one-zone resolver still own watering) — the plan is guidance, exposed in the
-  health feed for the LLM advisor and (next) the panel.
+  one-zone resolver still own watering) — the plan is guidance, shown as a **"Today's
+  plan" card** on the Today tab and exposed in the health feed for the LLM advisor.
 - **A safety rail for the LLM advisor.** The local model may re-order the day by its
   own reasoning, but only within bounds: it must keep the same set of zones and can
   never un-skip a saturated zone or invent a run — otherwise the deterministic order
