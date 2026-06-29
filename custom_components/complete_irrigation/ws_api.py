@@ -16,6 +16,7 @@ import voluptuous as vol
 from homeassistant.components import websocket_api
 
 from .const import DOMAIN
+from .daily_planner import serialize_daily_plan
 from .hydraulics import DEFAULT_EFFICIENCY
 from .plant_design import build_yard_report, serialize_loop_report
 
@@ -29,6 +30,7 @@ WS_TYPE_LIST_RUN_HISTORY = f"{DOMAIN}/list_run_history"
 WS_TYPE_LIST_PLANNED_RUNS = f"{DOMAIN}/list_planned_runs"
 WS_TYPE_LIST_PLANTS = f"{DOMAIN}/list_plants"
 WS_TYPE_YARD_REPORT = f"{DOMAIN}/yard_report"
+WS_TYPE_GET_DAILY_PLAN = f"{DOMAIN}/get_daily_plan"
 
 
 def _find_coordinator(hass: HomeAssistant):
@@ -282,6 +284,19 @@ async def yard_report(hass, connection, msg):
     )
 
 
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): WS_TYPE_GET_DAILY_PLAN})
+@websocket_api.async_response
+async def get_daily_plan(hass, connection, msg):
+    """The advisory daily plan (today's runs prioritized by urgency, with skip hints
+    for saturated zones) for the panel's 'Today's Plan' card. Advisory only."""
+    coord = _find_coordinator(hass)
+    if coord is None:
+        connection.send_result(msg["id"], {"summary": "No runs planned today.", "items": []})
+        return
+    connection.send_result(msg["id"], serialize_daily_plan(coord.build_today_plan()))
+
+
 def async_register_ws_commands(hass: HomeAssistant) -> None:
     """Register all WS commands. Idempotent."""
     websocket_api.async_register_command(hass, list_schedules)
@@ -291,3 +306,4 @@ def async_register_ws_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, list_planned_runs)
     websocket_api.async_register_command(hass, list_plants)
     websocket_api.async_register_command(hass, yard_report)
+    websocket_api.async_register_command(hass, get_daily_plan)

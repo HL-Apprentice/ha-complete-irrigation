@@ -1268,6 +1268,8 @@
       // v1.19.0 — keep the now-line drifting only while Today is open.
       if (sectionId === "today") this._startNowLineTimer();
       else this._stopNowLineTimer();
+      // v1.33 — advisory "Today's plan" card; refetch on each Today open.
+      if (sectionId === "today") this._fetchDailyPlan();
       // Today + Zones both rely on the cached PlannedRuns for their
       // calendar / strip rendering. Fetch lazily on first open and
       // again whenever schedules mutate (handled in _saveSchedule etc).
@@ -1571,6 +1573,52 @@
       } catch (err) {
         console.error("[complete-irrigation] yard fetch failed:", err);
       }
+    }
+
+    async _fetchDailyPlan() {
+      // v1.33 — the advisory "Today's plan" (zones prioritized by urgency).
+      if (!this._hass?.callWS) return;
+      try {
+        this._dailyPlan = await this._hass.callWS({
+          type: "complete_irrigation/get_daily_plan",
+        });
+        this._scheduleRender();
+      } catch (err) {
+        console.error("[complete-irrigation] daily plan fetch failed:", err);
+      }
+    }
+
+    _renderDailyPlanCard() {
+      const plan = this._dailyPlan;
+      if (!plan || !Array.isArray(plan.items) || plan.items.length === 0) return "";
+      const meta = {
+        priority: { icon: "🔴", label: "Priority" },
+        run: { icon: "🟢", label: "Run" },
+        light: { icon: "🔵", label: "Light" },
+        skip: { icon: "⚪", label: "Skip" },
+      };
+      const rows = plan.items
+        .map((it) => {
+          const m = meta[it.recommendation] || meta.run;
+          return (
+            `<li class="plan-item plan-${escapeAttr(it.recommendation)}">` +
+            `<span class="plan-rec" title="${escapeAttr(m.label)}">${m.icon}</span>` +
+            `<span class="plan-zone">${escapeHtml(it.zone_name)}</span>` +
+            `<span class="plan-reason">${escapeHtml(it.reason)}</span>` +
+            `</li>`
+          );
+        })
+        .join("");
+      return (
+        `<section class="daily-plan-card">` +
+        `<div class="section-title-row">` +
+        `<h3 class="section-title">Today's plan</h3>` +
+        `<span class="section-hint" style="margin:0">Advisory — watering still follows your schedules + gates.</span>` +
+        `</div>` +
+        `<p class="plan-summary">${escapeHtml(plan.summary || "")}</p>` +
+        `<ul class="plan-list">${rows}</ul>` +
+        `</section>`
+      );
     }
 
     async _fetchPlannedRuns() {
@@ -2760,6 +2808,7 @@
         this._renderRainLockoutBanner() +
         this._renderMissedRunsBanner() +
         this._renderWeatherBanner() +
+        this._renderDailyPlanCard() +
         `<section>` +
         `<div class="section-title-row">` +
         `<h3 class="section-title">Zones (${visibleZones.length})</h3>` +
@@ -5727,6 +5776,15 @@
         `.plant-photo-add{cursor:pointer;display:inline-block}` +
         `.plant-photo-add.is-busy{opacity:0.6;cursor:default}` +
         `.plant-photo-hint{display:block;margin-top:8px;font-size:11px}` +
+        // v1.33 — advisory "Today's plan" card
+        `.daily-plan-card{margin-bottom:18px;padding:14px 16px;border:1px solid var(--ci-border);border-radius:10px;background:var(--ci-card)}` +
+        `.plan-summary{margin:4px 0 10px;font-size:13px;color:var(--ci-text)}` +
+        `.plan-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}` +
+        `.plan-item{display:grid;grid-template-columns:auto auto 1fr;align-items:baseline;gap:8px;font-size:13px}` +
+        `.plan-rec{font-size:11px}` +
+        `.plan-zone{font-weight:600;color:var(--ci-text)}` +
+        `.plan-reason{color:var(--ci-text-2);font-size:12px}` +
+        `.plan-skip .plan-zone{color:var(--ci-text-2);text-decoration:line-through}` +
         `.yard-h3{margin:18px 0 8px;font-size:14px}` +
         `.yard-table-wrap{overflow-x:auto}` +
         `.yard-table{width:100%;border-collapse:collapse;font-size:13px}` +
