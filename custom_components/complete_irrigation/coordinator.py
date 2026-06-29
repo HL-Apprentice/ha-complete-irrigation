@@ -663,16 +663,14 @@ class ScheduleCoordinator:
         # Unknown / missing → keep safe default of POLICY_DEFER_NEW.
         configured = self._config.get("conflict_policy", POLICY_DEFER_NEW)
         policy = configured if configured in _VALID_CONFLICT_POLICIES else POLICY_DEFER_NEW
-        # v1.21 — one-zone-at-a-time across LIVE runs. Feed the resolver the runs
+        # v1.32 — one-zone-at-a-time across LIVE runs. Feed the resolver the runs
         # already in progress (manual, scheduled, or resumed after a restart) as
         # fixed COMMITTED blockers, so a due scheduled run is DEFERRED past them
         # instead of firing a second zone into a controller that runs one zone at a
         # time. The live registry is active_run_sessions (persisted by the run
         # services). A manual run is invisible to next_runs (it's not a schedule),
         # so this is the only thing that stops a schedule colliding with it.
-        committed = committed_runs_from_sessions(
-            self._config.get("active_run_sessions") or {}, now
-        )
+        committed = committed_runs_from_sessions(self._config.get("active_run_sessions") or {}, now)
         if committed:
             # Drop the already-fired scheduled occurrence a committed session stands
             # in for (its start is in the past) so the resolver models ONE busy
@@ -1381,7 +1379,7 @@ class ScheduleCoordinator:
         ).band
 
     def build_today_plan(self, now=None):
-        """v1.33 — the advisory daily plan: today's planned runs prioritized by
+        """v1.32 — the advisory daily plan: today's planned runs prioritized by
         urgency (weekly water deficit + ET demand + moisture band), with skip
         recommendations for saturated zones. ADVISORY ONLY — it never changes what
         fires; it's surfaced via health.json, the panel, and the LLM advisor. Never
@@ -1408,14 +1406,10 @@ class ScheduleCoordinator:
             efficiency = float(self._config.get("drip_efficiency", DEFAULT_EFFICIENCY))
             # Per-zone weekly water-deficit fraction, from the hydraulics yard report.
             deficit_frac: dict[str, float] = {}
-            for rep in build_yard_report(
-                self.plants.all(), self._store.all(), eto, efficiency
-            ):
+            for rep in build_yard_report(self.plants.all(), self._store.all(), eto, efficiency):
                 need = sum(p.need_gal_week for p in rep.plants)
                 delivered = sum(p.delivered_gal_week for p in rep.plants)
-                deficit_frac[rep.loop.id] = (
-                    max(0.0, (need - delivered) / need) if need > 0 else 0.0
-                )
+                deficit_frac[rep.loop.id] = max(0.0, (need - delivered) / need) if need > 0 else 0.0
             signals: dict[str, ZoneSignal] = {}
             zone_names: dict[str, str] = {}
             for r in planned:

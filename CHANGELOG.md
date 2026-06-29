@@ -4,7 +4,7 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
-## Unreleased — photo DB + security hardening
+## v1.32.0 — 2026-06-29 — photo DB, security hardening, one-zone serialization, daily plan
 
 ### Added — daily plan (advisory "Today's Plan", groundwork for the LLM scheduler)
 

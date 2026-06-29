@@ -1,4 +1,4 @@
-"""Daily plan — a pure-logic advisory briefing for the day's watering (v1.33).
+"""Daily plan — a pure-logic advisory briefing for the day's watering (v1.32).
 
 Given the day's planned runs plus per-zone urgency signals (weekly water deficit,
 moisture band, ET demand), this produces a PRIORITIZED, annotated plan: which zones
