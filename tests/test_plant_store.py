@@ -164,8 +164,15 @@ def test_pre_v132_record_loads_without_photos():
 
 def test_invalid_photo_entries_filtered_on_load():
     data = _rec().to_dict()
-    data["photos"] = [{"ts": 1, "path": "/local/a.jpg"}, {"ts": 2}, "junk", {"path": ""}]
-    # only the one with a non-empty path survives
+    data["photos"] = [
+        {"ts": 1, "path": "/local/a.jpg"},  # valid -> survives
+        {"ts": 2},  # no path -> dropped
+        "junk",  # not a dict -> dropped
+        {"path": ""},  # empty path -> dropped
+        {"ts": 3, "path": "javascript:alert(1)"},  # non-/local/ scheme -> dropped (XSS guard)
+        {"ts": 4, "path": "https://evil.example/x.jpg"},  # absolute URL -> dropped
+    ]
+    # only the safe "/local/" path survives
     assert PlantRecord.from_dict(data).photos == ({"ts": 1, "path": "/local/a.jpg"},)
 
 

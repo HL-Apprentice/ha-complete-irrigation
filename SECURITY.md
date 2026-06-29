@@ -47,7 +47,17 @@ in the user's own network/host configuration.
 ## Handling of sensitive data
 
 This integration stores its data (schedules, plants, run history, config) in
-Home Assistant's local `.storage`. It does not transmit data to any external
-service of its own. Notification targets and sensor entity ids are treated as
-configuration, never logged as secrets. Please keep secrets out of any logs
-or screenshots you share.
+Home Assistant's local `.storage`. Notification targets and sensor entity ids are
+treated as configuration, never logged as secrets. Please keep secrets out of any
+logs or screenshots you share.
+
+**One optional outbound request.** The only time the integration contacts an
+external service is the **"Set up yard map"** action (`set_yard_map`, admin-only):
+it fetches an aerial backdrop image over HTTPS from Esri World Imagery
+(`services.arcgisonline.com`, a fixed host — no API key), sending only the map
+center **latitude/longitude** (defaulting to your Home Assistant location) and a
+span. It is opt-in (nothing is sent unless you run that action), times out after
+30 s, fails closed (the previous map is kept on any error), and validates the
+response is a real image before saving. No other feature transmits data off-box.
+Photos you add stay local under `www/complete_irrigation/`; EXIF GPS is read in
+your browser only to place a marker and is stripped from the stored image.
