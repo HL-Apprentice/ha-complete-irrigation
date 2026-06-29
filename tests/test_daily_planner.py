@@ -1,4 +1,4 @@
-"""Tests for the daily planner (pure logic, v1.33).
+"""Tests for the daily planner (pure logic, v1.32).
 
 The deterministic advisory plan + the LLM-ordering rail. Covers urgency blending,
 per-band recommendations, prioritized ordering, the human summary, and the safety

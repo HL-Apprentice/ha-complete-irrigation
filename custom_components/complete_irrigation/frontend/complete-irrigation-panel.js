@@ -1268,7 +1268,7 @@
       // v1.19.0 — keep the now-line drifting only while Today is open.
       if (sectionId === "today") this._startNowLineTimer();
       else this._stopNowLineTimer();
-      // v1.33 — advisory "Today's plan" card; refetch on each Today open.
+      // v1.32 — advisory "Today's plan" card; refetch on each Today open.
       if (sectionId === "today") this._fetchDailyPlan();
       // Today + Zones both rely on the cached PlannedRuns for their
       // calendar / strip rendering. Fetch lazily on first open and
@@ -1576,7 +1576,7 @@
     }
 
     async _fetchDailyPlan() {
-      // v1.33 — the advisory "Today's plan" (zones prioritized by urgency).
+      // v1.32 — the advisory "Today's plan" (zones prioritized by urgency).
       if (!this._hass?.callWS) return;
       try {
         this._dailyPlan = await this._hass.callWS({
@@ -5776,7 +5776,7 @@
         `.plant-photo-add{cursor:pointer;display:inline-block}` +
         `.plant-photo-add.is-busy{opacity:0.6;cursor:default}` +
         `.plant-photo-hint{display:block;margin-top:8px;font-size:11px}` +
-        // v1.33 — advisory "Today's plan" card
+        // v1.32 — advisory "Today's plan" card
         `.daily-plan-card{margin-bottom:18px;padding:14px 16px;border:1px solid var(--ci-border);border-radius:10px;background:var(--ci-card)}` +
         `.plan-summary{margin:4px 0 10px;font-size:13px;color:var(--ci-text)}` +
         `.plan-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}` +
