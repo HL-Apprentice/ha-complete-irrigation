@@ -188,7 +188,7 @@ class IrrigationHealthView(HomeAssistantView):
                 "schedules": schedules,
                 "loops": loops,
                 "eto": coord.eto_status(),
-                # v1.33 — advisory daily plan (today's runs prioritized by urgency,
+                # v1.32 — advisory daily plan (today's runs prioritized by urgency,
                 # with skip hints for saturated zones). The LLM advisor reads this
                 # and may propose a re-ordering, validated against the rail.
                 "daily_plan": serialize_daily_plan(coord.build_today_plan(now)),

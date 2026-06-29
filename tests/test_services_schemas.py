@@ -24,7 +24,6 @@ from custom_components.complete_irrigation.services import (  # noqa: E402
     _looks_like_image,
 )
 
-
 # ── _looks_like_image: stored-file XSS guard (v1.32 security gate) ────
 
 
@@ -50,6 +49,7 @@ def test_looks_like_image_rejects_xss_payloads():
         b"plain text not an image at all",
     ):
         assert not _looks_like_image(payload)
+
 
 # ── _WEEKDAYS_SCHEMA ─────────────────────────────────────────────────
 

@@ -60,9 +60,7 @@ class PlantRecord:
             raise ValueError("plant id must be non-empty")
         if not _SAFE_ID_RE.fullmatch(self.id):
             # Path-traversal / unsafe-segment guard (the id names a photo dir).
-            raise ValueError(
-                f"plant id must be 1-64 chars of [A-Za-z0-9_-], got {self.id!r}"
-            )
+            raise ValueError(f"plant id must be 1-64 chars of [A-Za-z0-9_-], got {self.id!r}")
         if not self.name.strip():
             raise ValueError("plant name must be non-empty")
         if self.wucols_category not in WUCOLS_FACTORS:

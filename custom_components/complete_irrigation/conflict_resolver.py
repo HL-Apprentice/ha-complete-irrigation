@@ -66,7 +66,7 @@ _BLOCKER_CATCH_MARGIN_MINUTES = 2
 def committed_runs_from_sessions(
     sessions: dict, now: datetime, buffer_minutes: int = DEFAULT_BUFFER_MINUTES
 ) -> list[PlannedRun]:
-    """v1.21 — turn the live ``active_run_sessions`` registry (zone -> session dict,
+    """v1.32 — turn the live ``active_run_sessions`` registry (zone -> session dict,
     persisted by the run services) into ``REASON_COMMITTED`` PlannedRuns the resolver
     treats as fixed one-zone-at-a-time blockers. This is what makes a NEW scheduled
     run DEFER past an in-progress run (manual, scheduled, or resumed-after-restart)
