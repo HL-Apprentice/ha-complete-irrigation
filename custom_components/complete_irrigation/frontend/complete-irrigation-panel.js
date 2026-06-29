@@ -6198,7 +6198,8 @@
       .replace(/&/g, "&amp;")
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;"); // also escape single-quote so a single-quoted attr sink is safe too
   }
   // escapeAttr is the same function as escapeHtml — the alias just
   // makes interpolation sites self-documenting (developer can see at

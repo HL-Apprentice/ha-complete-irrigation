@@ -112,7 +112,17 @@ class PlantRecord:
             return None if v is None else float(v)
 
         raw_photos = data.get("photos") or []
-        photos = tuple(dict(p) for p in raw_photos if isinstance(p, dict) and p.get("path"))
+        # Photo paths are ALWAYS the server-set "/local/complete_irrigation/plants/..."
+        # URL. Drop any entry whose path isn't a "/local/" relative URL on load, so a
+        # hand-tampered .storage file can't inject e.g. a "javascript:" href into the
+        # gallery's <a href> (defense-in-depth on top of the panel's escapeAttr).
+        photos = tuple(
+            dict(p)
+            for p in raw_photos
+            if isinstance(p, dict)
+            and isinstance(p.get("path"), str)
+            and p["path"].startswith("/local/")
+        )
         return cls(
             id=str(data["id"]),
             name=str(data["name"]),
