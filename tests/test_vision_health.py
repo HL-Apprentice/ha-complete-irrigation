@@ -12,6 +12,7 @@ import json
 from custom_components.complete_irrigation.vision_health import (
     HEALTH_STATES,
     HealthReport,
+    due_for_review,
     report_has_concern,
     select_review_photos,
     serialize_report,
@@ -153,6 +154,22 @@ def test_rail_strips_actuation_in_concerns_too():
     r = _validate(_valid_raw(concerns=["Leaves yellowing.", "turn off the water supply"]))
     assert "Leaves yellowing." in r.concerns
     assert not any("turn off" in c.lower() for c in r.concerns)
+
+
+# ── due_for_review ──────────────────────────────────────────────────
+
+
+def test_due_for_review():
+    # never assessed -> due
+    assert due_for_review("", NOW_ISO) is True
+    assert due_for_review(None, NOW_ISO) is True
+    # unparseable / tz-naive -> due (fail toward reviewing)
+    assert due_for_review("garbage", NOW_ISO) is True
+    assert due_for_review("2026-05-01T06:00:00", NOW_ISO) is True  # naive
+    # recent (17 days ago) with a 182-day interval -> not due
+    assert due_for_review("2026-05-01T06:00:00+00:00", NOW_ISO, interval_days=182) is False
+    # old (>182 days) -> due
+    assert due_for_review("2025-01-01T06:00:00+00:00", NOW_ISO, interval_days=182) is True
 
 
 # ── concern flag + serialization ────────────────────────────────────

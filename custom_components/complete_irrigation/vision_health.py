@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import datetime
 
 # Allowed health states (anything else from the model -> "unknown").
 HEALTH_STATES = ("thriving", "healthy", "stressed", "declining", "unknown")
@@ -142,6 +143,23 @@ def validate_verdict(
         latest_ts=latest_ts if isinstance(latest_ts, int) else None,
         model=_clean_text(model, 80),
     )
+
+
+def due_for_review(last_assessed_iso, now_iso, interval_days: int = 182) -> bool:
+    """True if a plant is due for a (re)assessment: never assessed (empty/None), or its
+    last assessment is >= interval_days old (biannual by default). An unparseable or
+    tz-naive timestamp returns True — fail toward reviewing rather than silently never
+    checking. The health feed uses this to tell the NAS job which plants to look at."""
+    if not last_assessed_iso:
+        return True
+    try:
+        last = datetime.fromisoformat(last_assessed_iso)
+        now = datetime.fromisoformat(now_iso)
+    except (TypeError, ValueError):
+        return True
+    if last.tzinfo is None or now.tzinfo is None:
+        return True
+    return (now - last).total_seconds() >= interval_days * 86400
 
 
 def report_has_concern(report: HealthReport) -> bool:
