@@ -950,6 +950,18 @@ class ScheduleCoordinator:
 
     # ── Auto-soak recovery (v1.19) ────────────────────────────────
 
+    def _other_zone_busy(self, zone_id: str, now: datetime) -> bool:
+        """True when a DIFFERENT zone has a live committed run (manual / scheduled /
+        resumed) — i.e. the one-zone-at-a-time controller is busy elsewhere. The
+        scheduled tick is already serialized by resolve_conflicts, but AUTO-SOAK fires
+        outside that path, so it must consult this before opening a valve or it could
+        drive a second zone into a running one (hydraulic collision on a single-zone
+        controller). Reuses the same committed-blocker definition as the resolver."""
+        sessions = self._config.get("active_run_sessions") or {}
+        return any(
+            r.zone_entity_id != zone_id for r in committed_runs_from_sessions(sessions, now)
+        )
+
     async def _tick_auto_soak(self, now: datetime) -> None:
         """Closed-loop low-moisture recovery, driven once per tick.
 
@@ -991,6 +1003,8 @@ class ScheduleCoordinator:
                 zone_state = self._hass.states.get(zone_id)
                 if zone_state is not None and zone_state.state == "on":
                     continue  # already watering (scheduled/manual) — let it finish
+                if self._other_zone_busy(zone_id, now):
+                    continue  # one-zone-at-a-time: another zone is watering
                 await self._start_soak_run(zone_id, zone_cfg, now, cycle=1, current=current)
                 continue
 
@@ -1051,6 +1065,8 @@ class ScheduleCoordinator:
                         event_type="auto_soak_gave_up",
                     )
                 continue
+            if self._other_zone_busy(zone_id, now):
+                continue  # one-zone-at-a-time: wait for the other zone to finish
             await self._start_soak_run(
                 zone_id, zone_cfg, now, cycle=state["cycle"] + 1, current=current
             )
