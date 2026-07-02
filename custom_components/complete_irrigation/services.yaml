@@ -284,14 +284,14 @@ set_weather_config:
   fields:
     rain_sensor:
       name: Rain sensor (legacy)
-      description: Single rainfall sensor (in inches). Prefer `rain_sensors` for multi-sensor setups.
+      description: "Single rainfall sensor (in inches). A rolling-window sensor (e.g. last 6h) is ideal; a daily-total accumulator also works — lockout arms on NEW rainfall (a rising reading), not while the total merely stays elevated. Prefer `rain_sensors` for multi-sensor setups."
       required: false
       selector:
         entity:
           domain: sensor
     rain_sensors:
       name: Rain sensors
-      description: One or more rainfall sensors (accumulation today/yesterday, duration, intensity, etc.). The first one is used for lockout; all show on the Today banner.
+      description: "One or more rainfall sensors (in inches). The first is used for lockout, which arms on a rising reading (new rain) so a daily-total accumulator can't pin the lockout on; all show on the Today banner."
       required: false
       example: "['sensor.backyard_rain_accumulation_today', 'sensor.backyard_rain_intensity']"
       selector:

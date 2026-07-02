@@ -3890,7 +3890,7 @@
           // default .day-cal-pill accent background.
           const colorStyle =
             r.color && !cls.includes("past") && !cls.includes("live")
-              ? `;background:${r.color}`
+              ? `;background:${escapeAttr(r.color)}` // escape to match the file's convention (can't break the style attr)
               : "";
           return (
             `<div class="${cls}" style="top:${top}px;height:${height}px${colorStyle}" ` +
