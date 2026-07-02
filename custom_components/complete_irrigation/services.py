@@ -89,6 +89,7 @@ SERVICE_SET_YARD_MAP = "set_yard_map"  # v1.30 — fetch + cache the aerial back
 SERVICE_ADD_PLANT_PHOTO = "add_plant_photo"  # v1.32 — per-plant photo + EXIF-GPS place
 
 MAX_SCHEDULE_DURATION_MIN = 480  # 8 hours — safety cap for scheduled runs
+_HHMM_RE = r"^([01]\d|2[0-3]):[0-5]\d$"  # quiet-hours 24h time, validated at the boundary
 
 # Voluptuous schema for validation at the HA boundary.
 # v1.24 — CRITICAL: cap at MAX_SCHEDULE_DURATION_MIN, NOT a 60-min manual cap.
@@ -338,8 +339,10 @@ _SET_NOTIFICATION_CONFIG_SCHEMA = vol.Schema(
         # When a string, each comma/newline-separated entry is validated
         # by the dispatcher; we accept the raw string here.
         vol.Optional("notify_targets"): vol.Any(cv.string, [_validate_notify_target]),
-        vol.Optional("quiet_hours_start"): cv.string,
-        vol.Optional("quiet_hours_end"): cv.string,
+        # Validate HH:MM at the boundary so a malformed value can't reach the
+        # parse sinks (notify hot path + coordinator summary scheduling).
+        vol.Optional("quiet_hours_start"): vol.All(cv.string, vol.Match(_HHMM_RE)),
+        vol.Optional("quiet_hours_end"): vol.All(cv.string, vol.Match(_HHMM_RE)),
         vol.Optional("enabled"): cv.boolean,
         # Daily summary fires at quiet-hours-end if any zone is below its
         # configured min%. Defaults to true so it just works after setup.

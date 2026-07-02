@@ -36,17 +36,27 @@ CATEGORY_IMPORTANT = "important"
 CATEGORY_INFORMATIONAL = "informational"
 
 
-def _parse_hhmm(s: str) -> time:
-    h, m = s.split(":")
-    return time(int(h), int(m))
+def _parse_hhmm(s: str) -> time | None:
+    """Parse an "HH:MM" string to a time, or None if malformed. NEVER raises — a
+    corrupt persisted quiet-hours value must not crash the notify hot path or the
+    coordinator's summary-scheduling setup."""
+    try:
+        h, m = str(s).split(":")
+        return time(int(h), int(m))
+    except (ValueError, TypeError, AttributeError):
+        return None
 
 
 def in_quiet_hours(now: datetime, start_str: str, end_str: str) -> bool:
     """Returns True if `now`'s time-of-day is within the quiet window.
 
-    Handles wrap-around midnight (e.g., 22:00-07:00)."""
+    Handles wrap-around midnight (e.g., 22:00-07:00). A malformed start/end fails
+    OPEN (returns False = not quiet) so a bad config can never suppress an alert —
+    especially the CATEGORY_CRITICAL zone-failed / run-aborted signals."""
     start = _parse_hhmm(start_str)
     end = _parse_hhmm(end_str)
+    if start is None or end is None:
+        return False
     t = now.time()
     if start <= end:
         return start <= t < end

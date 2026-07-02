@@ -20,6 +20,23 @@ def test_quiet_hours_wrap_around_midnight():
     assert in_quiet_hours(datetime(2026, 5, 19, 21, 59), "22:00", "07:00") is False
 
 
+def test_quiet_hours_malformed_fails_open():
+    # A corrupt persisted quiet-hours value must NEVER suppress a notification
+    # (it would kill even critical zone-failed / run-aborted alerts). Fail open.
+    now = datetime(2026, 5, 18, 23, 0)  # would be "quiet" with valid 22:00-07:00
+    for bad in ("", "nope", "25:00", "12:99", "8am", None, "22:00:00"):
+        assert in_quiet_hours(now, bad, "07:00") is False
+        assert in_quiet_hours(now, "22:00", bad) is False
+
+
+def test_parse_hhmm_never_raises():
+    from custom_components.complete_irrigation.notifications import _parse_hhmm
+
+    assert _parse_hhmm("22:30") is not None
+    for bad in ("", "nope", "25:61", None, 1234, "1:2:3"):
+        assert _parse_hhmm(bad) is None
+
+
 def test_quiet_hours_no_wrap():
     """Same-day quiet window (e.g. 09:00-17:00)."""
     assert in_quiet_hours(datetime(2026, 5, 18, 10, 0), "09:00", "17:00") is True

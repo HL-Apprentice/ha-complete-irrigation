@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from typing import TYPE_CHECKING, Any
 
 from .conflict_resolver import (
@@ -52,6 +52,7 @@ from .moisture_gate import COMBINE_AVERAGE, combine_moisture, evaluate_moisture
 from .notifications import (
     CATEGORY_IMPORTANT,
     NotificationDispatcher,
+    _parse_hhmm,
 )
 from .plant import PlantStore
 from .run_history import (
@@ -327,10 +328,11 @@ class ScheduleCoordinator:
             self._hass, self._tick, timedelta(seconds=TICK_SECONDS)
         )
 
-        # Morning summary — fires daily at the end of quiet hours.
-        eh, em = self.notifier.quiet_hours_end.split(":")
+        # Morning summary — fires daily at the end of quiet hours. A malformed
+        # persisted quiet_hours_end must not break setup -> fall back to 07:00.
+        qh_end = _parse_hhmm(self.notifier.quiet_hours_end) or time(7, 0)
         self._cancel_summary = async_track_time_change(
-            self._hass, self._fire_morning_summary, hour=int(eh), minute=int(em), second=0
+            self._hass, self._fire_morning_summary, hour=qh_end.hour, minute=qh_end.minute, second=0
         )
 
         # Weekly verification reminder — Sunday 08:00 default
