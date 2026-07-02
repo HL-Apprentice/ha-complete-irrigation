@@ -688,7 +688,7 @@ update_plant:
         number:
           min: 0
           max: 1
-          step: 0.0001
+          step: any
           mode: box
     map_y:
       name: Map Y (0-1)
@@ -698,7 +698,7 @@ update_plant:
         number:
           min: 0
           max: 1
-          step: 0.0001
+          step: any
           mode: box
 
 delete_plant:
