@@ -14,6 +14,7 @@ Per-entry orchestrator. Each tick:
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Callable
 from datetime import datetime, time, timedelta
 from typing import TYPE_CHECKING, Any
@@ -902,7 +903,8 @@ class ScheduleCoordinator:
             }
 
         _LOGGER.info(
-            "Firing run: %s for %d min (schedule %s)",
+            "Dispatching run: %s for %d min (schedule %s) — async; run_zone reports "
+            "actual start/failure",
             zone_id,
             adjusted_minutes,
             run.schedule_name,
@@ -960,9 +962,7 @@ class ScheduleCoordinator:
         drive a second zone into a running one (hydraulic collision on a single-zone
         controller). Reuses the same committed-blocker definition as the resolver."""
         sessions = self._config.get("active_run_sessions") or {}
-        return any(
-            r.zone_entity_id != zone_id for r in committed_runs_from_sessions(sessions, now)
-        )
+        return any(r.zone_entity_id != zone_id for r in committed_runs_from_sessions(sessions, now))
 
     async def _tick_auto_soak(self, now: datetime) -> None:
         """Closed-loop low-moisture recovery, driven once per tick.
@@ -1258,6 +1258,19 @@ class ScheduleCoordinator:
         try:
             rainfall_in = float(state.state)
         except (TypeError, ValueError):
+            return
+        if not math.isfinite(rainfall_in):
+            return  # a glitching "nan"/"inf" sensor must not drive lockout
+
+        # Only (re)arm on a RISING edge — new rainfall since the last reading. A
+        # cumulative "daily total" accumulator (a common HA rain sensor that only
+        # resets at midnight) otherwise stays elevated and re-pushes the lockout
+        # forward on every 60s tick, pinning it on for a full extra day of dry
+        # weather. A drop (window emptied / midnight reset) re-baselines so the
+        # next real rain can arm again.
+        last_reading = getattr(self, "_last_rainfall_reading", None)
+        self._last_rainfall_reading = rainfall_in
+        if last_reading is not None and rainfall_in <= last_reading:
             return
 
         hours = evaluate_rain_lockout(rainfall_in)
@@ -1601,6 +1614,14 @@ class ScheduleCoordinator:
                     remaining,
                 )
             else:
+                # Freshness guard: if a NEWER run took over this zone since our
+                # snapshot (started_at changed — a fresh scheduled/manual run landed
+                # while we awaited an earlier zone's resume), do NOT force it off. That
+                # would kill a live, tracked run and start an off->on fight with the
+                # external-off monitor. Let the new run own the zone.
+                snap_started = (item.get("session") or {}).get("started_at")
+                if (live.get(zone) or {}).get("started_at") != snap_started:
+                    continue
                 self._config.get("active_run_sessions", {}).pop(zone, None)
                 await self._hass.services.async_call(
                     "switch", "turn_off", {"entity_id": zone}, blocking=False
