@@ -537,6 +537,12 @@
         clearTimeout(this._deferredRenderTimer);
         this._deferredRenderTimer = null;
       }
+      // Clear the 1s countdown interval too — otherwise it keeps firing against a
+      // detached shadow DOM and accumulates one leaked interval per panel reopen.
+      if (this._countdownTimer) {
+        clearInterval(this._countdownTimer);
+        this._countdownTimer = null;
+      }
     }
 
     _onAnyScroll() {

@@ -246,6 +246,20 @@ def test_notification_schema_accepts_notify_on_aborted():
     assert result["notify_on_missed"] is True
 
 
+def test_notification_config_validates_quiet_hours_format():
+    """A malformed quiet-hours value must be rejected at the schema boundary so it
+    can't reach the parse sinks and suppress alerts / break startup."""
+    from custom_components.complete_irrigation.services import (
+        _SET_NOTIFICATION_CONFIG_SCHEMA,
+    )
+
+    ok = _SET_NOTIFICATION_CONFIG_SCHEMA({"quiet_hours_start": "22:00", "quiet_hours_end": "07:00"})
+    assert ok["quiet_hours_start"] == "22:00"
+    for bad in ("", "nope", "25:00", "12:99", "8am", "22:0"):
+        with pytest.raises(vol.Invalid):
+            _SET_NOTIFICATION_CONFIG_SCHEMA({"quiet_hours_start": bad})
+
+
 def test_add_schedule_with_interval_hours_and_empty_weekdays_unchanged():
     """ADD has always used a permissive weekdays validator. Pinned here
     to make sure we don't accidentally tighten it later."""
