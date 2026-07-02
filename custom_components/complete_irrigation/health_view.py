@@ -107,6 +107,15 @@ class IrrigationHealthView(HomeAssistantView):
         from . import find_coordinator
 
         hass: HomeAssistant = request.app["hass"]
+        # Admin-only, matching the v1.17.10 WS require_admin decision: schedule /
+        # plant / run-time data leaks occupancy patterns, so a non-admin authed
+        # user must not enumerate it over HTTP. The LLM monitor authenticates with
+        # an ADMIN long-lived token (the owner's).
+        user = request.get("hass_user")
+        if user is None or not getattr(user, "is_admin", False):
+            from homeassistant.exceptions import Unauthorized
+
+            raise Unauthorized()
         coord = find_coordinator(hass)
         if coord is None:
             return web.json_response(
