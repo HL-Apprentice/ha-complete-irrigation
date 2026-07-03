@@ -659,6 +659,7 @@
               canopy_area_sqft: p.canopy_area_sqft,
               zone_entity_id: p.zone_entity_id,
               photos: Array.isArray(p.photos) ? p.photos : [],
+              health: p.health || null,
             };
           }
           return this._renderNow();
@@ -5070,6 +5071,8 @@
         `</div>` +
         // v1.32 — photo history (only on a saved plant; you attach photos to an id).
         (e.id ? this._renderPhotoSection(e) : "") +
+        // v1.33 — last vision-health verdict (if any).
+        (e.id ? this._renderHealthSection(e) : "") +
         `<div class="yard-form-actions">` +
         `<button class="btn btn-primary" type="submit">${e.id ? "Save" : "Add plant"}</button>` +
         `<button class="btn btn-small" type="button" data-action="cancel-plant">Cancel</button>` +
@@ -5106,6 +5109,44 @@
         `</label>` +
         `<span class="muted plant-photo-hint">A photo with location data places this plant ` +
         `on the map automatically (first photo only); after that, drag the marker to adjust.</span>` +
+        `</div>`
+      );
+    }
+
+    _renderHealthSection(e) {
+      // v1.33 — last biannual vision-health verdict (posted by the external vision
+      // job; bounded by the backend rail). Advisory display only.
+      const h = e.health;
+      if (!h || typeof h !== "object") return "";
+      const state = String(h.health_state || "unknown");
+      const conf = typeof h.confidence === "number" ? Math.round(h.confidence * 100) : null;
+      const when = h.assessed_at ? new Date(h.assessed_at).toLocaleDateString() : "";
+      const concerns = Array.isArray(h.concerns) ? h.concerns : [];
+      const care = Array.isArray(h.suggested_care) ? h.suggested_care : [];
+      const li = (arr) => arr.map((x) => `<li>${escapeHtml(String(x))}</li>`).join("");
+      return (
+        `<div class="plant-health">` +
+        `<label class="plant-photos-title">Health check${when ? ` — ${escapeHtml(when)}` : ""}</label>` +
+        `<div class="health-row">` +
+        `<span class="health-badge health-${escapeAttr(state)}">${escapeHtml(state)}</span>` +
+        (conf != null ? `<span class="muted health-conf">${conf}% confidence</span>` : "") +
+        (h.model ? `<span class="muted health-model">${escapeHtml(String(h.model))}</span>` : "") +
+        `</div>` +
+        (h.changes_since_last
+          ? `<p class="health-changes">${escapeHtml(String(h.changes_since_last))}</p>`
+          : "") +
+        (concerns.length
+          ? `<div class="health-block"><span class="health-sub">Concerns</span><ul>${li(
+              concerns
+            )}</ul></div>`
+          : "") +
+        (care.length
+          ? `<div class="health-block"><span class="health-sub">Suggested care</span><ul>${li(
+              care
+            )}</ul></div>`
+          : "") +
+        `<span class="muted plant-photo-hint">Biannual vision check — advisory; ` +
+        `it never changes watering.</span>` +
         `</div>`
       );
     }
@@ -5782,6 +5823,18 @@
         `.plant-photo-add{cursor:pointer;display:inline-block}` +
         `.plant-photo-add.is-busy{opacity:0.6;cursor:default}` +
         `.plant-photo-hint{display:block;margin-top:8px;font-size:11px}` +
+        // v1.33 — vision-health verdict card
+        `.plant-health{margin-top:14px;border-top:1px solid var(--ci-border);padding-top:12px}` +
+        `.health-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px}` +
+        `.health-badge{font-size:12px;font-weight:600;padding:2px 8px;border-radius:10px;text-transform:capitalize;background:var(--ci-hover);color:var(--ci-text)}` +
+        `.health-thriving,.health-healthy{background:#1f7a3f;color:#fff}` +
+        `.health-stressed{background:#b8860b;color:#fff}` +
+        `.health-declining{background:#a3312a;color:#fff}` +
+        `.health-conf,.health-model{font-size:12px}` +
+        `.health-changes{margin:4px 0;font-size:13px}` +
+        `.health-block{margin:6px 0}` +
+        `.health-sub{display:block;font-size:11px;color:var(--ci-text-2);text-transform:uppercase;letter-spacing:0.03em}` +
+        `.health-block ul{margin:2px 0 0;padding-left:18px;font-size:13px}` +
         // v1.32 — advisory "Today's plan" card
         `.daily-plan-card{margin-bottom:18px;padding:14px 16px;border:1px solid var(--ci-border);border-radius:10px;background:var(--ci-card)}` +
         `.plan-summary{margin:4px 0 10px;font-size:13px;color:var(--ci-text)}` +
