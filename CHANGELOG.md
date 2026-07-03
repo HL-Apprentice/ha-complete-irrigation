@@ -4,6 +4,39 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.33.0 — 2026-07-03 — plant vision-health + full-app hardening
+
+### Added — biannual plant vision-health (advisory)
+
+- **Plants can be checked by a local vision model over time.** A new
+  `set_plant_health` service stores a structured health verdict on a plant (state,
+  confidence, changes-since-last, concerns, suggested care); the plant editor shows
+  the latest verdict, and a concern fires an "important" notification. The health feed
+  (`health.json`) now lists each plant's prior verdict, whether it's **due for review**,
+  and the exact photos to compare — so an external job knows what to assess.
+- **Safety rail.** The verdict is bounded server-side (`vision_health.validate_verdict`)
+  before storage: an out-of-range state becomes "unknown", confidence is clamped, text
+  is truncated + list lengths capped, and any care/concern item that reads like a
+  control instruction (turn on / run_zone / a service call) is **stripped**. A
+  hallucinating vision model can inform you; it can never smuggle in an action.
+- **`tools/vision_health_job.py`** — a stdlib-only companion (deploy on your GPU/LLM
+  host) that reads the feed, asks a local vision model (e.g. Qwen2.5-VL on the RTX
+  5060) to compare each due plant's latest photo to a baseline, and posts the verdict
+  back. Advisory only; never touches watering. See `tools/README.md`.
+
+### Hardened — full-app multi-model review (security + stability)
+
+A whole-app review (Claude multi-agent + Grok/Gemini/Qwen, adversarially verified)
+found and fixed: **auto-soak now respects one-zone-at-a-time** (it could open a second
+valve while another zone watered); **the schedule + run-history stores tolerate a
+corrupt record** instead of failing the whole integration load; **moisture/weather
+gates reject NaN/Inf** readings (they were silently over-watering); **quiet-hours is
+validated** so a bad value can't suppress critical alerts or break startup; the
+**health/calendar HTTP feeds require admin** (parity with the WS commands); a
+**restart-resume freshness guard** stops it force-closing a newer run; the
+**rain-lockout arms on a rising edge** so a daily-total sensor can't pin it on; plus a
+frontend timer-leak fix and smaller cleanups.
+
 ## v1.32.0 — 2026-06-29 — photo DB, security hardening, one-zone serialization, daily plan
 
 ### Added — daily plan (advisory "Today's Plan", groundwork for the LLM scheduler)

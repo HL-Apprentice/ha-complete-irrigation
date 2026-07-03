@@ -183,9 +183,10 @@ class IrrigationHealthView(HomeAssistantView):
 
         issues, aborted, skipped, short = _detect_misses(history, now)
 
-        # v1.33 — per-plant vision-health: prior verdict + whether the plant is due for
-        # a (re)assessment. The external vision job reads `due` to know what to review.
-        from .vision_health import due_for_review
+        # v1.33 — per-plant vision-health: prior verdict, whether the plant is due for
+        # a (re)assessment, and the exact photos to review. The external vision job
+        # reads `due_for_review` to know what to assess and `review` for the image URLs.
+        from .vision_health import due_for_review, select_review_photos
 
         now_iso = now.isoformat()
         plant_health = [
@@ -196,6 +197,7 @@ class IrrigationHealthView(HomeAssistantView):
                 "health": p.health,
                 "due_for_review": bool(p.photos)
                 and due_for_review((p.health or {}).get("assessed_at"), now_iso),
+                "review": select_review_photos(list(p.photos)),
             }
             for p in coord.plants.all()
         ]
