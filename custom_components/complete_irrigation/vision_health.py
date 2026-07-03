@@ -21,6 +21,7 @@ Pure + HA-free (like hydraulics / et_calc / daily_planner).
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -41,7 +42,8 @@ _DEFAULT_CONFIDENCE = 0.5
 # guidance the user might act on blindly (or that a future automation might parse).
 _ACTUATION_RE = re.compile(
     r"(turn\s+(on|off)|run_zone|switch\.|service|call\s+\w+\.\w+|set\s+\w+\s*=|"
-    r"\bactivate\b|\bstart\s+(the\s+)?(zone|valve|schedule)\b)",
+    r"\b(activate|energize|engage)\b|"
+    r"\b(start|open|enable|trigger|begin|run)\s+(the\s+)?(zone|valve|schedule|irrigation|watering)\b)",
     re.IGNORECASE,
 )
 
@@ -129,6 +131,11 @@ def validate_verdict(
     try:
         conf = float(conf)
     except (TypeError, ValueError):
+        conf = _DEFAULT_CONFIDENCE
+    if not math.isfinite(conf):
+        # NaN/Inf would sail past the < / > clamps below and get stored — then
+        # json.dumps emits `NaN`, which is invalid JSON and corrupts the .storage
+        # write. Mirror plant.py's isfinite discipline.
         conf = _DEFAULT_CONFIDENCE
     conf = 0.0 if conf < 0.0 else 1.0 if conf > 1.0 else round(conf, 2)
     return HealthReport(
