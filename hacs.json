@@ -1,5 +1,3 @@
 {
-  "name": "HA Complete Irrigation Integration",
-  "render_readme": true,
-  "homeassistant": "2024.12.0"
+  "name": "HA Complete Irrigation Integration"
 }
