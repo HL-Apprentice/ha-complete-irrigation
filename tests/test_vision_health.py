@@ -122,6 +122,18 @@ def test_confidence_clamped_and_defaulted():
     assert _validate(_valid_raw(confidence="nan-ish")).confidence == 0.5  # bad -> default
 
 
+def test_confidence_nan_inf_defaulted_not_stored():
+    # A NaN/Inf confidence must NOT survive (json.dumps(NaN) is invalid JSON and would
+    # corrupt the .storage write). It falls back to the default and stays JSON-safe.
+    import math
+
+    for bad in (float("nan"), float("inf"), float("-inf")):
+        r = _validate(_valid_raw(confidence=bad))
+        assert math.isfinite(r.confidence)
+        assert r.confidence == 0.5
+        json.dumps(serialize_report(r))  # must not raise / emit NaN
+
+
 def test_text_truncated_and_nonstring_dropped():
     r = _validate(_valid_raw(changes_since_last="x" * 5000))
     assert len(r.changes_since_last) <= 600

@@ -4,6 +4,18 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.33.1 — 2026-07-03 — patch
+
+- **Vision-health: a NaN/Inf confidence can no longer be stored.** A model returning a
+  non-finite confidence used to slip past the clamp and get written to `.storage` as
+  invalid JSON (`NaN`), which could corrupt the plant store. It now falls back to the
+  default, mirroring the codebase's existing `math.isfinite` discipline. (Found by an
+  independent Claude review pass; the external Grok/Gemini/Qwen panel had missed it.)
+- Broadened the advisory actuation-phrase filter (open/enable/trigger/begin/energize/
+  engage) — cosmetic; the "advisory only" guarantee is structural, not regex-based.
+- **CI:** trimmed `hacs.json` to the fields the current `hacs/action` schema accepts
+  (dropped `country`, bumped the min-HA hint) so HACS validation on `main`/tags passes.
+
 ## v1.33.0 — 2026-07-03 — plant vision-health + full-app hardening
 
 ### Added — biannual plant vision-health (advisory)
