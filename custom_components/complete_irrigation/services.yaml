@@ -688,7 +688,7 @@ update_plant:
         number:
           min: 0
           max: 1
-          step: 0.0001
+          step: any
           mode: box
     map_y:
       name: Map Y (0-1)
@@ -698,7 +698,7 @@ update_plant:
         number:
           min: 0
           max: 1
-          step: 0.0001
+          step: any
           mode: box
 
 delete_plant:
@@ -727,7 +727,7 @@ set_yard_map:
         number:
           min: -90
           max: 90
-          step: 0.000001
+          step: any
           mode: box
     longitude:
       name: Center longitude
@@ -737,7 +737,7 @@ set_yard_map:
         number:
           min: -180
           max: 180
-          step: 0.000001
+          step: any
           mode: box
     span_m:
       name: Span (meters)
@@ -780,7 +780,7 @@ add_plant_photo:
         number:
           min: -90
           max: 90
-          step: 0.000001
+          step: any
           mode: box
     longitude:
       name: Photo longitude (EXIF)
@@ -789,11 +789,40 @@ add_plant_photo:
         number:
           min: -180
           max: 180
-          step: 0.000001
+          step: any
           mode: box
     note:
       name: Note
       description: Optional short note for this photo.
+      required: false
+      selector:
+        text:
+
+set_plant_health:
+  name: Set plant health (vision verdict)
+  description: >
+    Store a biannual vision-health verdict for a plant (posted by the external
+    vision job). The verdict is bounded by the integration's safety rail before it is
+    saved. Advisory only — it never changes watering.
+  fields:
+    plant_id:
+      name: Plant ID
+      description: The id of the plant this verdict is for.
+      required: true
+      selector:
+        text:
+    verdict:
+      name: Verdict
+      description: >
+        The vision model's result as an object, e.g.
+        {health_state: healthy, confidence: 0.9, changes_since_last: "...",
+        concerns: [...], suggested_care: [...]}.
+      required: true
+      selector:
+        object:
+    model:
+      name: Model
+      description: Optional name of the vision model that produced the verdict.
       required: false
       selector:
         text:

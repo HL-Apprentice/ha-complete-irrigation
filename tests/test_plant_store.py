@@ -141,6 +141,38 @@ def test_map_coords_out_of_range_rejected():
         PlantRecord("p1", "Lemon", "high", 100.0, "switch.citrus", map_x=0.5, map_y=-0.1)
 
 
+# ── v1.33 vision-health field ───────────────────────────────────────
+
+
+def test_health_defaults_none_and_round_trips():
+    assert _rec().health is None
+    health = {
+        "health_state": "healthy",
+        "confidence": 0.9,
+        "assessed_at": "2026-05-18T06:00:00+00:00",
+    }
+    r = PlantRecord("p1", "Lemon", "high", 100.0, "switch.citrus", health=health)
+    rt = PlantRecord.from_dict(r.to_dict())
+    assert rt.health == health
+    assert rt == r
+
+
+def test_health_non_dict_rejected_on_construct():
+    import pytest
+
+    with pytest.raises(ValueError):
+        PlantRecord("p1", "Lemon", "high", 100.0, "switch.citrus", health="not-a-dict")
+
+
+def test_pre_v133_record_loads_without_health():
+    data = _rec().to_dict()
+    data.pop("health", None)
+    assert PlantRecord.from_dict(data).health is None
+    # a corrupt non-dict health on load is tolerated -> None
+    data["health"] = "junk"
+    assert PlantRecord.from_dict(data).health is None
+
+
 # ── v1.32 photo history ─────────────────────────────────────────────
 
 
