@@ -85,11 +85,23 @@ def _load_token() -> str | None:
         return None
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse to follow 3xx redirects (a redirect becomes an HTTPError the callers
+    swallow). SSRF guard: a /local/ photo path must never bounce the request to an
+    internal/metadata URL."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 def _http(url: str, *, data: bytes | None = None, headers: dict | None = None, timeout: int = 120):
     req = urllib.request.Request(
         url, data=data, headers=headers or {}, method="POST" if data else "GET"
     )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 (trusted local hosts)
+    with _OPENER.open(req, timeout=timeout) as resp:
         return resp.read()
 
 
