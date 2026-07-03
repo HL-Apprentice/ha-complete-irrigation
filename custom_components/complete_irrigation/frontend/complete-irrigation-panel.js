@@ -131,7 +131,120 @@
       wucols_category: "moderate",
       canopy_area_sqft: "",
       zone_entity_id: "",
+      photos: [], // v1.32 — gallery of {ts, path, note} for the open editor
     };
+  }
+
+  // v1.32 — a human label for a stored photo ({ts: epoch-seconds, note}).
+  function photoLabel(p) {
+    const d = p && p.ts ? new Date(p.ts * 1000) : null;
+    const when = d ? d.toLocaleDateString() : "";
+    const note = (p && p.note) || "";
+    return note ? `${when} — ${note}` : when;
+  }
+
+  // v1.32 — minimal EXIF GPS reader: scan a JPEG ArrayBuffer for the APP1/TIFF
+  // GPS IFD and return decimal {lat, lon}, or null if absent/unparseable. No
+  // dependency — we only need lat/lon for first-time auto-placement (phone GPS
+  // is ~3-5 m and the user can drag to correct), so a tolerant best-effort read
+  // is enough. Returns null on anything unexpected rather than throwing.
+  function exifGps(buf) {
+    try {
+      const view = new DataView(buf);
+      const len = view.byteLength;
+      if (len < 4 || view.getUint16(0) !== 0xffd8) return null; // not a JPEG
+      let off = 2;
+      while (off + 4 <= len) {
+        const marker = view.getUint16(off);
+        if (marker === 0xffda) break; // start of scan — no metadata past here
+        if ((marker & 0xff00) !== 0xff00) return null; // misaligned
+        if (marker !== 0xffe1) {
+          off += 2 + view.getUint16(off + 2); // skip non-APP1 segment
+          continue;
+        }
+        const segLen = view.getUint16(off + 2);
+        const tiff = off + 4;
+        if (tiff + 8 > len || view.getUint32(tiff) !== 0x45786966) {
+          off += 2 + segLen; // APP1 but not "Exif" — keep scanning
+          continue;
+        }
+        const t0 = tiff + 6; // TIFF header start
+        const le = view.getUint16(t0) === 0x4949; // II = little-endian
+        const u16 = (o) => view.getUint16(o, le);
+        const u32 = (o) => view.getUint32(o, le);
+        if (u16(t0 + 2) !== 0x002a) return null;
+        const ifd0 = t0 + u32(t0 + 4);
+        let gpsIfd = 0;
+        const n0 = u16(ifd0);
+        for (let i = 0; i < n0; i++) {
+          const ent = ifd0 + 2 + i * 12;
+          if (u16(ent) === 0x8825) {
+            gpsIfd = t0 + u32(ent + 8);
+            break;
+          }
+        }
+        if (!gpsIfd || gpsIfd + 2 > len) return null;
+        const rational = (o) => u32(o) / (u32(o + 4) || 1);
+        const dms = (o) => rational(o) + rational(o + 8) / 60 + rational(o + 16) / 3600;
+        let latRef, lonRef, lat, lon;
+        const n = u16(gpsIfd);
+        for (let i = 0; i < n; i++) {
+          const ent = gpsIfd + 2 + i * 12;
+          const tag = u16(ent);
+          const valOff = t0 + u32(ent + 8);
+          if (tag === 1) latRef = String.fromCharCode(view.getUint8(ent + 8));
+          else if (tag === 2) lat = dms(valOff);
+          else if (tag === 3) lonRef = String.fromCharCode(view.getUint8(ent + 8));
+          else if (tag === 4) lon = dms(valOff);
+        }
+        if (lat == null || lon == null) return null;
+        if (latRef === "S") lat = -lat;
+        if (lonRef === "W") lon = -lon;
+        if (!isFinite(lat) || !isFinite(lon)) return null;
+        return { lat, lon };
+      }
+    } catch (_) {
+      /* malformed EXIF — treat as no GPS */
+    }
+    return null;
+  }
+
+  // v1.32 — load an image File, downscale so the longer edge <= maxPx, and return
+  // base64 JPEG (no data: prefix). Keeps uploads small and strips EXIF from the
+  // stored bytes (we already pulled GPS separately). The backend re-validates the
+  // JPEG magic bytes, so canvas output (real image/jpeg) passes.
+  function downscaleToJpegB64(file, maxPx, quality) {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        let w = img.naturalWidth || img.width;
+        let h = img.naturalHeight || img.height;
+        if (!w || !h) return reject(new Error("empty image"));
+        if (w > maxPx || h > maxPx) {
+          if (w >= h) {
+            h = Math.round((h * maxPx) / w);
+            w = maxPx;
+          } else {
+            w = Math.round((w * maxPx) / h);
+            h = maxPx;
+          }
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+        const dataUrl = canvas.toDataURL("image/jpeg", quality || 0.82);
+        const comma = dataUrl.indexOf(",");
+        resolve(comma >= 0 ? dataUrl.slice(comma + 1) : "");
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        reject(new Error("could not decode the image"));
+      };
+      img.src = url;
+    });
   }
 
   function emptyEditor() {
@@ -235,6 +348,9 @@
       this._yardEff = null;
       this._yardEtoStatus = null; // v1.28 — {eto_source, eto_auto, eto_manual, eto_auto_value, eto_auto_at, weather_entity}
       this._pendingAutoEto = null; // v1.28 — optimistic auto-ET toggle state while a toggle call is in flight
+      this._yardMap = null; // v1.30 — {image_path, bbox, width, height, center_lat/lon, span_m, version}
+      this._mapDrag = null; // v1.30 — in-flight marker drag {plantId, el, rect}
+      this._mapBusy = false; // v1.30 — set_yard_map fetch in flight
       this._yardLoaded = false;
       this._plantEditor = null; // null = form hidden; object = add/edit draft
 
@@ -265,6 +381,10 @@
 
       // Local manual-run countdowns: entity_id -> deadline epoch ms
       this._localRuns = {};
+      // v1.30 — active run SESSIONS: entity_id -> whole-run deadline epoch ms.
+      // Spans a chunked run's inter-block gaps; a gated (never-fired) run has no
+      // session, so this is the truthful "is the zone running" signal for the card.
+      this._activeSessions = {};
       // The total run length for each active run, in minutes. Lets the
       // tile show "4:52 left of 10 min" instead of just "4:52 left".
       this._localRunDurations = {};
@@ -288,6 +408,9 @@
       this._onSubmit = this._onSubmit.bind(this);
       this._onChange = this._onChange.bind(this);
       this._onInput = this._onInput.bind(this);
+      this._onMapPointerDown = this._onMapPointerDown.bind(this);
+      this._onMapPointerMove = this._onMapPointerMove.bind(this);
+      this._onMapPointerUp = this._onMapPointerUp.bind(this);
 
       // v1.19.0 — scroll-position preservation across renders. _render()
       // rebuilds the whole shadow DOM via innerHTML, which resets every
@@ -382,6 +505,12 @@
       this.shadowRoot.addEventListener("submit", this._onSubmit);
       this.shadowRoot.addEventListener("change", this._onChange);
       this.shadowRoot.addEventListener("input", this._onInput);
+      // v1.30 — yard-map marker drag (pointer events; move/up on the shadow
+      // root so a fast drag that leaves the marker still tracks + releases).
+      this.shadowRoot.addEventListener("pointerdown", this._onMapPointerDown);
+      this.shadowRoot.addEventListener("pointermove", this._onMapPointerMove);
+      this.shadowRoot.addEventListener("pointerup", this._onMapPointerUp);
+      this.shadowRoot.addEventListener("pointercancel", this._onMapPointerUp);
       // v1.19.0 — scroll events don't bubble, but they DO run the
       // capture phase, so a capture listener on the shadow root sees
       // scrolls from every descendant (main, day-cal-grid, modals…).
@@ -398,11 +527,21 @@
       this.shadowRoot.removeEventListener("submit", this._onSubmit);
       this.shadowRoot.removeEventListener("change", this._onChange);
       this.shadowRoot.removeEventListener("input", this._onInput);
+      this.shadowRoot.removeEventListener("pointerdown", this._onMapPointerDown);
+      this.shadowRoot.removeEventListener("pointermove", this._onMapPointerMove);
+      this.shadowRoot.removeEventListener("pointerup", this._onMapPointerUp);
+      this.shadowRoot.removeEventListener("pointercancel", this._onMapPointerUp);
       this.shadowRoot.removeEventListener("scroll", this._onAnyScroll, true);
       this._stopNowLineTimer();
       if (this._deferredRenderTimer) {
         clearTimeout(this._deferredRenderTimer);
         this._deferredRenderTimer = null;
+      }
+      // Clear the 1s countdown interval too — otherwise it keeps firing against a
+      // detached shadow DOM and accumulates one leaked interval per panel reopen.
+      if (this._countdownTimer) {
+        clearInterval(this._countdownTimer);
+        this._countdownTimer = null;
       }
     }
 
@@ -519,6 +658,8 @@
               wucols_category: p.wucols_category,
               canopy_area_sqft: p.canopy_area_sqft,
               zone_entity_id: p.zone_entity_id,
+              photos: Array.isArray(p.photos) ? p.photos : [],
+              health: p.health || null,
             };
           }
           return this._renderNow();
@@ -530,6 +671,8 @@
         if (action === "delete-plant")
           return this._deletePlant(node.dataset.plantId, node.dataset.plantName);
         if (action === "apply-eto") return this._applyEto();
+        if (action === "setup-yard-map") return this._setupYardMap();
+        if (action === "place-plant") return this._placePlant(node.dataset.plantId);
         if (action === "toggle-theme") return this._cycleTheme();
         if (action === "open-banner-settings") {
           this._bannerModalOpen = true;
@@ -746,6 +889,12 @@
           this._plantEditor[t.name] = t.value;
         }
         return; // value already shown by the control; no re-render
+      }
+      if (action === "photo-file") {
+        const file = t.files && t.files[0];
+        if (file) this._addPlantPhoto(file, t.dataset.plantId);
+        t.value = ""; // allow re-selecting the same file
+        return;
       }
       if (action === "notify-target-change") {
         const idx = parseInt(t.dataset.idx, 10);
@@ -1083,6 +1232,10 @@
     }
 
     _safeRender() {
+      // v1.30 — never rebuild the DOM out from under an active marker drag;
+      // it would orphan the element being dragged. The pointer-up handler
+      // refetches + re-renders once the drag finishes.
+      if (this._mapDrag) return;
       // v1.19.0 — innerHTML rebuild resets every scroll container to
       // the top. Save positions before, restore after, so background
       // renders (hass updates, the 60s now-line tick) are invisible
@@ -1122,6 +1275,8 @@
       // v1.19.0 — keep the now-line drifting only while Today is open.
       if (sectionId === "today") this._startNowLineTimer();
       else this._stopNowLineTimer();
+      // v1.32 — advisory "Today's plan" card; refetch on each Today open.
+      if (sectionId === "today") this._fetchDailyPlan();
       // Today + Zones both rely on the cached PlannedRuns for their
       // calendar / strip rendering. Fetch lazily on first open and
       // again whenever schedules mutate (handled in _saveSchedule etc).
@@ -1419,11 +1574,58 @@
               weather_entity: reportRes.weather_entity,
             }
           : null;
+        this._yardMap = reportRes ? reportRes.yard_map || null : null; // v1.30
         this._yardLoaded = true;
         this._scheduleRender();
       } catch (err) {
         console.error("[complete-irrigation] yard fetch failed:", err);
       }
+    }
+
+    async _fetchDailyPlan() {
+      // v1.32 — the advisory "Today's plan" (zones prioritized by urgency).
+      if (!this._hass?.callWS) return;
+      try {
+        this._dailyPlan = await this._hass.callWS({
+          type: "complete_irrigation/get_daily_plan",
+        });
+        this._scheduleRender();
+      } catch (err) {
+        console.error("[complete-irrigation] daily plan fetch failed:", err);
+      }
+    }
+
+    _renderDailyPlanCard() {
+      const plan = this._dailyPlan;
+      if (!plan || !Array.isArray(plan.items) || plan.items.length === 0) return "";
+      const meta = {
+        priority: { icon: "🔴", label: "Priority" },
+        run: { icon: "🟢", label: "Run" },
+        light: { icon: "🔵", label: "Light" },
+        skip: { icon: "⚪", label: "Skip" },
+      };
+      const rows = plan.items
+        .map((it) => {
+          const m = meta[it.recommendation] || meta.run;
+          return (
+            `<li class="plan-item plan-${escapeAttr(it.recommendation)}">` +
+            `<span class="plan-rec" title="${escapeAttr(m.label)}">${m.icon}</span>` +
+            `<span class="plan-zone">${escapeHtml(it.zone_name)}</span>` +
+            `<span class="plan-reason">${escapeHtml(it.reason)}</span>` +
+            `</li>`
+          );
+        })
+        .join("");
+      return (
+        `<section class="daily-plan-card">` +
+        `<div class="section-title-row">` +
+        `<h3 class="section-title">Today's plan</h3>` +
+        `<span class="section-hint" style="margin:0">Advisory — watering still follows your schedules + gates.</span>` +
+        `</div>` +
+        `<p class="plan-summary">${escapeHtml(plan.summary || "")}</p>` +
+        `<ul class="plan-list">${rows}</ul>` +
+        `</section>`
+      );
     }
 
     async _fetchPlannedRuns() {
@@ -1593,6 +1795,14 @@
             }
           }
         }
+        // v1.30 — rebuild the active-session map fresh each fetch (a cleared
+        // session disappears; entries also self-expire at their deadline).
+        const sessions = {};
+        for (const s of resp?.sessions || []) {
+          const dl = new Date(s.deadline).getTime();
+          if (Number.isFinite(dl) && dl > Date.now()) sessions[s.entity_id] = dl;
+        }
+        this._activeSessions = sessions;
         if (
           Object.keys(this._localRuns).length > 0 &&
           !this._countdownTimer
@@ -1870,6 +2080,85 @@
         alert("Failed to toggle auto ET: " + (err?.message || err));
       } finally {
         this._pendingAutoEto = null;
+        await this._fetchYard();
+      }
+    }
+
+    async _setupYardMap() {
+      // v1.30 — fetch + cache the aerial backdrop (centered on the HA location).
+      if (this._mapBusy) return;
+      this._mapBusy = true;
+      this._renderNow();
+      try {
+        await this._hass.callService("complete_irrigation", "set_yard_map", {});
+      } catch (err) {
+        alert("Failed to fetch the aerial image: " + (err?.message || err));
+      } finally {
+        this._mapBusy = false;
+        await this._fetchYard();
+      }
+    }
+
+    async _placePlant(plantId) {
+      // v1.30 — drop an unplaced plant at the map center so it becomes a
+      // draggable marker; the user then drags it to the right spot.
+      if (!plantId) return;
+      try {
+        await this._hass.callService("complete_irrigation", "update_plant", {
+          plant_id: plantId,
+          map_x: 0.5,
+          map_y: 0.5,
+        });
+        await this._fetchYard();
+      } catch (err) {
+        alert("Failed to place plant: " + (err?.message || err));
+      }
+    }
+
+    _onMapPointerDown(e) {
+      // v1.30 — begin dragging a plant marker. We mutate the live element during
+      // the drag (no re-render) and persist on release.
+      const marker = e.target?.closest?.('[data-action="map-marker"]');
+      if (!marker) return;
+      const wrap = marker.closest(".yard-map-wrap");
+      if (!wrap) return;
+      e.preventDefault();
+      const rect = wrap.getBoundingClientRect();
+      this._mapDrag = { plantId: marker.dataset.plantId, el: marker, rect, x: null, y: null };
+      marker.classList.add("dragging");
+      try {
+        marker.setPointerCapture(e.pointerId);
+      } catch (_e) {
+        /* not all targets support capture; window listeners cover it */
+      }
+    }
+
+    _onMapPointerMove(e) {
+      const d = this._mapDrag;
+      if (!d) return;
+      const x = Math.min(1, Math.max(0, (e.clientX - d.rect.left) / d.rect.width));
+      const y = Math.min(1, Math.max(0, (e.clientY - d.rect.top) / d.rect.height));
+      d.x = x;
+      d.y = y;
+      d.el.style.left = (x * 100).toFixed(3) + "%";
+      d.el.style.top = (y * 100).toFixed(3) + "%";
+    }
+
+    async _onMapPointerUp() {
+      const d = this._mapDrag;
+      this._mapDrag = null;
+      if (!d) return;
+      d.el.classList.remove("dragging");
+      if (d.x == null || d.y == null) return; // a tap with no movement — leave as-is
+      try {
+        await this._hass.callService("complete_irrigation", "update_plant", {
+          plant_id: d.plantId,
+          map_x: d.x,
+          map_y: d.y,
+        });
+        await this._fetchYard();
+      } catch (err) {
+        alert("Failed to save marker position: " + (err?.message || err));
         await this._fetchYard();
       }
     }
@@ -2526,6 +2815,7 @@
         this._renderRainLockoutBanner() +
         this._renderMissedRunsBanner() +
         this._renderWeatherBanner() +
+        this._renderDailyPlanCard() +
         `<section>` +
         `<div class="section-title-row">` +
         `<h3 class="section-title">Zones (${visibleZones.length})</h3>` +
@@ -3008,6 +3298,94 @@
       return `<div class="empty"><p>No zones configured. Re-run setup from Settings → Devices & services.</p></div>`;
     }
 
+    _groupHistoryRows(records) {
+      // v1.30 — collapse a chunked run's consecutive "Base (block i/n)" records
+      // into one session group. Records are newest-first, so a session reads as
+      // n/n … 1/n (strictly descending index); a non-descending index or a
+      // different (zone, base, n) starts a new session.
+      const BLOCK_RE = /^(.*) \(block (\d+)\/(\d+)\)$/;
+      const out = [];
+      let group = null;
+      const close = () => {
+        if (group) {
+          out.push(group);
+          group = null;
+        }
+      };
+      for (const r of records) {
+        const m = (r.schedule_name || "").match(BLOCK_RE);
+        if (!m) {
+          close();
+          out.push(r);
+          continue;
+        }
+        const base = m[1];
+        const idx = parseInt(m[2], 10);
+        const n = parseInt(m[3], 10);
+        const startMs = Date.parse(r.started_at);
+        // A block joins the current group only if it's the same (zone, base, n),
+        // its index is strictly lower (newest-first => descending within a
+        // session), AND it started within ~2h of the group's earliest block.
+        // The index check alone splits adjacent sessions (1 then n breaks
+        // descending), but a status/zone filter can drop the boundary block and
+        // leave two sessions' blocks adjacent with still-descending indices — the
+        // time guard catches that (real consecutive blocks are <~1h apart).
+        const closeInTime =
+          group &&
+          isFinite(startMs) &&
+          isFinite(group.minStartMs) &&
+          group.minStartMs - startMs <= 2 * 60 * 60 * 1000;
+        if (
+          group &&
+          group.zone_entity_id === r.zone_entity_id &&
+          group.base === base &&
+          group.n === n &&
+          idx < group.minIdx &&
+          closeInTime
+        ) {
+          group.blocks.push(r);
+          group.minIdx = idx;
+          if (isFinite(startMs)) group.minStartMs = Math.min(group.minStartMs, startMs);
+        } else {
+          close();
+          group = {
+            session: true,
+            base,
+            n,
+            minIdx: idx,
+            minStartMs: isFinite(startMs) ? startMs : Infinity,
+            zone_entity_id: r.zone_entity_id,
+            zone_name: r.zone_name,
+            schedule_id: r.schedule_id,
+            blocks: [r],
+          };
+        }
+      }
+      close();
+      return out;
+    }
+
+    _meaningfulTriggerKeys(triggers) {
+      // v1.30 — keys of triggers that actually changed/gated the run. Hides the
+      // coordinator's no-op breadcrumbs (a gate that was disabled, inapplicable,
+      // or evaluated-but-took-no-action) so History isn't cluttered with
+      // "moisture, wind, hot_weather" on every row.
+      if (!triggers || typeof triggers !== "object") return [];
+      const keep = [];
+      for (const key of Object.keys(triggers)) {
+        const v = triggers[key] || {};
+        if (v.disabled_by_config || v.all_sensors_excluded || v.ignored_by_schedule) continue;
+        if (key === "wind" && !v.deferred) continue; // evaluated but didn't defer
+        if (key === "hot_weather" && !v.boost_applied) continue; // evaluated but no boost
+        if (key === "moisture") {
+          const acted = v.decision === "skip" || v.decision === "skip_no_reading" || v.adjusted_minutes != null;
+          if (!acted) continue; // passed/ok with no adjustment — no effect
+        }
+        keep.push(key);
+      }
+      return keep;
+    }
+
     _renderZoneTile(zone) {
       const isHidden = this._hiddenZones.has(zone.entityId);
       const countdown = this._localRuns[zone.entityId];
@@ -3026,6 +3404,16 @@
         ? ` of ${totalMinutes} min`
         : "";
 
+      // v1.30 — the raw switch reads OFF during a chunked run's inter-block gaps
+      // and during Rachio state-poll lag, which made the card say "Idle" while a
+      // run was actually in progress. Use the active SESSION (whole-run, spans
+      // gaps) as the truth — NOT the schedule projection, which would also light
+      // up for a rain/moisture/wind-GATED run that never fired.
+      const sess = this._activeSessions[zone.entityId];
+      const sessionActive = sess != null && sess > Date.now();
+      const runningOffSwitch = !zone.on && zone.available && sessionActive;
+      const showRunning = zone.on || runningOffSwitch;
+
       let statusClass, statusLabel;
       if (!zone.available) {
         statusClass = "unavailable";
@@ -3035,12 +3423,15 @@
         statusLabel = isCountingDown
           ? `Running — ${cdSpan} left${totalLabel}`
           : "Running";
+      } else if (runningOffSwitch) {
+        statusClass = "running";
+        statusLabel = "Running"; // active session — switch off between blocks
       } else {
         statusClass = "idle";
         statusLabel = "Idle";
       }
 
-      const action = zone.on
+      const action = showRunning
         ? `<button class="btn btn-stop" data-action="stop" data-entity-id="${escapeAttr(
             zone.entityId
           )}">⏹ Stop${isCountingDown ? " (" + cdSpan + ")" : ""}</button>`
@@ -3469,15 +3860,23 @@
           let cls = "day-cal-pill";
           let status = "";
           if (isToday) {
+            const inWindow =
+              r.start_minutes <= nowMin && nowMin < r.start_minutes + r.duration_minutes;
+            // v1.30 — only claim "Running now" when an active SESSION confirms the
+            // zone is actually watering (same truth the Today card uses). A run
+            // gated off at fire time (rain/moisture/wind) sits in its planned
+            // window but never created a session, so it shows "Scheduled", not
+            // "Running now" — keeping the card and calendar in agreement.
+            const sess = this._activeSessions[r.zone_entity_id];
+            const sessionActive = sess != null && sess > Date.now();
             if (r.start_minutes + r.duration_minutes < nowMin) {
               cls += " past";
               status = " · Past";
-            } else if (
-              r.start_minutes <= nowMin &&
-              nowMin < r.start_minutes + r.duration_minutes
-            ) {
+            } else if (inWindow && sessionActive) {
               cls += " live";
               status = " · Running now";
+            } else if (inWindow) {
+              status = " · Scheduled";
             }
           }
           const endMin = r.start_minutes + r.duration_minutes;
@@ -3492,7 +3891,7 @@
           // default .day-cal-pill accent background.
           const colorStyle =
             r.color && !cls.includes("past") && !cls.includes("live")
-              ? `;background:${r.color}`
+              ? `;background:${escapeAttr(r.color)}` // escape to match the file's convention (can't break the style attr)
               : "";
           return (
             `<div class="${cls}" style="top:${top}px;height:${height}px${colorStyle}" ` +
@@ -3617,13 +4016,19 @@
         const reason = r.reason
           ? `<span class="history-reason">${escapeHtml(r.reason)}</span>`
           : "";
-        const hasTriggers = r.triggers && Object.keys(r.triggers).length > 0;
+        // v1.30 — only surface triggers that actually AFFECTED this run. The
+        // coordinator writes breadcrumbs for disabled / no-effect gates (e.g.
+        // {wind:{deferred:false}}, {moisture:{disabled_by_config:true}}) which
+        // cluttered every row with "moisture, wind, hot_weather". Hide those;
+        // the full blob is still available on expand.
+        const meaningfulKeys = this._meaningfulTriggerKeys(r.triggers);
+        const hasMeaningful = meaningfulKeys.length > 0;
         const expanded = this._historyExpanded.has(r.id);
-        const triggerCell = hasTriggers
-          ? `<button class="btn btn-small history-trigger-toggle" data-action="history-toggle-triggers" data-record-id="${escapeAttr(r.id)}">${expanded ? "▾" : "▸"} ${Object.keys(r.triggers).map(escapeHtml).join(", ")}</button>`
+        const triggerCell = hasMeaningful
+          ? `<button class="btn btn-small history-trigger-toggle" data-action="history-toggle-triggers" data-record-id="${escapeAttr(r.id)}">${expanded ? "▾" : "▸"} ${meaningfulKeys.map(escapeHtml).join(", ")}</button>`
           : `<span class="history-dim">—</span>`;
         const expandedBlock =
-          expanded && hasTriggers
+          expanded && hasMeaningful
             ? `<tr class="history-expanded-row"><td colspan="6"><pre class="history-triggers">${escapeHtml(JSON.stringify(r.triggers, null, 2))}</pre></td></tr>`
             : "";
         return (
@@ -3639,8 +4044,58 @@
         );
       };
 
-      const rowsHtml = filtered.length
-        ? filtered.map(fmtRow).join("")
+      // v1.30 — collapse a chunked run's "(block i/n)" records into ONE session
+      // row with a progress bar (i of n blocks done), instead of N short rows.
+      const fmtSessionRow = (g) => {
+        const blocks = g.blocks;
+        const starts = blocks.map((b) => Date.parse(b.started_at)).filter(isFinite);
+        const startedAt = starts.length
+          ? new Date(Math.min(...starts))
+          : new Date(blocks[blocks.length - 1].started_at);
+        const dateStr = startedAt.toLocaleString(undefined, {
+          month: "short",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+        });
+        const n = g.n;
+        const completed = blocks.filter((b) => b.status === "completed").length;
+        const runningAny = blocks.some((b) => b.status === "running");
+        const abortedAny = blocks.some((b) => b.status === "aborted");
+        const delivered = blocks.reduce((s, b) => s + (b.actual_minutes || 0), 0);
+        const pct = Math.round((completed / Math.max(1, n)) * 100);
+        // Only "running" when a block actually IS running. A status filter can
+        // drop a session's running block, leaving completed<n with none running —
+        // that must NOT default to a permanent false "Running" badge.
+        const sessStatus = runningAny
+          ? "running"
+          : abortedAny
+            ? "aborted"
+            : "completed";
+        const meaningful = Array.from(
+          new Set(blocks.flatMap((b) => this._meaningfulTriggerKeys(b.triggers)))
+        );
+        const triggerCell = meaningful.length
+          ? `<span class="history-dim">${meaningful.map(escapeHtml).join(", ")}</span>`
+          : `<span class="history-dim">—</span>`;
+        return (
+          `<tr class="history-row history-row-${sessStatus}">` +
+          `<td class="history-when">${escapeHtml(dateStr)}</td>` +
+          `<td class="history-zone">${escapeHtml(g.zone_name || g.zone_entity_id)}</td>` +
+          `<td class="history-schedule">${escapeHtml(g.base)} <span class="history-dim">(${n} blocks)</span></td>` +
+          `<td class="history-duration">${delivered} min</td>` +
+          `<td class="history-status-cell">${statusBadge(sessStatus)}` +
+          `<div class="history-block-progress" title="${completed} of ${n} blocks completed">` +
+          `<div class="history-block-bar" style="width:${pct}%"></div></div>` +
+          `<span class="history-block-count">${completed}/${n} blocks</span></td>` +
+          `<td class="history-triggers-cell">${triggerCell}</td>` +
+          `</tr>`
+        );
+      };
+
+      const grouped = this._groupHistoryRows(filtered);
+      const rowsHtml = grouped.length
+        ? grouped.map((g) => (g.session ? fmtSessionRow(g) : fmtRow(g))).join("")
         : `<tr><td colspan="6" class="history-empty">No runs match these filters.</td></tr>`;
 
       const loadingNote = !this._runHistoryLoaded
@@ -4488,6 +4943,8 @@
         `<p class="muted">Place each plant on its zone (drip loop) and the calculator sizes ` +
         `emitters so every plant gets the right water — even when they share a loop.</p>` +
         `</div>` +
+        // v1.30 — aerial yard map with draggable plant markers
+        this._renderYardMap() +
         // Reference ET control
         `<div class="card yard-eto">` +
         `<label class="enabled-check"><input type="checkbox" data-action="toggle-auto-eto"${
@@ -4512,6 +4969,60 @@
         this._renderPlantList() +
         // Per-loop design report
         this._renderYardReport()
+      );
+    }
+
+    _renderYardMap() {
+      const m = this._yardMap;
+      const setupBtn = this._mapBusy
+        ? `<button class="btn" disabled>Fetching aerial…</button>`
+        : `<button class="btn" data-action="setup-yard-map">${
+            m && m.image_path ? "Refresh aerial" : "Set up yard map"
+          }</button>`;
+      if (!m || !m.image_path) {
+        return (
+          `<div class="card yard-map-card">` +
+          `<div class="yard-map-head"><strong>🗺️ Yard map</strong>${setupBtn}</div>` +
+          `<p class="muted">Fetch an aerial photo of your property (centered on your Home ` +
+          `Assistant location) to place plant markers on it.</p>` +
+          `</div>`
+        );
+      }
+      const plants = this._plants || [];
+      const placed = plants.filter((p) => p.map_x != null && p.map_y != null);
+      const unplaced = plants.filter((p) => p.map_x == null || p.map_y == null);
+      const markers = placed
+        .map(
+          (p) =>
+            `<button class="yard-map-marker" data-action="map-marker" data-plant-id="${escapeAttr(
+              p.id
+            )}" style="left:${(p.map_x * 100).toFixed(3)}%;top:${(p.map_y * 100).toFixed(
+              3
+            )}%" title="${escapeAttr(p.name)} — drag to reposition">` +
+            `<span class="yard-map-dot"></span>` +
+            `<span class="yard-map-label">${escapeHtml(p.name)}</span>` +
+            `</button>`
+        )
+        .join("");
+      const chips = unplaced
+        .map(
+          (p) =>
+            `<button class="yard-chip" data-action="place-plant" data-plant-id="${escapeAttr(
+              p.id
+            )}">+ ${escapeHtml(p.name)}</button>`
+        )
+        .join("");
+      return (
+        `<div class="card yard-map-card">` +
+        `<div class="yard-map-head"><strong>🗺️ Yard map</strong>${setupBtn}</div>` +
+        `<div class="yard-map-wrap" style="aspect-ratio:${m.width} / ${m.height}">` +
+        `<img class="yard-map-img" src="${escapeAttr(m.image_path)}" alt="Aerial view of the yard" draggable="false" />` +
+        markers +
+        `</div>` +
+        (chips
+          ? `<div class="yard-map-unplaced"><span class="muted">Tap to place:</span> ${chips}</div>`
+          : `<p class="muted yard-map-hint">Drag a marker to reposition it.</p>`) +
+        `</div>`
       );
     }
 
@@ -4558,12 +5069,124 @@
           .join("") +
         `</select></div>` +
         `</div>` +
+        // v1.32 — photo history (only on a saved plant; you attach photos to an id).
+        (e.id ? this._renderPhotoSection(e) : "") +
+        // v1.33 — last vision-health verdict (if any).
+        (e.id ? this._renderHealthSection(e) : "") +
         `<div class="yard-form-actions">` +
         `<button class="btn btn-primary" type="submit">${e.id ? "Save" : "Add plant"}</button>` +
         `<button class="btn btn-small" type="button" data-action="cancel-plant">Cancel</button>` +
         `</div>` +
         `</form>`
       );
+    }
+
+    _renderPhotoSection(e) {
+      const photos = Array.isArray(e.photos) ? e.photos : [];
+      const thumbs = photos.length
+        ? photos
+            .map(
+              (p) =>
+                `<a class="plant-photo-thumb" href="${escapeAttr(p.path)}" target="_blank" ` +
+                `rel="noopener" title="${escapeAttr(photoLabel(p))}">` +
+                `<img src="${escapeAttr(p.path)}" alt="${escapeAttr(
+                  e.name
+                )} photo" loading="lazy" draggable="false" />` +
+                `</a>`
+            )
+            .join("")
+        : `<p class="muted plant-photo-empty">No photos yet — add one to track this plant's health over time.</p>`;
+      const busy = !!this._photoBusy;
+      return (
+        `<div class="plant-photos">` +
+        `<label class="plant-photos-title">Photos (${photos.length})</label>` +
+        `<div class="plant-photo-grid">${thumbs}</div>` +
+        `<label class="btn btn-small plant-photo-add${busy ? " is-busy" : ""}">` +
+        (busy ? "Uploading…" : "+ Add photo") +
+        `<input type="file" accept="image/*" data-action="photo-file" data-plant-id="${escapeAttr(
+          e.id
+        )}"${busy ? " disabled" : ""} hidden />` +
+        `</label>` +
+        `<span class="muted plant-photo-hint">A photo with location data places this plant ` +
+        `on the map automatically (first photo only); after that, drag the marker to adjust.</span>` +
+        `</div>`
+      );
+    }
+
+    _renderHealthSection(e) {
+      // v1.33 — last biannual vision-health verdict (posted by the external vision
+      // job; bounded by the backend rail). Advisory display only.
+      const h = e.health;
+      if (!h || typeof h !== "object") return "";
+      const state = String(h.health_state || "unknown");
+      const conf = typeof h.confidence === "number" ? Math.round(h.confidence * 100) : null;
+      const when = h.assessed_at ? new Date(h.assessed_at).toLocaleDateString() : "";
+      const concerns = Array.isArray(h.concerns) ? h.concerns : [];
+      const care = Array.isArray(h.suggested_care) ? h.suggested_care : [];
+      const li = (arr) => arr.map((x) => `<li>${escapeHtml(String(x))}</li>`).join("");
+      return (
+        `<div class="plant-health">` +
+        `<label class="plant-photos-title">Health check${when ? ` — ${escapeHtml(when)}` : ""}</label>` +
+        `<div class="health-row">` +
+        `<span class="health-badge health-${escapeAttr(state)}">${escapeHtml(state)}</span>` +
+        (conf != null ? `<span class="muted health-conf">${conf}% confidence</span>` : "") +
+        (h.model ? `<span class="muted health-model">${escapeHtml(String(h.model))}</span>` : "") +
+        `</div>` +
+        (h.changes_since_last
+          ? `<p class="health-changes">${escapeHtml(String(h.changes_since_last))}</p>`
+          : "") +
+        (concerns.length
+          ? `<div class="health-block"><span class="health-sub">Concerns</span><ul>${li(
+              concerns
+            )}</ul></div>`
+          : "") +
+        (care.length
+          ? `<div class="health-block"><span class="health-sub">Suggested care</span><ul>${li(
+              care
+            )}</ul></div>`
+          : "") +
+        `<span class="muted plant-photo-hint">Biannual vision check — advisory; ` +
+        `it never changes watering.</span>` +
+        `</div>`
+      );
+    }
+
+    async _addPlantPhoto(file, plantId) {
+      if (!file || !plantId || this._photoBusy) return;
+      this._photoBusy = true;
+      this._renderNow();
+      try {
+        // Pull EXIF GPS from the ORIGINAL bytes first (canvas re-encoding strips it).
+        let gps = null;
+        try {
+          gps = exifGps(await file.arrayBuffer());
+        } catch (_) {
+          /* no or malformed EXIF — fine, just no auto-placement */
+        }
+        const b64 = await downscaleToJpegB64(file, 1280, 0.82);
+        if (!b64 || b64.length < 64) throw new Error("could not read the image");
+        const payload = { plant_id: plantId, image_base64: b64 };
+        // Auto-place ONLY when the plant is still unplaced (the locked workflow:
+        // GPS places once; selection owns identity; manual drag owns position).
+        const plant = (this._plants || []).find((p) => p.id === plantId);
+        const unplaced = !plant || plant.map_x == null || plant.map_y == null;
+        if (gps && unplaced) {
+          payload.latitude = gps.lat;
+          payload.longitude = gps.lon;
+        }
+        await this._hass.callService("complete_irrigation", "add_plant_photo", payload);
+        await this._fetchYard();
+        // Re-sync the open editor's gallery from the refreshed plant list.
+        if (this._plantEditor && this._plantEditor.id === plantId) {
+          const fresh = (this._plants || []).find((p) => p.id === plantId);
+          this._plantEditor.photos = fresh && Array.isArray(fresh.photos) ? fresh.photos : [];
+        }
+      } catch (err) {
+        alert("Failed to add photo: " + (err?.message || err));
+      } finally {
+        this._photoBusy = false;
+        this._renderNow();
+      }
     }
 
     _renderPlantList() {
@@ -5190,6 +5813,37 @@
         `.plant-form input,.plant-form select{width:100%;padding:8px 10px;border:1px solid var(--ci-border);border-radius:6px;background:var(--ci-input-bg);color:inherit;font:inherit;box-sizing:border-box}` +
         `.yard-form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}` +
         `.yard-form-actions{display:flex;gap:8px;margin-top:14px}` +
+        // v1.32 — per-plant photo gallery in the edit form
+        `.plant-photos{margin-top:14px;border-top:1px solid var(--ci-border);padding-top:12px}` +
+        `.plant-photos-title{display:block;font-size:12px;color:var(--ci-text-2);margin-bottom:8px}` +
+        `.plant-photo-grid{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}` +
+        `.plant-photo-thumb{display:block;width:72px;height:72px;border-radius:8px;overflow:hidden;border:1px solid var(--ci-border);background:var(--ci-hover)}` +
+        `.plant-photo-thumb img{width:100%;height:100%;object-fit:cover;display:block}` +
+        `.plant-photo-empty{margin:0 0 10px;font-size:12px}` +
+        `.plant-photo-add{cursor:pointer;display:inline-block}` +
+        `.plant-photo-add.is-busy{opacity:0.6;cursor:default}` +
+        `.plant-photo-hint{display:block;margin-top:8px;font-size:11px}` +
+        // v1.33 — vision-health verdict card
+        `.plant-health{margin-top:14px;border-top:1px solid var(--ci-border);padding-top:12px}` +
+        `.health-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px}` +
+        `.health-badge{font-size:12px;font-weight:600;padding:2px 8px;border-radius:10px;text-transform:capitalize;background:var(--ci-hover);color:var(--ci-text)}` +
+        `.health-thriving,.health-healthy{background:#1f7a3f;color:#fff}` +
+        `.health-stressed{background:#b8860b;color:#fff}` +
+        `.health-declining{background:#a3312a;color:#fff}` +
+        `.health-conf,.health-model{font-size:12px}` +
+        `.health-changes{margin:4px 0;font-size:13px}` +
+        `.health-block{margin:6px 0}` +
+        `.health-sub{display:block;font-size:11px;color:var(--ci-text-2);text-transform:uppercase;letter-spacing:0.03em}` +
+        `.health-block ul{margin:2px 0 0;padding-left:18px;font-size:13px}` +
+        // v1.32 — advisory "Today's plan" card
+        `.daily-plan-card{margin-bottom:18px;padding:14px 16px;border:1px solid var(--ci-border);border-radius:10px;background:var(--ci-card)}` +
+        `.plan-summary{margin:4px 0 10px;font-size:13px;color:var(--ci-text)}` +
+        `.plan-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}` +
+        `.plan-item{display:grid;grid-template-columns:auto auto 1fr;align-items:baseline;gap:8px;font-size:13px}` +
+        `.plan-rec{font-size:11px}` +
+        `.plan-zone{font-weight:600;color:var(--ci-text)}` +
+        `.plan-reason{color:var(--ci-text-2);font-size:12px}` +
+        `.plan-skip .plan-zone{color:var(--ci-text-2);text-decoration:line-through}` +
         `.yard-h3{margin:18px 0 8px;font-size:14px}` +
         `.yard-table-wrap{overflow-x:auto}` +
         `.yard-table{width:100%;border-collapse:collapse;font-size:13px}` +
@@ -5203,6 +5857,18 @@
         `.yard-warnings li{margin:4px 0;color:#c77800}` +
         `.yard-topups{margin:10px 0 0;padding:0;list-style:none;font-size:12px}` +
         `.yard-topups li{margin:4px 0;color:#1565c0}` +
+        // v1.30 — yard map
+        `.yard-map-card{padding:14px 16px}` +
+        `.yard-map-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}` +
+        `.yard-map-wrap{position:relative;width:100%;border-radius:8px;overflow:hidden;background:#1b1b1b;touch-action:none;user-select:none}` +
+        `.yard-map-img{display:block;width:100%;height:100%;object-fit:cover;pointer-events:none}` +
+        `.yard-map-marker{position:absolute;transform:translate(-50%,-50%);background:none;border:none;padding:0;cursor:grab;display:flex;flex-direction:column;align-items:center;gap:2px;z-index:2}` +
+        `.yard-map-marker.dragging{cursor:grabbing;z-index:5}` +
+        `.yard-map-dot{width:16px;height:16px;border-radius:50%;background:#e53935;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.5)}` +
+        `.yard-map-label{font-size:11px;font-weight:600;color:#fff;background:rgba(0,0,0,0.55);padding:1px 5px;border-radius:6px;white-space:nowrap;max-width:120px;overflow:hidden;text-overflow:ellipsis}` +
+        `.yard-map-unplaced{margin-top:10px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}` +
+        `.yard-chip{font-size:12px;padding:3px 9px;border-radius:12px;border:1px solid var(--ci-border,#444);background:var(--ci-card-2,#2a2a2a);color:var(--ci-text,#eee);cursor:pointer}` +
+        `.yard-map-hint{margin:8px 0 0;font-size:12px}` +
         `.yard-badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;white-space:nowrap}` +
         `.yard-badge.ok{background:rgba(67,160,71,0.16);color:#2e7d32}` +
         `.yard-badge.under{background:rgba(249,168,37,0.18);color:#b26a00}` +
@@ -5320,6 +5986,9 @@
         `.history-status-aborted{background:rgba(219,68,55,0.18);color:#c62828}` +
         `.history-status-running{background:rgba(3,169,244,0.18);color:var(--ci-accent)}` +
         `.history-trigger-toggle{font-size:11px;padding:3px 8px}` +
+        `.history-block-progress{display:inline-block;vertical-align:middle;width:70px;height:6px;border-radius:3px;background:var(--ci-border,#444);margin:0 6px;overflow:hidden}` +
+        `.history-block-bar{height:100%;background:#43a047;border-radius:3px}` +
+        `.history-block-count{font-size:11px;color:var(--ci-text-2,#aaa)}` +
         `.history-expanded-row td{background:var(--ci-hover)}` +
         `.history-triggers{margin:0;font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--ci-text);white-space:pre-wrap}` +
         `.history-empty{text-align:center;color:var(--ci-text-2);padding:24px}` +
@@ -5366,6 +6035,15 @@
         `.extra-step-row > select{min-width:0}` +
         `.extra-step-dur{display:flex;align-items:center;gap:4px}` +
         `.extra-step-dur input{width:54px;text-align:center}` +
+        // v1.32 — the compact h/m and per-zone duration inputs were clipping
+        // 2-digit values ("30" -> "3C"): the native number-spinner arrows plus
+        // padding ate the interior width. Hide the spinners (min/max/step already
+        // constrain the value, and WKWebView in the HA macOS app renders fat
+        // steppers) and trim the side padding so the digits fit. `.modal …`
+        // outranks the base `.modal input[type=number]` rule.
+        `.modal .duration-row input,.modal .extra-step-dur input,.modal .schedule-time-row input[type=number]{appearance:textfield;-moz-appearance:textfield;padding-left:6px;padding-right:6px;min-width:2.6em}` +
+        `.modal .duration-row input::-webkit-inner-spin-button,.modal .duration-row input::-webkit-outer-spin-button,.modal .extra-step-dur input::-webkit-inner-spin-button,.modal .extra-step-dur input::-webkit-outer-spin-button,.modal .schedule-time-row input[type=number]::-webkit-inner-spin-button,.modal .schedule-time-row input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}` +
+        `.modal .extra-step-dur input{width:3.6em;flex:0 0 auto}` +
         `.weekday-group{display:flex;flex-wrap:wrap;gap:6px}` +
         `.weekday-shortcuts{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px}` +
         `.weekday-shortcuts .btn{font-size:11px;padding:4px 8px}` +
@@ -5579,7 +6257,8 @@
       .replace(/&/g, "&amp;")
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;"); // also escape single-quote so a single-quoted attr sink is safe too
   }
   // escapeAttr is the same function as escapeHtml — the alias just
   // makes interpolation sites self-documenting (developer can see at

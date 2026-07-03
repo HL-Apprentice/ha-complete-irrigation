@@ -9,9 +9,12 @@ ScheduleStore instance and persists it to HA's storage on every change.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field, replace
 from datetime import date, time
 from typing import Any
+
+_LOGGER = logging.getLogger(__name__)
 
 _VALID_WEEKDAYS = frozenset(range(7))  # 0=Mon .. 6=Sun (ISO)
 
@@ -360,10 +363,20 @@ class ScheduleStore:
 
     @classmethod
     def from_serializable(cls, data: list[dict[str, Any]]) -> ScheduleStore:
-        """Build a fresh store from the serialized form."""
+        """Build a fresh store from the serialized form.
+
+        Per-record defensive (mirrors PlantStore): a single malformed / corrupt /
+        hand-edited .storage entry is logged and skipped rather than raising out of
+        async_setup — which would fail config-entry setup and take the WHOLE
+        integration down (nothing waters) over one bad record."""
         store = cls()
         for d in data:
-            store._items[d["id"]] = Schedule.from_dict(d)
+            try:
+                sched = Schedule.from_dict(d)
+            except (KeyError, ValueError, TypeError) as err:
+                _LOGGER.warning("Skipping invalid schedule record %r: %s", d, err)
+                continue
+            store._items[sched.id] = sched
         return store
 
 

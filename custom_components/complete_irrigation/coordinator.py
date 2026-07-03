@@ -14,8 +14,9 @@ Per-entry orchestrator. Each tick:
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from typing import TYPE_CHECKING, Any
 
 from .conflict_resolver import (
@@ -23,7 +24,9 @@ from .conflict_resolver import (
     POLICY_DEFER_NEW,
     POLICY_SHIFT_EXISTING_EARLIER,
     POLICY_SPLIT_DIFFERENCE,
+    REASON_COMMITTED,
     REASON_DEFERRED_LATE,
+    committed_runs_from_sessions,
     resolve_conflicts,
 )
 from .const import (
@@ -42,6 +45,7 @@ from .coordinator_logic import (
     compute_expired_establishment_schedules,
     compute_low_moisture_offenders,
     detect_sensor_offline_transitions,
+    plan_session_resume,
 )
 from .et_calc import SANE_ETO_MAX, select_eto, weekly_eto_inches_from_forecast
 from .hydraulics import DEFAULT_ETO_IN_WEEK
@@ -49,6 +53,7 @@ from .moisture_gate import COMBINE_AVERAGE, combine_moisture, evaluate_moisture
 from .notifications import (
     CATEGORY_IMPORTANT,
     NotificationDispatcher,
+    _parse_hhmm,
 )
 from .plant import PlantStore
 from .run_history import (
@@ -79,6 +84,14 @@ TICK_SECONDS = 60
 # the run. Longer gaps fall back to "now" — long outages would otherwise
 # burst-fire every missed run, which floods the irrigation system.
 _MISSED_LOOKBACK_MIN = 5
+# v1.30 — restart fail-over: how long after startup to wait before resuming an
+# interrupted run, so switch integrations (Rachio etc.) have time to come back
+# online before we re-assert the valve. If a zone's switch still isn't available,
+# retry up to _RESUME_MAX_ATTEMPTS times spaced _RESUME_RETRY_SECONDS apart rather
+# than dropping the run (a slow cloud reconnect must not lose a giant's water).
+_RESUME_DELAY_SECONDS = 30
+_RESUME_RETRY_SECONDS = 60
+_RESUME_MAX_ATTEMPTS = 5
 
 # v1.19 — auto-soak defaults + give-up cooldown. After soak_max_cycles
 # fail to raise moisture above min_pct, the zone won't re-attempt for
@@ -223,6 +236,10 @@ class ScheduleCoordinator:
         self._auto_eto_in_week: float | None = None
         self._auto_eto_at: datetime | None = None
         self._cancel_eto = None
+        # v1.30 — restart fail-over: a one-shot timer that resumes any run
+        # interrupted by an HA restart (see _resume_interrupted_runs).
+        self._cancel_resume = None
+        self._resume_attempts = 0
 
     @property
     def schedule_store(self) -> ScheduleStore:
@@ -312,10 +329,11 @@ class ScheduleCoordinator:
             self._hass, self._tick, timedelta(seconds=TICK_SECONDS)
         )
 
-        # Morning summary — fires daily at the end of quiet hours.
-        eh, em = self.notifier.quiet_hours_end.split(":")
+        # Morning summary — fires daily at the end of quiet hours. A malformed
+        # persisted quiet_hours_end must not break setup -> fall back to 07:00.
+        qh_end = _parse_hhmm(self.notifier.quiet_hours_end) or time(7, 0)
         self._cancel_summary = async_track_time_change(
-            self._hass, self._fire_morning_summary, hour=int(eh), minute=int(em), second=0
+            self._hass, self._fire_morning_summary, hour=qh_end.hour, minute=qh_end.minute, second=0
         )
 
         # Weekly verification reminder — Sunday 08:00 default
@@ -361,6 +379,17 @@ class ScheduleCoordinator:
                     lambda _now: self._hass.async_create_task(self._fire_post_install_reminder()),
                 )
 
+        # v1.30 — restart fail-over. If HA restarted mid-run, the in-memory
+        # auto-stop / chunked-block timers were lost but the run's session was
+        # persisted. Resume (or close out) it after a short delay so switch
+        # integrations are back online before we re-assert a valve.
+        if self._config.get("active_run_sessions"):
+            self._cancel_resume = async_call_later(
+                self._hass,
+                _RESUME_DELAY_SECONDS,
+                lambda _now: self._hass.async_create_task(self._resume_interrupted_runs()),
+            )
+
         _LOGGER.info(
             "Schedule coordinator started for entry %s — %d schedule(s) loaded",
             self._entry_id,
@@ -394,6 +423,7 @@ class ScheduleCoordinator:
             "_cancel_weekly",
             "_cancel_post_install",
             "_cancel_eto",
+            "_cancel_resume",
         ):
             cancel = getattr(self, cancel_attr, None)
             if cancel:
@@ -636,20 +666,39 @@ class ScheduleCoordinator:
         # Unknown / missing → keep safe default of POLICY_DEFER_NEW.
         configured = self._config.get("conflict_policy", POLICY_DEFER_NEW)
         policy = configured if configured in _VALID_CONFLICT_POLICIES else POLICY_DEFER_NEW
-        # v1.20 — NEVER-DROP. A run that can't be placed within the cascade
-        # cap is deferred *late* and still fires, instead of being skipped.
-        # Compression (shrinking the long runs to keep a squeezed run on
-        # time) is intentionally OFF here for now: shrinking a run that has
-        # already started would mis-model the controller and could fire a
-        # zone into a still-running one. It lands in v1.21 alongside
-        # in-progress-run tracking (the resolver + sim already support it,
-        # gated by compress_floor_pct < 100 + REASON_COMMITTED blockers).
+        # v1.32 — one-zone-at-a-time across LIVE runs. Feed the resolver the runs
+        # already in progress (manual, scheduled, or resumed after a restart) as
+        # fixed COMMITTED blockers, so a due scheduled run is DEFERRED past them
+        # instead of firing a second zone into a controller that runs one zone at a
+        # time. The live registry is active_run_sessions (persisted by the run
+        # services). A manual run is invisible to next_runs (it's not a schedule),
+        # so this is the only thing that stops a schedule colliding with it.
+        committed = committed_runs_from_sessions(self._config.get("active_run_sessions") or {}, now)
+        if committed:
+            # Drop the already-fired scheduled occurrence a committed session stands
+            # in for (its start is in the past) so the resolver models ONE busy
+            # interval, not the committed run plus its adjustable twin. A FUTURE
+            # occurrence of the same schedule stays — it must route around the run.
+            fired = {(c.schedule_id, c.zone_entity_id) for c in committed if c.schedule_id}
+            upcoming = [
+                r
+                for r in upcoming
+                if (r.schedule_id, r.zone_entity_id) not in fired or r.start_at > now
+            ]
+        # v1.20 — NEVER-DROP. A run that can't be placed within the cascade cap is
+        # deferred *late* and still fires, instead of being skipped. Compression
+        # (shrinking adjustable runs) stays OFF (compress_floor_pct=100): we only
+        # DEFER around committed runs, never compress one that has already started.
         resolved = resolve_conflicts(
-            upcoming,
+            committed + upcoming,
             policy,
             compress_floor_pct=100,  # 100 = no compression (defer-late only)
         )
         due = due_runs_since(resolved, last, now)
+        # Committed runs are blockers ONLY — never (re)fire one even if its actual
+        # start_at falls inside this tick's (last, now] window (e.g. a manual run
+        # that started seconds ago would otherwise be double-fired).
+        due = [r for r in due if r.reason != REASON_COMMITTED]
 
         for run in due:
             # v1.20 — the resolver never drops a run anymore (compress →
@@ -854,7 +903,8 @@ class ScheduleCoordinator:
             }
 
         _LOGGER.info(
-            "Firing run: %s for %d min (schedule %s)",
+            "Dispatching run: %s for %d min (schedule %s) — async; run_zone reports "
+            "actual start/failure",
             zone_id,
             adjusted_minutes,
             run.schedule_name,
@@ -904,6 +954,16 @@ class ScheduleCoordinator:
 
     # ── Auto-soak recovery (v1.19) ────────────────────────────────
 
+    def _other_zone_busy(self, zone_id: str, now: datetime) -> bool:
+        """True when a DIFFERENT zone has a live committed run (manual / scheduled /
+        resumed) — i.e. the one-zone-at-a-time controller is busy elsewhere. The
+        scheduled tick is already serialized by resolve_conflicts, but AUTO-SOAK fires
+        outside that path, so it must consult this before opening a valve or it could
+        drive a second zone into a running one (hydraulic collision on a single-zone
+        controller). Reuses the same committed-blocker definition as the resolver."""
+        sessions = self._config.get("active_run_sessions") or {}
+        return any(r.zone_entity_id != zone_id for r in committed_runs_from_sessions(sessions, now))
+
     async def _tick_auto_soak(self, now: datetime) -> None:
         """Closed-loop low-moisture recovery, driven once per tick.
 
@@ -945,6 +1005,8 @@ class ScheduleCoordinator:
                 zone_state = self._hass.states.get(zone_id)
                 if zone_state is not None and zone_state.state == "on":
                     continue  # already watering (scheduled/manual) — let it finish
+                if self._other_zone_busy(zone_id, now):
+                    continue  # one-zone-at-a-time: another zone is watering
                 await self._start_soak_run(zone_id, zone_cfg, now, cycle=1, current=current)
                 continue
 
@@ -1005,6 +1067,8 @@ class ScheduleCoordinator:
                         event_type="auto_soak_gave_up",
                     )
                 continue
+            if self._other_zone_busy(zone_id, now):
+                continue  # one-zone-at-a-time: wait for the other zone to finish
             await self._start_soak_run(
                 zone_id, zone_cfg, now, cycle=state["cycle"] + 1, current=current
             )
@@ -1195,6 +1259,19 @@ class ScheduleCoordinator:
             rainfall_in = float(state.state)
         except (TypeError, ValueError):
             return
+        if not math.isfinite(rainfall_in):
+            return  # a glitching "nan"/"inf" sensor must not drive lockout
+
+        # Only (re)arm on a RISING edge — new rainfall since the last reading. A
+        # cumulative "daily total" accumulator (a common HA rain sensor that only
+        # resets at midnight) otherwise stays elevated and re-pushes the lockout
+        # forward on every 60s tick, pinning it on for a full extra day of dry
+        # weather. A drop (window emptied / midnight reset) re-baselines so the
+        # next real rain can arm again.
+        last_reading = getattr(self, "_last_rainfall_reading", None)
+        self._last_rainfall_reading = rainfall_in
+        if last_reading is not None and rainfall_in <= last_reading:
+            return
 
         hours = evaluate_rain_lockout(rainfall_in)
         if hours is None:
@@ -1314,6 +1391,73 @@ class ScheduleCoordinator:
             "weather_entity": self._resolve_weather_entity(),
         }
 
+    def _zone_moisture_band(self, zone_id: str) -> str:
+        """Current moisture band for a zone (a moisture_gate BAND_* string), or ""
+        when there's no usable reading. Read-only — reuses the same reading +
+        evaluate_moisture machinery as the watering gate, for the advisory plan."""
+        zone_cfg = (self._config.get("zones") or {}).get(zone_id) or {}
+        if not zone_cfg.get("moisture_entities") or zone_cfg.get("moisture_disabled"):
+            return ""
+        current, analysis_ids, _readings, _excl = self._zone_moisture_reading(zone_cfg)
+        if not analysis_ids or current is None:
+            return ""
+        return evaluate_moisture(
+            current=current,
+            min_pct=float(zone_cfg.get("min_pct", DEFAULT_ZONE_MIN_PCT)),
+            target=float(zone_cfg.get("target_pct", DEFAULT_ZONE_TARGET_PCT)),
+            max_pct=float(zone_cfg.get("max_pct", DEFAULT_ZONE_MAX_PCT)),
+            base_minutes=10,
+        ).band
+
+    def build_today_plan(self, now=None):
+        """v1.32 — the advisory daily plan: today's planned runs prioritized by
+        urgency (weekly water deficit + ET demand + moisture band), with skip
+        recommendations for saturated zones. ADVISORY ONLY — it never changes what
+        fires; it's surfaced via health.json, the panel, and the LLM advisor. Never
+        raises (returns an empty plan on any data gap)."""
+        from homeassistant.util import dt as dt_util
+
+        from .daily_planner import DailyPlan, ZoneSignal, build_daily_plan
+        from .hydraulics import DEFAULT_EFFICIENCY
+        from .plant_design import build_yard_report
+
+        try:
+            now = now or dt_util.now()
+            start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            end_of_day = start_of_day + timedelta(days=1)
+            zb = self._config.get("zone_buffer_seconds")
+            planned = next_runs(
+                self._store.enabled_schedules(),
+                from_dt=start_of_day,
+                until_dt=end_of_day,
+                zone_buffer_seconds=int(zb) if zb is not None else None,
+            )
+            eto = float(self.effective_eto())
+            eto_factor = max(0.0, min(1.0, eto / SANE_ETO_MAX)) if SANE_ETO_MAX else 0.0
+            efficiency = float(self._config.get("drip_efficiency", DEFAULT_EFFICIENCY))
+            # Per-zone weekly water-deficit fraction, from the hydraulics yard report.
+            deficit_frac: dict[str, float] = {}
+            for rep in build_yard_report(self.plants.all(), self._store.all(), eto, efficiency):
+                need = sum(p.need_gal_week for p in rep.plants)
+                delivered = sum(p.delivered_gal_week for p in rep.plants)
+                deficit_frac[rep.loop.id] = max(0.0, (need - delivered) / need) if need > 0 else 0.0
+            signals: dict[str, ZoneSignal] = {}
+            zone_names: dict[str, str] = {}
+            for r in planned:
+                z = r.zone_entity_id
+                if z not in signals:
+                    signals[z] = ZoneSignal(
+                        deficit_frac=deficit_frac.get(z, 0.0),
+                        band=self._zone_moisture_band(z),
+                        eto_factor=eto_factor,
+                    )
+                    st = self._hass.states.get(z) if self._hass else None
+                    zone_names[z] = (st.attributes.get("friendly_name") if st else None) or z
+            return build_daily_plan(planned, signals=signals, zone_names=zone_names, now=now)
+        except Exception:  # advisory only — must never break health.json / the panel
+            _LOGGER.exception("build_today_plan failed; returning empty plan")
+            return DailyPlan(items=(), summary="Daily plan unavailable.")
+
     async def _refresh_auto_eto(self, now=None) -> None:
         """Recompute the auto ETo from the weather entity's daily forecast.
 
@@ -1381,3 +1525,156 @@ class ScheduleCoordinator:
             entity,
             len(forecast),
         )
+
+    # ── Restart fail-over (v1.30) ─────────────────────────────────
+
+    async def _resume_interrupted_runs(self, _now=None, zones=None) -> None:
+        """Resume (or close out) runs interrupted by an HA restart. For each
+        persisted session: still within its planned window -> re-fire run_zone
+        for the remaining minutes (re-chunks a giant); past its end -> drop it,
+        force the valve off, and complete any 'zombie' running record. Bad/garbage
+        session data fails safe to close (never resumes on a guess).
+
+        `zones` (set) scopes a RETRY to only the zones that were deferred last time
+        (switch not yet available), so a retry never re-fires zones already resumed.
+        """
+        from homeassistant.helpers.event import async_call_later
+        from homeassistant.util import dt as dt_util
+
+        sessions = dict(self._config.get("active_run_sessions") or {})
+        if zones is None:
+            self._resume_attempts = 0  # fresh resume sequence (also reset per HA start)
+        else:
+            sessions = {z: s for z, s in sessions.items() if z in zones}
+        if not sessions:
+            return
+        entry_data = self._hass.data.get(DOMAIN, {}).get(self._entry_id)
+        deferred: list[str] = []  # resumable zones whose switch isn't ready yet
+        for item in plan_session_resume(sessions, dt_util.now()):
+            zone = item["zone"]
+            live = self._config.get("active_run_sessions") or {}
+            # Honor any intervening change: if the session was cleared while we
+            # awaited an earlier zone (e.g. the user pressed Stop), do NOT resume
+            # it from our stale snapshot — that would resurrect a stopped run.
+            if zone not in live:
+                continue
+            if item["action"] == "resume":
+                # Gate on switch availability — a slow cloud reconnect (Rachio)
+                # must NOT lose the run. If the switch isn't ready, keep the
+                # session and retry rather than firing run_zone (which would
+                # refuse) or dropping it.
+                st = self._hass.states.get(zone)
+                if st is None or st.state in ("unavailable", "unknown"):
+                    # Mark the session gated so the UI doesn't show a false
+                    # "Running" while the valve is actually off waiting to retry.
+                    live[zone]["resuming_gated"] = True
+                    deferred.append(zone)
+                    continue
+                remaining = item["remaining_minutes"]
+                meta = item.get("session") or {}
+                base_name = (meta.get("schedule_name") or "").strip()
+                # Stash meta so the resumed run records under its schedule (marked
+                # resumed), keeps its ORIGINAL source (manual stays manual), and
+                # isn't mistaken for a fresh chunk block.
+                if isinstance(entry_data, dict):
+                    entry_data.setdefault("pending_run_meta", {})[zone] = {
+                        "schedule_id": meta.get("schedule_id"),
+                        "schedule_name": f"{base_name} (resumed)" if base_name else "Resumed",
+                        "requested_minutes": remaining,
+                        "source": meta.get("source"),
+                        "triggers": {
+                            "resumed": {"after_restart": True, "remaining_minutes": remaining}
+                        },
+                    }
+                before_started = (live.get(zone) or {}).get("started_at")
+                # Await so the resumed run records its fresh session before we save
+                # config below (no stale-session-on-disk window).
+                await self._hass.services.async_call(
+                    DOMAIN, "run_zone", {"entity_id": zone, "minutes": remaining}, blocking=True
+                )
+                # Confirm the run actually started: run_zone re-records the session
+                # with a fresh started_at on success. If it's unchanged (run_zone
+                # refused, e.g. the switch dropped between the gate and now), the run
+                # did NOT start -> re-defer for retry rather than leave a stale
+                # session showing a false "Running".
+                after = (self._config.get("active_run_sessions") or {}).get(zone)
+                if after is None:
+                    # Cleared externally (e.g. the user pressed Stop) during the
+                    # resume — respect it; don't claim it resumed.
+                    continue
+                if after.get("started_at") == before_started:
+                    # run_zone refused (switch dropped after the gate) — the run did
+                    # NOT start; mark gated + re-defer rather than show false "Running".
+                    after["resuming_gated"] = True
+                    deferred.append(zone)
+                    continue
+                _LOGGER.info(
+                    "Restart fail-over: resuming %s for %d more min (to its planned end)",
+                    zone,
+                    remaining,
+                )
+            else:
+                # Freshness guard: if a NEWER run took over this zone since our
+                # snapshot (started_at changed — a fresh scheduled/manual run landed
+                # while we awaited an earlier zone's resume), do NOT force it off. That
+                # would kill a live, tracked run and start an off->on fight with the
+                # external-off monitor. Let the new run own the zone.
+                snap_started = (item.get("session") or {}).get("started_at")
+                if (live.get(zone) or {}).get("started_at") != snap_started:
+                    continue
+                self._config.get("active_run_sessions", {}).pop(zone, None)
+                await self._hass.services.async_call(
+                    "switch", "turn_off", {"entity_id": zone}, blocking=False
+                )
+                self._run_history.complete_run(zone, ended_at=dt_util.now())
+                _LOGGER.info(
+                    "Restart fail-over: %s was already past its planned end — "
+                    "closed out + valve off",
+                    zone,
+                )
+        await self.async_save_config()
+        await self.async_save_run_history()
+
+        # Switch not ready for some zones — keep their sessions and retry, up to
+        # a bounded number of attempts, instead of losing the run. The retry is
+        # SCOPED to just the deferred zones so it never re-fires zones already
+        # resumed above (which would needlessly cancel + restart their timers).
+        if deferred and self._resume_attempts < _RESUME_MAX_ATTEMPTS:
+            self._resume_attempts += 1
+            deferred_set = set(deferred)
+            _LOGGER.info(
+                "Restart fail-over: %s switch(es) not ready, retry %d/%d in %ds",
+                len(deferred),
+                self._resume_attempts,
+                _RESUME_MAX_ATTEMPTS,
+                _RESUME_RETRY_SECONDS,
+            )
+            self._cancel_resume = async_call_later(
+                self._hass,
+                _RESUME_RETRY_SECONDS,
+                lambda _now: self._hass.async_create_task(
+                    self._resume_interrupted_runs(zones=deferred_set)
+                ),
+            )
+        elif deferred:
+            # Out of retries — DON'T leave a zombie session (it would show a false
+            # "Running" on the card for hours). Drop it, force the valve off as a
+            # safety, and record the run as aborted.
+            _LOGGER.warning(
+                "Restart fail-over: gave up resuming %s after %d attempts — switch "
+                "still unavailable; closing out + valve off",
+                deferred,
+                _RESUME_MAX_ATTEMPTS,
+            )
+            for zone in deferred:
+                self._config.get("active_run_sessions", {}).pop(zone, None)
+                await self._hass.services.async_call(
+                    "switch", "turn_off", {"entity_id": zone}, blocking=False
+                )
+                self._run_history.abort_run(
+                    zone,
+                    ended_at=dt_util.now(),
+                    reason="restart resume gave up — switch unavailable",
+                )
+            await self.async_save_config()
+            await self.async_save_run_history()

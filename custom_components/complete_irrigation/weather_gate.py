@@ -9,6 +9,7 @@ the results (skip runs during lockout, scale up runtime when hot).
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -24,6 +25,8 @@ def evaluate_rain_lockout(
     `tiers` is a list of (rainfall_threshold_inches, lockout_hours)
     pairs. The highest threshold the rainfall meets wins.
     """
+    if not math.isfinite(rainfall_inches_6h):
+        return None  # a NaN/inf sensor glitch must not (wrongly) trigger/pin a lockout
     table = tiers if tiers is not None else DEFAULT_RAIN_LOCKOUT_TIERS
     matched: int | None = None
     for threshold, hours in sorted(table, key=lambda x: x[0]):
@@ -50,7 +53,9 @@ def evaluate_hot_weather(
     """Single-step boost — when the daily high meets `threshold_f`, apply
     `boost_percent` (as a percent) to runtime. Below threshold or
     zero boost → no change."""
-    if boost_percent <= 0 or daily_high_f < threshold_f:
+    if boost_percent <= 0 or not math.isfinite(daily_high_f) or daily_high_f < threshold_f:
+        # non-finite guard: a NaN high is False for `< threshold` and would wrongly
+        # apply the hot-weather boost (over-water); treat it as no-boost.
         return HotWeatherDecision.none()
     return HotWeatherDecision(boost=True, multiplier=1.0 + boost_percent / 100.0)
 

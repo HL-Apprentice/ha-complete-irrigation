@@ -284,14 +284,14 @@ set_weather_config:
   fields:
     rain_sensor:
       name: Rain sensor (legacy)
-      description: Single rainfall sensor (in inches). Prefer `rain_sensors` for multi-sensor setups.
+      description: "Single rainfall sensor (in inches). A rolling-window sensor (e.g. last 6h) is ideal; a daily-total accumulator also works — lockout arms on NEW rainfall (a rising reading), not while the total merely stays elevated. Prefer `rain_sensors` for multi-sensor setups."
       required: false
       selector:
         entity:
           domain: sensor
     rain_sensors:
       name: Rain sensors
-      description: One or more rainfall sensors (accumulation today/yesterday, duration, intensity, etc.). The first one is used for lockout; all show on the Today banner.
+      description: "One or more rainfall sensors (in inches). The first is used for lockout, which arms on a rising reading (new rain) so a daily-total accumulator can't pin the lockout on; all show on the Today banner."
       required: false
       example: "['sensor.backyard_rain_accumulation_today', 'sensor.backyard_rain_intensity']"
       selector:
@@ -680,6 +680,26 @@ update_plant:
       selector:
         entity:
           domain: switch
+    map_x:
+      name: Map X (0-1)
+      description: Normalized yard-map position from the west edge (set by dragging the marker).
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 1
+          step: any
+          mode: box
+    map_y:
+      name: Map Y (0-1)
+      description: Normalized yard-map position from the north edge (set by dragging the marker).
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 1
+          step: any
+          mode: box
 
 delete_plant:
   name: Delete plant
@@ -689,5 +709,120 @@ delete_plant:
       name: Plant ID
       description: The id of the plant to delete.
       required: true
+      selector:
+        text:
+
+set_yard_map:
+  name: Set yard map
+  description: >
+    Fetch an aerial image of the property (Esri World Imagery, no API key) and cache it
+    as the yard-map backdrop. Centers on your Home Assistant location unless you pass
+    coordinates. The plant markers are positioned over this image.
+  fields:
+    latitude:
+      name: Center latitude
+      description: Defaults to your Home Assistant latitude.
+      required: false
+      selector:
+        number:
+          min: -90
+          max: 90
+          step: any
+          mode: box
+    longitude:
+      name: Center longitude
+      description: Defaults to your Home Assistant longitude.
+      required: false
+      selector:
+        number:
+          min: -180
+          max: 180
+          step: any
+          mode: box
+    span_m:
+      name: Span (meters)
+      description: Width/height of the area to capture, in meters (default 60).
+      required: false
+      selector:
+        number:
+          min: 10
+          max: 500
+          step: 5
+          mode: box
+          unit_of_measurement: "m"
+
+add_plant_photo:
+  name: Add plant photo
+  description: >
+    Attach a photo to a plant (for biannual LLM-vision health checks). The image is
+    base64-encoded; the panel downsizes it first. If latitude/longitude (the photo's
+    EXIF GPS) are given and the plant isn't placed on the yard map yet, its marker is
+    auto-placed from the GPS (you can drag to correct).
+  fields:
+    plant_id:
+      name: Plant ID
+      description: The id of the plant to attach the photo to.
+      required: true
+      selector:
+        text:
+    image_base64:
+      name: Image (base64)
+      description: "The JPEG image, base64-encoded (a data-URL prefix is tolerated)."
+      required: true
+      selector:
+        text:
+          multiline: true
+    latitude:
+      name: Photo latitude (EXIF)
+      description: Optional. Used to auto-place an unplaced plant on the yard map.
+      required: false
+      selector:
+        number:
+          min: -90
+          max: 90
+          step: any
+          mode: box
+    longitude:
+      name: Photo longitude (EXIF)
+      required: false
+      selector:
+        number:
+          min: -180
+          max: 180
+          step: any
+          mode: box
+    note:
+      name: Note
+      description: Optional short note for this photo.
+      required: false
+      selector:
+        text:
+
+set_plant_health:
+  name: Set plant health (vision verdict)
+  description: >
+    Store a biannual vision-health verdict for a plant (posted by the external
+    vision job). The verdict is bounded by the integration's safety rail before it is
+    saved. Advisory only — it never changes watering.
+  fields:
+    plant_id:
+      name: Plant ID
+      description: The id of the plant this verdict is for.
+      required: true
+      selector:
+        text:
+    verdict:
+      name: Verdict
+      description: >
+        The vision model's result as an object, e.g.
+        {health_state: healthy, confidence: 0.9, changes_since_last: "...",
+        concerns: [...], suggested_care: [...]}.
+      required: true
+      selector:
+        object:
+    model:
+      name: Model
+      description: Optional name of the vision model that produced the verdict.
+      required: false
       selector:
         text:

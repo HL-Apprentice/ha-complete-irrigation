@@ -65,6 +65,31 @@ def test_rejects_blank_name_and_ids():
         _rec(zone="")
 
 
+def test_rejects_path_traversal_ids():
+    # Security gate: the id is a filesystem path segment for the photo dir, so
+    # anything that could escape it (../, slash, absolute, NUL, dot) must be
+    # rejected on construct AND on .storage load (from_dict -> __post_init__).
+    for bad in ("../evil", "..", "a/b", "/abs", "a\\b", "a.b", "x" * 65, "p\x00"):
+        with pytest.raises(ValueError):
+            _rec(pid=bad)
+        with pytest.raises(ValueError):
+            PlantRecord.from_dict({**_rec().to_dict(), "id": bad})
+
+
+def test_accepts_uuid_hex_id():
+    # Our own ids are uuid4().hex[:12] = [0-9a-f]{12}; must always pass.
+    r = _rec(pid="a1b2c3d4e5f6")
+    assert r.id == "a1b2c3d4e5f6"
+
+
+def test_from_serializable_drops_unsafe_id_record():
+    # A crafted store entry with a traversal id is skipped, not loaded.
+    good = _rec("p1", name="Lemon").to_dict()
+    evil = {**_rec().to_dict(), "id": "../../escape"}
+    restored = PlantStore.from_serializable([good, evil])
+    assert [p.id for p in restored.all()] == ["p1"]
+
+
 def test_round_trip_serialization():
     r = _rec()
     assert PlantRecord.from_dict(r.to_dict()) == r
@@ -84,6 +109,110 @@ def test_to_calc_plant_bridges_to_hydraulics():
     assert isinstance(p, Plant)
     assert p.loop_id == "switch.citrus"
     assert p.plant_factor == 0.8  # high
+
+
+# ── v1.30 map coordinates ───────────────────────────────────────────
+
+
+def test_map_coords_default_to_unplaced():
+    r = _rec()
+    assert r.map_x is None and r.map_y is None
+
+
+def test_map_coords_round_trip():
+    r = PlantRecord("p1", "Lemon", "high", 100.0, "switch.citrus", map_x=0.25, map_y=0.8)
+    assert PlantRecord.from_dict(r.to_dict()) == r
+
+
+def test_pre_v130_record_loads_as_unplaced():
+    data = _rec().to_dict()
+    data.pop("map_x", None)
+    data.pop("map_y", None)
+    rec = PlantRecord.from_dict(data)  # must not raise
+    assert rec.map_x is None and rec.map_y is None
+
+
+def test_map_coords_out_of_range_rejected():
+    import pytest
+
+    with pytest.raises(ValueError):
+        PlantRecord("p1", "Lemon", "high", 100.0, "switch.citrus", map_x=1.4, map_y=0.5)
+    with pytest.raises(ValueError):
+        PlantRecord("p1", "Lemon", "high", 100.0, "switch.citrus", map_x=0.5, map_y=-0.1)
+
+
+# ── v1.33 vision-health field ───────────────────────────────────────
+
+
+def test_health_defaults_none_and_round_trips():
+    assert _rec().health is None
+    health = {
+        "health_state": "healthy",
+        "confidence": 0.9,
+        "assessed_at": "2026-05-18T06:00:00+00:00",
+    }
+    r = PlantRecord("p1", "Lemon", "high", 100.0, "switch.citrus", health=health)
+    rt = PlantRecord.from_dict(r.to_dict())
+    assert rt.health == health
+    assert rt == r
+
+
+def test_health_non_dict_rejected_on_construct():
+    import pytest
+
+    with pytest.raises(ValueError):
+        PlantRecord("p1", "Lemon", "high", 100.0, "switch.citrus", health="not-a-dict")
+
+
+def test_pre_v133_record_loads_without_health():
+    data = _rec().to_dict()
+    data.pop("health", None)
+    assert PlantRecord.from_dict(data).health is None
+    # a corrupt non-dict health on load is tolerated -> None
+    data["health"] = "junk"
+    assert PlantRecord.from_dict(data).health is None
+
+
+# ── v1.32 photo history ─────────────────────────────────────────────
+
+
+def test_photos_default_empty():
+    assert _rec().photos == ()
+
+
+def test_photos_round_trip():
+    photos = ({"ts": 100, "path": "/local/x/100.jpg", "note": "spring"},)
+    r = PlantRecord("p1", "Lemon", "high", 100.0, "switch.citrus", photos=photos)
+    rt = PlantRecord.from_dict(r.to_dict())
+    assert rt.photos == photos
+    assert rt == r
+
+
+def test_pre_v132_record_loads_without_photos():
+    data = _rec().to_dict()
+    data.pop("photos", None)
+    assert PlantRecord.from_dict(data).photos == ()
+
+
+def test_invalid_photo_entries_filtered_on_load():
+    data = _rec().to_dict()
+    data["photos"] = [
+        {"ts": 1, "path": "/local/a.jpg"},  # valid -> survives
+        {"ts": 2},  # no path -> dropped
+        "junk",  # not a dict -> dropped
+        {"path": ""},  # empty path -> dropped
+        {"ts": 3, "path": "javascript:alert(1)"},  # non-/local/ scheme -> dropped (XSS guard)
+        {"ts": 4, "path": "https://evil.example/x.jpg"},  # absolute URL -> dropped
+    ]
+    # only the safe "/local/" path survives
+    assert PlantRecord.from_dict(data).photos == ({"ts": 1, "path": "/local/a.jpg"},)
+
+
+def test_pathless_photo_rejected_on_construct():
+    import pytest
+
+    with pytest.raises(ValueError):
+        PlantRecord("p1", "Lemon", "high", 100.0, "switch.citrus", photos=({"ts": 1},))
 
 
 # ── PlantStore CRUD ─────────────────────────────────────────────────

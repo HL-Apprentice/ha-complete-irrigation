@@ -4,6 +4,173 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.33.0 — 2026-07-03 — plant vision-health + full-app hardening
+
+### Added — biannual plant vision-health (advisory)
+
+- **Plants can be checked by a local vision model over time.** A new
+  `set_plant_health` service stores a structured health verdict on a plant (state,
+  confidence, changes-since-last, concerns, suggested care); the plant editor shows
+  the latest verdict, and a concern fires an "important" notification. The health feed
+  (`health.json`) now lists each plant's prior verdict, whether it's **due for review**,
+  and the exact photos to compare — so an external job knows what to assess.
+- **Safety rail.** The verdict is bounded server-side (`vision_health.validate_verdict`)
+  before storage: an out-of-range state becomes "unknown", confidence is clamped, text
+  is truncated + list lengths capped, and any care/concern item that reads like a
+  control instruction (turn on / run_zone / a service call) is **stripped**. A
+  hallucinating vision model can inform you; it can never smuggle in an action.
+- **`tools/vision_health_job.py`** — a stdlib-only companion (deploy on your GPU/LLM
+  host) that reads the feed, asks a local vision model (e.g. Qwen2.5-VL on the RTX
+  5060) to compare each due plant's latest photo to a baseline, and posts the verdict
+  back. Advisory only; never touches watering. See `tools/README.md`.
+
+### Hardened — full-app multi-model review (security + stability)
+
+A whole-app review (Claude multi-agent + Grok/Gemini/Qwen, adversarially verified)
+found and fixed: **auto-soak now respects one-zone-at-a-time** (it could open a second
+valve while another zone watered); **the schedule + run-history stores tolerate a
+corrupt record** instead of failing the whole integration load; **moisture/weather
+gates reject NaN/Inf** readings (they were silently over-watering); **quiet-hours is
+validated** so a bad value can't suppress critical alerts or break startup; the
+**health/calendar HTTP feeds require admin** (parity with the WS commands); a
+**restart-resume freshness guard** stops it force-closing a newer run; the
+**rain-lockout arms on a rising edge** so a daily-total sensor can't pin it on; plus a
+frontend timer-leak fix and smaller cleanups.
+
+## v1.32.0 — 2026-06-29 — photo DB, security hardening, one-zone serialization, daily plan
+
+### Added — daily plan (advisory "Today's Plan", groundwork for the LLM scheduler)
+
+- **A prioritized daily briefing of the day's watering.** Each day's planned runs
+  are ranked by urgency — combining each zone's weekly water deficit, the current ET
+  demand, and live moisture — so the driest / most heat-stressed zones surface first,
+  and a saturated zone is flagged to **skip today**. It's **advisory only**: nothing
+  about what actually fires changes (the scheduler, moisture/weather gates, and the
+  one-zone resolver still own watering) — the plan is guidance, shown as a **"Today's
+  plan" card** on the Today tab and exposed in the health feed for the LLM advisor.
+- **A safety rail for the LLM advisor.** The local model may re-order the day by its
+  own reasoning, but only within bounds: it must keep the same set of zones and can
+  never un-skip a saturated zone or invent a run — otherwise the deterministic order
+  stands. The model can make the plan smarter; it can't make it unsafe. 16 new tests.
+
+### Added — one-zone-at-a-time across LIVE runs
+
+- **A scheduled run now waits for a run already in progress instead of firing a
+  second zone into it.** Rachio (and most controllers) water one zone at a time;
+  the conflict resolver already serialized *scheduled* runs, but a **manual run**,
+  or a run **resumed after a restart**, was invisible to it. Those in-progress runs
+  are now fed to the resolver as fixed "committed" blockers (from the live run
+  registry), so a due schedule is **deferred past them** — never overlapped. The
+  block honors the inter-zone buffer at the boundary (a run scheduled right as a
+  live one ends still lands a couple minutes later, not the same second), and a
+  committed run is never re-fired even if it started moments ago. A run record with
+  corrupt timestamps fails safe (it can't freeze all watering) but is now logged so
+  the rare unsafe state is visible. 11 new tests; reviewed by a 3-model panel.
+
+### Fixed — schedule editor number inputs no longer clip 2-digit values
+
+- The compact hour/minute and per-zone duration boxes in the schedule editor were
+  cutting off two-digit numbers ("30" showed as "3C") — the browser's number-spinner
+  arrows plus padding left no room for the digits, especially in the HA macOS app's
+  WKWebView. The spinner arrows are now hidden (the min/max/step already constrain the
+  value) and the boxes are sized so the full number is always visible.
+
+### Added — per-plant photo history (groundwork for biannual vision health)
+
+- **Plants can carry a photo history** for monitoring health over time. A new
+  `add_plant_photo` service stores an image (base64) under
+  `www/complete_irrigation/plants/<id>/`, newest-first, capped per plant; the
+  plant's first photo with embedded GPS can auto-place its map marker (EXIF-GPS),
+  and every later update is tied to the **selected** plant (selection owns
+  identity, manual drag owns position).
+- **Photo upload + gallery in the Yard tab.** Editing a plant now shows an "Add
+  photo" button and a thumbnail gallery of its history. Pick or snap a photo and
+  the panel reads its GPS (if present), downsizes it client-side (longest edge
+  1280 px, JPEG) to keep the upload small, and calls `add_plant_photo`. If the
+  plant isn't placed on the map yet and the photo carries location data, it drops
+  the marker for you — drag to fine-tune. The downsize re-encodes through a canvas,
+  so the stored image carries no embedded EXIF/GPS.
+
+### Security — recursive multi-model audit (Grok + Gemini + Qwen + Claude)
+
+- **Access control, secure-by-default.** Services that mutate configuration,
+  delete data, write files, or make outbound requests now require an **admin**
+  user unconditionally (schedule/plant CRUD, the `set_*_config` setters,
+  `start_establishment`, `clear_run_history`, `add_plant_photo`, `set_yard_map`).
+  Operational controls a household member legitimately uses (`run_zone`,
+  `stop_zone`, `run_schedule`, `set_schedule_enabled`, `set_zone_moisture`,
+  `clear_rain_lockout`, `test_notification`) stay on the opt-in
+  `admin_only_services` gate. The admin check **passes system/automation
+  context**, so no Home Assistant automation is affected — only non-admin *users*
+  are blocked from reconfiguring or destroying data.
+- **Path-traversal hardening.** A plant `id` is used as a filesystem path
+  segment, so it is now constrained to a safe slug (`[A-Za-z0-9_-]{1,64}`) at
+  record construction *and* on `.storage` load — a tampered store entry with
+  `../` / slashes / an absolute path is rejected (dropped on load), and
+  `add_plant_photo` adds a realpath-containment check at the write itself.
+- **Upload validation.** `add_plant_photo` (and the fetched yard aerial) now
+  verify image **magic bytes** (JPEG/PNG/GIF/WEBP/BMP) before writing, so a
+  crafted SVG/HTML payload can't be stored as a `.jpg` and served from `/local`
+  (stored-XSS / content-sniffing vector).
+- 11 new security tests; the audit ran three adversarial rounds to a clean
+  consensus (all engines `secure`) and passed the HA Docker smoke test.
+
+## v1.31.0 — 2026-06-27
+
+### Added — 2D yard map with draggable plant markers
+
+- **A new aerial yard map in the Yard tab.** "Set up yard map" fetches a high-resolution
+  aerial photo of your property — **Esri World Imagery, no API key**, centered on your Home
+  Assistant location — and caches it locally as the backdrop. Place each plant as a marker
+  on the image and **drag it to its real spot**; positions persist.
+- **Plants gain a map position.** `PlantRecord` now carries normalized `map_x` / `map_y`
+  (each 0–1, independent of screen size); pre-v1.31 records load as "unplaced." Drag a
+  marker (or tap an unplaced plant to drop it at center) and `update_plant` saves it.
+- **New `set_yard_map` service** (center defaults to your HA latitude/longitude; optional
+  `span_m`, default 60 m). The fetch is server-side and degrades gracefully — a network or
+  service error leaves the previous map untouched and never crashes.
+- **Georeferencing groundwork:** a pure, unit-tested `yard_map.py` converts between GPS
+  coordinates and normalized map positions (exact + linear at yard scale). This is the same
+  math future EXIF-GPS auto-placement will reuse to drop a marker from a photo's embedded
+  location. The integration stays **dependency-free** (no imaging libraries).
+- 12 new tests (georeferencing + plant coordinates).
+
+## v1.30.0 — 2026-06-25
+
+### Added — restart fail-over (resume an interrupted run)
+
+- **If Home Assistant restarts mid-run, the run now resumes until its scheduled
+  end** instead of being lost. Each in-progress run persists a session (its full
+  duration + planned end); on startup the integration waits ~30 s for switch
+  integrations to come back, then for each session: if it's still within its
+  window, it resumes the **remaining** time (re-chunking a long run correctly,
+  not just the current block); if it's already past its end, it closes the run
+  out and forces the valve off. This also clears any "zombie" running record.
+  Fails safe — a session with bad/missing data is closed (valve off), never
+  resumed on a guess. A switch that's slow to reconnect is retried (bounded), not
+  dropped; a zone waiting to resume shows as idle, never a false "Running".
+
+### Fixed — run-state display fidelity
+
+- **Today zone card no longer shows "Idle" while the schedule shows "Running
+  now."** A chunked run's 30 s inter-block gaps (and Rachio state-poll lag) read
+  the switch as off; the card now uses the active run/session — the same truth the
+  calendar uses — so the two agree (and a rain/moisture/wind-gated run that never
+  fired is not shown as running).
+- **History triggers column de-cluttered.** It listed every gate on every row
+  ("moisture, wind, hot_weather"), including disabled / no-effect breadcrumbs.
+  Now only triggers that actually gated or adjusted the run are shown; the full
+  blob is still available on expand.
+- **Chunked runs collapse into one History row with a progress bar.** A long run
+  delivered as N blocks ("Citrus (block 1/5)") is now one session row showing
+  completed / total blocks, instead of N separate rows.
+
+### Changed — CI
+
+- HACS validation is scoped to pushes on `main` + tags (plus the daily schedule
+  and manual dispatch). It no longer red-X's on transient feature-branch pushes
+  whose ref is deleted at squash-merge.
+
 ## v1.29.0 — 2026-06-25
 
 ### Added — per-plant top-up recommendations on shared loops

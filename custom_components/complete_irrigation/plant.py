@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -26,6 +27,15 @@ _LOGGER = logging.getLogger(__name__)
 # crafted store would otherwise poison the water math + WS JSON).
 _MAX_CANOPY_AREA_SQFT = 100000
 
+# A plant id is used as a FILESYSTEM PATH SEGMENT for its photo directory
+# (www/complete_irrigation/plants/<id>/). Constrain it to a safe slug so a
+# corrupt / crafted .storage record can never carry "../", a slash, or an
+# absolute path into add_plant_photo's file write (path-traversal sink). Our
+# own ids are uuid4().hex[:12] = [0-9a-f]{12}, which always passes; the guard
+# only rejects hand-tampered values, dropping them on load (from_serializable
+# skips records that fail validation) rather than letting them escape the dir.
+_SAFE_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
 
 @dataclass(frozen=True)
 class PlantRecord:
@@ -36,10 +46,25 @@ class PlantRecord:
     wucols_category: str
     canopy_area_sqft: float
     zone_entity_id: str
+    # v1.30 — normalized position on the yard map (fraction from the west / north
+    # edge, each in [0, 1]). None = not placed yet. Independent of pixel size.
+    map_x: float | None = None
+    map_y: float | None = None
+    # v1.32 — photo history for biannual LLM-vision health checks. Each entry:
+    # {"ts": epoch-int, "path": "/local/.../<id>/<ts>.jpg", "note": str}. Immutable
+    # tuple; newest-first. Absent in older records -> empty.
+    photos: tuple[dict[str, Any], ...] = ()
+    # v1.33 — latest biannual vision-health report (bounded by vision_health's rail
+    # before it is stored here). A serialized HealthReport dict, or None if the plant
+    # has never been assessed. Advisory only; absent in pre-v1.33 records -> None.
+    health: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if not self.id:
             raise ValueError("plant id must be non-empty")
+        if not _SAFE_ID_RE.fullmatch(self.id):
+            # Path-traversal / unsafe-segment guard (the id names a photo dir).
+            raise ValueError(f"plant id must be 1-64 chars of [A-Za-z0-9_-], got {self.id!r}")
         if not self.name.strip():
             raise ValueError("plant name must be non-empty")
         if self.wucols_category not in WUCOLS_FACTORS:
@@ -58,6 +83,20 @@ class PlantRecord:
             )
         if not self.zone_entity_id:
             raise ValueError("zone_entity_id must be non-empty")
+        # Map coordinates: either both set + finite + in [0, 1], or both None.
+        for axis, val in (("map_x", self.map_x), ("map_y", self.map_y)):
+            if val is not None and (not math.isfinite(val) or not (0.0 <= val <= 1.0)):
+                raise ValueError(f"{axis} must be a finite value in [0, 1], got {val}")
+        # Photos: a tuple of {ts, path, ...} dicts (each must at least have a path).
+        if not isinstance(self.photos, tuple):
+            raise ValueError("photos must be a tuple")
+        for p in self.photos:
+            if not isinstance(p, dict) or not p.get("path"):
+                raise ValueError("each photo must be a dict with a non-empty 'path'")
+        # Health: None or a dict (its contents are already bounded by the vision_health
+        # rail before storage). Keep the record-level check light + advisory.
+        if self.health is not None and not isinstance(self.health, dict):
+            raise ValueError("health must be a dict or None")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -66,18 +105,43 @@ class PlantRecord:
             "wucols_category": self.wucols_category,
             "canopy_area_sqft": self.canopy_area_sqft,
             "zone_entity_id": self.zone_entity_id,
+            "map_x": self.map_x,
+            "map_y": self.map_y,
+            "photos": [dict(p) for p in self.photos],
+            "health": dict(self.health) if isinstance(self.health, dict) else None,
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> PlantRecord:
-        # Tolerant read: unknown keys are ignored so a future field (e.g. map
-        # location, installed emitters) doesn't break records written today.
+        # Tolerant read: unknown keys are ignored so a future field (e.g.
+        # installed emitters) doesn't break records written today. map_x/map_y
+        # are absent in pre-v1.30 records -> None (unplaced); photos pre-v1.32 -> ().
+        def _coord(key: str) -> float | None:
+            v = data.get(key)
+            return None if v is None else float(v)
+
+        raw_photos = data.get("photos") or []
+        # Photo paths are ALWAYS the server-set "/local/complete_irrigation/plants/..."
+        # URL. Drop any entry whose path isn't a "/local/" relative URL on load, so a
+        # hand-tampered .storage file can't inject e.g. a "javascript:" href into the
+        # gallery's <a href> (defense-in-depth on top of the panel's escapeAttr).
+        photos = tuple(
+            dict(p)
+            for p in raw_photos
+            if isinstance(p, dict)
+            and isinstance(p.get("path"), str)
+            and p["path"].startswith("/local/")
+        )
         return cls(
             id=str(data["id"]),
             name=str(data["name"]),
             wucols_category=str(data["wucols_category"]),
             canopy_area_sqft=float(data["canopy_area_sqft"]),
             zone_entity_id=str(data["zone_entity_id"]),
+            map_x=_coord("map_x"),
+            map_y=_coord("map_y"),
+            photos=photos,
+            health=data.get("health") if isinstance(data.get("health"), dict) else None,
         )
 
     def to_calc_plant(self) -> Plant:
