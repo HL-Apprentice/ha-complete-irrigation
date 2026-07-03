@@ -21,7 +21,35 @@ from custom_components.complete_irrigation.services import (  # noqa: E402
     _ADD_SCHEDULE_SCHEMA,
     _UPDATE_SCHEDULE_SCHEMA,
     _WEEKDAYS_SCHEMA,
+    _looks_like_image,
 )
+
+# ── _looks_like_image: stored-file XSS guard (v1.32 security gate) ────
+
+
+def test_looks_like_image_accepts_real_formats():
+    # Minimal valid magic-byte headers for each accepted format.
+    assert _looks_like_image(b"\xff\xd8\xff" + b"\x00" * 20)  # JPEG
+    assert _looks_like_image(b"\x89PNG\r\n\x1a\n" + b"\x00" * 20)  # PNG
+    assert _looks_like_image(b"GIF89a" + b"\x00" * 20)  # GIF
+    assert _looks_like_image(b"RIFF\x00\x00\x00\x00WEBP" + b"\x00" * 8)  # WEBP
+    assert _looks_like_image(b"BM" + b"\x00" * 20)  # BMP
+
+
+def test_looks_like_image_rejects_xss_payloads():
+    # A crafted SVG/HTML payload (the stored-XSS vector) must be rejected so it
+    # can't be written as .jpg and served from /local.
+    for payload in (
+        b"<svg xmlns='http://www.w3.org/2000/svg'><script>alert(1)</script></svg>",
+        b"<!DOCTYPE html><html><script>alert(1)</script></html>",
+        b"<?xml version='1.0'?><svg/>",
+        b"GIF",  # too short / truncated
+        b"",
+        b"\x00" * 11,  # under the 12-byte minimum
+        b"plain text not an image at all",
+    ):
+        assert not _looks_like_image(payload)
+
 
 # ── _WEEKDAYS_SCHEMA ─────────────────────────────────────────────────
 
@@ -216,6 +244,20 @@ def test_notification_schema_accepts_notify_on_aborted():
     )
     assert result["notify_on_aborted"] is False
     assert result["notify_on_missed"] is True
+
+
+def test_notification_config_validates_quiet_hours_format():
+    """A malformed quiet-hours value must be rejected at the schema boundary so it
+    can't reach the parse sinks and suppress alerts / break startup."""
+    from custom_components.complete_irrigation.services import (
+        _SET_NOTIFICATION_CONFIG_SCHEMA,
+    )
+
+    ok = _SET_NOTIFICATION_CONFIG_SCHEMA({"quiet_hours_start": "22:00", "quiet_hours_end": "07:00"})
+    assert ok["quiet_hours_start"] == "22:00"
+    for bad in ("", "nope", "25:00", "12:99", "8am", "22:0"):
+        with pytest.raises(vol.Invalid):
+            _SET_NOTIFICATION_CONFIG_SCHEMA({"quiet_hours_start": bad})
 
 
 def test_add_schedule_with_interval_hours_and_empty_weekdays_unchanged():

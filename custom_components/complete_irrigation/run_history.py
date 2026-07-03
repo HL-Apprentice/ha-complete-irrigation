@@ -19,10 +19,13 @@ from __future__ import annotations
 # but local dev / CI still has 3.9-compatible test runners floating around,
 # so we stay on `timezone.utc`.
 # ruff: noqa: UP017
+import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
+
+_LOGGER = logging.getLogger(__name__)
 
 UTC = timezone.utc
 
@@ -193,7 +196,10 @@ class RunHistoryStore:
                 existing.with_changes(
                     ended_at=started_at.astimezone(UTC).isoformat(),
                     status=STATUS_COMPLETED,
-                    actual_minutes=existing.requested_minutes,
+                    # An interrupted run delivered only the ELAPSED wall time, not
+                    # its full requested minutes — over-reporting actual water
+                    # would mislead the design math + the LLM monitor.
+                    actual_minutes=_minutes_between(existing.started_at, started_at),
                 ),
             )
         rec = RunHistoryRecord(
@@ -348,7 +354,15 @@ class RunHistoryStore:
 
     @classmethod
     def from_serializable(cls, raw: list[dict[str, Any]]) -> RunHistoryStore:
-        return cls([RunHistoryRecord.from_dict(d) for d in raw or []])
+        # Per-record defensive (mirrors PlantStore/ScheduleStore): one corrupt record
+        # must not raise out of async_setup and take the whole integration down.
+        out: list[RunHistoryRecord] = []
+        for d in raw or []:
+            try:
+                out.append(RunHistoryRecord.from_dict(d))
+            except (KeyError, ValueError, TypeError) as err:
+                _LOGGER.warning("Skipping invalid run-history record %r: %s", d, err)
+        return cls(out)
 
     # ── Internals ────────────────────────────────────────────────
 

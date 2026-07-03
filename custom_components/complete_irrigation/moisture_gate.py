@@ -9,6 +9,7 @@ Bands (low to high moisture):
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable
 from dataclasses import dataclass
 
@@ -43,6 +44,17 @@ def evaluate_moisture(
 ) -> MoistureDecision:
     """Decide runtime adjustment based on which band the current
     moisture reading falls into."""
+    # Non-finite guard: a NaN reading is False for every `>=` below and would fall
+    # through to URGENT (over-water); an inf would force SATURATED (wrongly skip). Treat
+    # a non-finite value as a no-op NORMAL run (base runtime) rather than acting on
+    # garbage. (combine_moisture already drops non-finite, so this is defense-in-depth.)
+    if not math.isfinite(current):
+        return MoistureDecision(
+            band=BAND_NORMAL,
+            runtime_minutes=base_minutes,
+            skip=False,
+            reason="normal run: moisture reading not finite — ignoring the gate",
+        )
     if current >= max_pct:
         return MoistureDecision(
             band=BAND_SATURATED,
@@ -78,8 +90,11 @@ def evaluate_moisture(
 
 
 def combine_moisture(readings: Iterable[float], mode: str) -> float | None:
-    """Combine multiple sensor readings into a single value per `mode`."""
-    values = list(readings)
+    """Combine multiple sensor readings into a single value per `mode`. Non-finite
+    readings (NaN / inf — some HA templates emit "nan"/"inf", which float() parses
+    without error) are dropped so a glitching sensor can't poison the band decision.
+    Returns None when nothing finite remains, so the caller's is-None path handles it."""
+    values = [v for v in readings if isinstance(v, (int, float)) and math.isfinite(v)]
     if not values:
         return None
     if mode == COMBINE_AVERAGE:

@@ -61,6 +61,14 @@ class IrrigationCalendarICSView(HomeAssistantView):
         from . import find_coordinator
 
         hass: HomeAssistant = request.app["hass"]
+        # Admin-only (parity with the health feed + WS commands): schedule names +
+        # entity_ids + run times leak occupancy patterns. Calendar subscribers must
+        # use an ADMIN long-lived token.
+        user = request.get("hass_user")
+        if user is None or not getattr(user, "is_admin", False):
+            from homeassistant.exceptions import Unauthorized
+
+            raise Unauthorized()
         coord = find_coordinator(hass)
 
         if coord is None:

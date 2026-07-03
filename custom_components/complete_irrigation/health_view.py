@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING
 from homeassistant.components.http import HomeAssistantView
 
 from .const import DOMAIN
+from .daily_planner import serialize_daily_plan
 from .hydraulics import DEFAULT_EFFICIENCY
 from .plant_design import build_yard_report, serialize_loop_report
 from .run_history import STATUS_ABORTED, STATUS_COMPLETED, STATUS_SKIPPED
@@ -106,6 +107,15 @@ class IrrigationHealthView(HomeAssistantView):
         from . import find_coordinator
 
         hass: HomeAssistant = request.app["hass"]
+        # Admin-only, matching the v1.17.10 WS require_admin decision: schedule /
+        # plant / run-time data leaks occupancy patterns, so a non-admin authed
+        # user must not enumerate it over HTTP. The LLM monitor authenticates with
+        # an ADMIN long-lived token (the owner's).
+        user = request.get("hass_user")
+        if user is None or not getattr(user, "is_admin", False):
+            from homeassistant.exceptions import Unauthorized
+
+            raise Unauthorized()
         coord = find_coordinator(hass)
         if coord is None:
             return web.json_response(
@@ -173,6 +183,25 @@ class IrrigationHealthView(HomeAssistantView):
 
         issues, aborted, skipped, short = _detect_misses(history, now)
 
+        # v1.33 — per-plant vision-health: prior verdict, whether the plant is due for
+        # a (re)assessment, and the exact photos to review. The external vision job
+        # reads `due_for_review` to know what to assess and `review` for the image URLs.
+        from .vision_health import due_for_review, select_review_photos
+
+        now_iso = now.isoformat()
+        plant_health = [
+            {
+                "plant_id": p.id,
+                "name": p.name,
+                "photo_count": len(p.photos),
+                "health": p.health,
+                "due_for_review": bool(p.photos)
+                and due_for_review((p.health or {}).get("assessed_at"), now_iso),
+                "review": select_review_photos(list(p.photos)),
+            }
+            for p in coord.plants.all()
+        ]
+
         return web.json_response(
             {
                 "schema_version": _SCHEMA_VERSION,
@@ -187,6 +216,11 @@ class IrrigationHealthView(HomeAssistantView):
                 "schedules": schedules,
                 "loops": loops,
                 "eto": coord.eto_status(),
+                # v1.32 — advisory daily plan (today's runs prioritized by urgency,
+                # with skip hints for saturated zones). The LLM advisor reads this
+                # and may propose a re-ordering, validated against the rail.
+                "daily_plan": serialize_daily_plan(coord.build_today_plan(now)),
+                "plant_health": plant_health,
                 "recent_runs": recent,
                 "health": {
                     "ok": not issues,

@@ -16,6 +16,7 @@ import voluptuous as vol
 from homeassistant.components import websocket_api
 
 from .const import DOMAIN
+from .daily_planner import serialize_daily_plan
 from .hydraulics import DEFAULT_EFFICIENCY
 from .plant_design import build_yard_report, serialize_loop_report
 
@@ -29,6 +30,7 @@ WS_TYPE_LIST_RUN_HISTORY = f"{DOMAIN}/list_run_history"
 WS_TYPE_LIST_PLANNED_RUNS = f"{DOMAIN}/list_planned_runs"
 WS_TYPE_LIST_PLANTS = f"{DOMAIN}/list_plants"
 WS_TYPE_YARD_REPORT = f"{DOMAIN}/yard_report"
+WS_TYPE_GET_DAILY_PLAN = f"{DOMAIN}/get_daily_plan"
 
 
 def _find_coordinator(hass: HomeAssistant):
@@ -88,25 +90,40 @@ async def get_active_runs(hass, connection, msg):
     this on connect (and after every run/stop) to hydrate countdowns —
     so a page reload mid-run, or a run started via Developer Tools,
     both see the auto-stop deadline.
+
+    v1.30 — ALSO returns `sessions`: zones with an active run SESSION and the whole
+    run's deadline. A chunked run is one session spanning all its blocks + the 30s
+    inter-block gaps; the per-block manual run (in `runs`) clears between blocks, so
+    `sessions` is what tells the Today card the zone is still running through a gap —
+    WITHOUT falsely showing a rain/moisture/wind-GATED run as running (a gated run
+    never creates a session). `runs` still drives the per-block countdown.
     """
     from . import _SHARED_KEY
 
     runs = []
+    sessions_out = []
     for key, data in hass.data.get(DOMAIN, {}).items():
         if key == _SHARED_KEY:
             continue
         tracker = data.get("manual_runs")
-        if tracker is None:
-            continue
-        for r in tracker.active():
-            runs.append(
-                {
-                    "entity_id": r.entity_id,
-                    "deadline": r.deadline().isoformat(),
-                    "duration_minutes": int(r.duration.total_seconds() // 60),
-                }
-            )
-    connection.send_result(msg["id"], {"runs": runs})
+        if tracker is not None:
+            for r in tracker.active():
+                runs.append(
+                    {
+                        "entity_id": r.entity_id,
+                        "deadline": r.deadline().isoformat(),
+                        "duration_minutes": int(r.duration.total_seconds() // 60),
+                    }
+                )
+        coord = data.get("coordinator")
+        sessions = (coord.config.get("active_run_sessions") if coord else None) or {}
+        for zone, sess in sessions.items():
+            # Skip a session that's GATED (waiting on an unavailable switch during a
+            # restart resume) — the valve is off, so reporting it would show a false
+            # "Running" on the card until the retry fires.
+            if isinstance(sess, dict) and sess.get("deadline") and not sess.get("resuming_gated"):
+                sessions_out.append({"entity_id": zone, "deadline": sess["deadline"]})
+    connection.send_result(msg["id"], {"runs": runs, "sessions": sessions_out})
 
 
 @websocket_api.require_admin
@@ -261,9 +278,23 @@ async def yard_report(hass, connection, msg):
         {
             "reports": [serialize_loop_report(r) for r in reports],
             "drip_efficiency": eff,
+            "yard_map": coord.config.get("yard_map"),  # v1.30 — aerial backdrop config
             **status,
         },
     )
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): WS_TYPE_GET_DAILY_PLAN})
+@websocket_api.async_response
+async def get_daily_plan(hass, connection, msg):
+    """The advisory daily plan (today's runs prioritized by urgency, with skip hints
+    for saturated zones) for the panel's 'Today's Plan' card. Advisory only."""
+    coord = _find_coordinator(hass)
+    if coord is None:
+        connection.send_result(msg["id"], {"summary": "No runs planned today.", "items": []})
+        return
+    connection.send_result(msg["id"], serialize_daily_plan(coord.build_today_plan()))
 
 
 def async_register_ws_commands(hass: HomeAssistant) -> None:
@@ -275,3 +306,4 @@ def async_register_ws_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, list_planned_runs)
     websocket_api.async_register_command(hass, list_plants)
     websocket_api.async_register_command(hass, yard_report)
+    websocket_api.async_register_command(hass, get_daily_plan)

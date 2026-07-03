@@ -11,8 +11,59 @@ Re-exported via coordinator.py to preserve every existing import path.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
+from datetime import datetime
 from typing import Any
+
+
+def plan_session_resume(
+    sessions: dict[str, dict],
+    now: datetime,
+    *,
+    min_resume_seconds: int = 60,
+    hard_cap_minutes: int = 480,
+) -> list[dict]:
+    """v1.30 restart fail-over — decide, per persisted active-run session, whether
+    to RESUME it (the run was interrupted by an HA restart and still has time left
+    before its scheduled end) or CLOSE it (it would have finished during the
+    outage). Pure; the coordinator does the actual HA I/O.
+
+    Each session carries at least ``deadline`` (ISO timestamp of the run's planned
+    end) and optionally ``total_minutes``. Returns one dict per zone:
+        {zone, action: "resume"|"close", remaining_minutes, session}.
+    A session with a missing/unparseable deadline (or a tz mismatch vs ``now``) is
+    CLOSED — fail safe: turn the valve off rather than resume on bad data."""
+    out: list[dict] = []
+    for zone, s in sorted(sessions.items()):
+        s = s or {}
+        try:
+            # Resume against the gap-FREE water_deadline so re-added inter-block
+            # gaps can't accumulate as extra water across repeated restarts; fall
+            # back to the gap-inclusive deadline for pre-fix / single-run sessions.
+            deadline = datetime.fromisoformat(s.get("water_deadline") or s["deadline"])
+            remaining = (deadline - now).total_seconds()
+        except (KeyError, TypeError, ValueError):
+            out.append({"zone": zone, "action": "close", "remaining_minutes": 0, "session": s})
+            continue
+        if remaining > min_resume_seconds:
+            total = s.get("total_minutes")
+            cap = int(total) if isinstance(total, int | float) and total > 0 else hard_cap_minutes
+            # floor, never ceil: the > min_resume_seconds (60s) guard already makes
+            # this >= 1, and rounding UP would add up to 59s of extra water on every
+            # resume — "never over-water" wins over reclaiming a sub-minute remainder.
+            remaining_min = max(1, min(cap, math.floor(remaining / 60)))
+            out.append(
+                {
+                    "zone": zone,
+                    "action": "resume",
+                    "remaining_minutes": remaining_min,
+                    "session": s,
+                }
+            )
+        else:
+            out.append({"zone": zone, "action": "close", "remaining_minutes": 0, "session": s})
+    return out
 
 
 def build_weekly_zone_summary(
