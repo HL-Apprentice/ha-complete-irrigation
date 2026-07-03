@@ -183,6 +183,23 @@ class IrrigationHealthView(HomeAssistantView):
 
         issues, aborted, skipped, short = _detect_misses(history, now)
 
+        # v1.33 — per-plant vision-health: prior verdict + whether the plant is due for
+        # a (re)assessment. The external vision job reads `due` to know what to review.
+        from .vision_health import due_for_review
+
+        now_iso = now.isoformat()
+        plant_health = [
+            {
+                "plant_id": p.id,
+                "name": p.name,
+                "photo_count": len(p.photos),
+                "health": p.health,
+                "due_for_review": bool(p.photos)
+                and due_for_review((p.health or {}).get("assessed_at"), now_iso),
+            }
+            for p in coord.plants.all()
+        ]
+
         return web.json_response(
             {
                 "schema_version": _SCHEMA_VERSION,
@@ -201,6 +218,7 @@ class IrrigationHealthView(HomeAssistantView):
                 # with skip hints for saturated zones). The LLM advisor reads this
                 # and may propose a re-ordering, validated against the rail.
                 "daily_plan": serialize_daily_plan(coord.build_today_plan(now)),
+                "plant_health": plant_health,
                 "recent_runs": recent,
                 "health": {
                     "ok": not issues,

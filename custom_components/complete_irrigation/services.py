@@ -87,6 +87,7 @@ SERVICE_UPDATE_PLANT = "update_plant"
 SERVICE_DELETE_PLANT = "delete_plant"
 SERVICE_SET_YARD_MAP = "set_yard_map"  # v1.30 — fetch + cache the aerial backdrop
 SERVICE_ADD_PLANT_PHOTO = "add_plant_photo"  # v1.32 — per-plant photo + EXIF-GPS place
+SERVICE_SET_PLANT_HEALTH = "set_plant_health"  # v1.33 — store a vision-health verdict
 
 MAX_SCHEDULE_DURATION_MIN = 480  # 8 hours — safety cap for scheduled runs
 _HHMM_RE = r"^([01]\d|2[0-3]):[0-5]\d$"  # quiet-hours 24h time, validated at the boundary
@@ -478,6 +479,15 @@ _ADD_PLANT_PHOTO_SCHEMA = vol.Schema(
         vol.Optional("latitude"): vol.All(vol.Coerce(float), vol.Range(min=-90, max=90)),
         vol.Optional("longitude"): vol.All(vol.Coerce(float), vol.Range(min=-180, max=180)),
         vol.Optional("note", default=""): vol.All(cv.string, vol.Length(max=200)),
+    }
+)
+# v1.33 — the NAS vision job posts its raw verdict here; the vision_health rail bounds
+# it before storage. `verdict` is the model's dict (health_state/confidence/…).
+_SET_PLANT_HEALTH_SCHEMA = vol.Schema(
+    {
+        vol.Required("plant_id"): cv.string,
+        vol.Required("verdict"): dict,
+        vol.Optional("model", default=""): vol.All(cv.string, vol.Length(max=80)),
     }
 )
 
@@ -1592,6 +1602,64 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         await coord.async_save_plants()
         _LOGGER.info("add_plant_photo: %s now has %d photo(s)", existing.id, len(merged.photos))
 
+    async def handle_set_plant_health(call: ServiceCall) -> None:
+        # v1.33 — the NAS vision job posts its verdict; the vision_health rail bounds
+        # it (strips actuation, clamps, caps) before we store it on the plant. Admin
+        # only (writes stored state + can fire a concern notification).
+        if not await _require_admin(hass, call):
+            return
+        data = _SET_PLANT_HEALTH_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None:
+            return
+        existing = coord.plants.get(data["plant_id"])
+        if existing is None:
+            _LOGGER.warning("set_plant_health: no such plant %s", data["plant_id"])
+            return
+
+        from homeassistant.util import dt as dt_util
+
+        from .vision_health import (
+            report_has_concern,
+            select_review_photos,
+            serialize_report,
+            validate_verdict,
+        )
+
+        sel = select_review_photos(list(existing.photos))
+        latest_ts = sel["latest"]["ts"] if sel else None
+        baseline_ts = sel["baseline"]["ts"] if (sel and sel["baseline"]) else None
+        report = validate_verdict(
+            data["verdict"],
+            plant_id=existing.id,
+            latest_ts=latest_ts,
+            baseline_ts=baseline_ts,
+            model=data.get("model", ""),
+            now_iso=dt_util.utcnow().isoformat(),
+        )
+        if report is None:
+            _LOGGER.warning("set_plant_health: unusable verdict for %s", existing.id)
+            return
+
+        merged = replace(existing, health=serialize_report(report))
+        coord.plants.upsert(merged)
+        await coord.async_save_plants()
+        _LOGGER.info(
+            "set_plant_health: %s -> %s (confidence %.2f)",
+            existing.id,
+            report.health_state,
+            report.confidence,
+        )
+        # Surface a concern to the user (respects the notifier's enabled/quiet-hours).
+        if report_has_concern(report) and coord.notifier is not None:
+            concerns = "; ".join(report.concerns) if report.concerns else report.health_state
+            await coord.notifier.notify(
+                f"{existing.name}: {concerns}",
+                title="Plant health check",
+                event_type="plant_health",
+                extra={"plant_id": existing.id, "health_state": report.health_state},
+            )
+
     async def handle_delete_plant(call: ServiceCall) -> None:
         if not await _require_admin(hass, call):  # destructive — admin only
             return
@@ -1728,6 +1796,9 @@ async def _async_register_services(hass: HomeAssistant) -> None:
     )
     hass.services.async_register(
         DOMAIN, SERVICE_ADD_PLANT_PHOTO, handle_add_plant_photo, schema=_ADD_PLANT_PHOTO_SCHEMA
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_SET_PLANT_HEALTH, handle_set_plant_health, schema=_SET_PLANT_HEALTH_SCHEMA
     )
 
     # ── Weather + per-zone moisture configuration ──────────────────
@@ -1990,6 +2061,7 @@ def _async_unregister_services(hass: HomeAssistant) -> None:
         SERVICE_DELETE_PLANT,
         SERVICE_SET_YARD_MAP,
         SERVICE_ADD_PLANT_PHOTO,
+        SERVICE_SET_PLANT_HEALTH,
     ):
         if hass.services.has_service(DOMAIN, svc):
             hass.services.async_remove(DOMAIN, svc)

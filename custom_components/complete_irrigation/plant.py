@@ -54,6 +54,10 @@ class PlantRecord:
     # {"ts": epoch-int, "path": "/local/.../<id>/<ts>.jpg", "note": str}. Immutable
     # tuple; newest-first. Absent in older records -> empty.
     photos: tuple[dict[str, Any], ...] = ()
+    # v1.33 — latest biannual vision-health report (bounded by vision_health's rail
+    # before it is stored here). A serialized HealthReport dict, or None if the plant
+    # has never been assessed. Advisory only; absent in pre-v1.33 records -> None.
+    health: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if not self.id:
@@ -89,6 +93,10 @@ class PlantRecord:
         for p in self.photos:
             if not isinstance(p, dict) or not p.get("path"):
                 raise ValueError("each photo must be a dict with a non-empty 'path'")
+        # Health: None or a dict (its contents are already bounded by the vision_health
+        # rail before storage). Keep the record-level check light + advisory.
+        if self.health is not None and not isinstance(self.health, dict):
+            raise ValueError("health must be a dict or None")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -100,6 +108,7 @@ class PlantRecord:
             "map_x": self.map_x,
             "map_y": self.map_y,
             "photos": [dict(p) for p in self.photos],
+            "health": dict(self.health) if isinstance(self.health, dict) else None,
         }
 
     @classmethod
@@ -132,6 +141,7 @@ class PlantRecord:
             map_x=_coord("map_x"),
             map_y=_coord("map_y"),
             photos=photos,
+            health=data.get("health") if isinstance(data.get("health"), dict) else None,
         )
 
     def to_calc_plant(self) -> Plant:
