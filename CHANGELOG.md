@@ -4,6 +4,16 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.33.2 — 2026-07-05 — patch
+
+- **Fixed: the Today screen showed the wrong version (stuck at "v1.19.0").** The panel's
+  on-screen version was a hardcoded JS constant that was never bumped past v1.19.0, so a
+  correctly-installed newer version still displayed 1.19. Now shows the real version, and
+  `release.sh` gates on it so it can't drift again.
+- Rolls up the packaging/CI fixes that landed after 1.33.1: `hacs.json` reduced to the
+  form current HACS accepts (dropped `render_readme`), all number-selector `step`s use
+  `any` (hassfest), and the vision-health actuation filter broadened + NFKC-normalized.
+
 ## v1.33.1 — 2026-07-03 — patch
 
 - **Vision-health: a NaN/Inf confidence can no longer be stored.** A model returning a

@@ -45,9 +45,13 @@ pass "on main, working tree clean"
 step "2/6  Verify version strings match $VERSION"
 manifest_v=$(python3 -c 'import json; print(json.load(open("custom_components/complete_irrigation/manifest.json"))["version"])')
 pyproj_v=$(grep -E '^version = ' pyproject.toml | head -1 | sed -E 's/version = "([^"]+)"/\1/')
+# The panel's on-screen version is a hardcoded JS constant — gate it here so it can
+# never silently drift from the release again (it was stuck at v1.19.0 for many releases).
+panel_v=$(grep -oE 'PANEL_VERSION *= *"[^"]+"' custom_components/complete_irrigation/frontend/complete-irrigation-panel.js | head -1 | sed -E 's/.*"v?([^"]+)".*/\1/')
 [ "$manifest_v" = "$VERSION" ] || die "manifest.json version is $manifest_v, expected $VERSION"
 [ "$pyproj_v" = "$VERSION" ] || die "pyproject.toml version is $pyproj_v, expected $VERSION"
-pass "manifest.json + pyproject.toml both say $VERSION"
+[ "$panel_v" = "$VERSION" ] || die "PANEL_VERSION is $panel_v, expected $VERSION (bump it in complete-irrigation-panel.js)"
+pass "manifest.json + pyproject.toml + PANEL_VERSION all say $VERSION"
 
 step "3/6  Verify tag does not already exist"
 git rev-parse --verify "refs/tags/$TAG" >/dev/null 2>&1 && \
