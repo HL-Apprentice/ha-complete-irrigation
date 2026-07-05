@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import math
 import re
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -40,10 +41,13 @@ _DEFAULT_CONFIDENCE = 0.5
 # item that smells like an actuation command / service call / entity target, so a
 # hallucinating model can't surface "turn on switch.citrus" or "call run_zone" as
 # guidance the user might act on blindly (or that a future automation might parse).
+# Matched against the NFKC-normalized string (see _clean_items) so a fullwidth-period
+# homoglyph (U+FF0E) in "switch<.>citrus" can't slip past the "switch." pattern.
 _ACTUATION_RE = re.compile(
-    r"(turn\s+(on|off)|run_zone|switch\.|service|call\s+\w+\.\w+|set\s+\w+\s*=|"
-    r"\b(activate|energize|engage)\b|"
-    r"\b(start|open|enable|trigger|begin|run)\s+(the\s+)?(zone|valve|schedule|irrigation|watering)\b)",
+    r"(turn\s+(on|off)|power\s+(on|off|up)|run_zone|switch\.|service|call\s+\w+\.\w+|"
+    r"set\s+\w+\s*=|\b(activate|energize|engage|press)\b|"
+    r"\b(start|stop|open|close|enable|disable|trigger|begin|run|fire)\s+"
+    r"(the\s+)?(zone|valve|schedule|irrigation|watering|pump|sprinkler|cycle|system)\b)",
     re.IGNORECASE,
 )
 
@@ -98,7 +102,9 @@ def _clean_items(v, *, cap: int) -> tuple[str, ...]:
         s = _clean_text(item, _MAX_ITEM_CHARS)
         if not s:
             continue
-        if _ACTUATION_RE.search(s):
+        # Match on the NFKC-normalized form so a fullwidth-period homoglyph (U+FF0E)
+        # can't evade the actuation filter.
+        if _ACTUATION_RE.search(unicodedata.normalize("NFKC", s)):
             continue  # advisory guidance only — never an actuation instruction
         out.append(s)
         if len(out) >= cap:

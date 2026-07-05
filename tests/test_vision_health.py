@@ -168,6 +168,25 @@ def test_rail_strips_actuation_in_concerns_too():
     assert not any("turn off" in c.lower() for c in r.concerns)
 
 
+def test_rail_broadened_verbs_and_homoglyphs():
+    # v1.33 polish: broadened verb/noun set + NFKC normalization so more actuation
+    # phrasings and fullwidth/homoglyph evasions are dropped. Legit prose is kept.
+    care = _validate(
+        _valid_raw(
+            suggested_care=[
+                "Give it more morning sun.",  # legit -> kept
+                "Open the valve for an hour.",  # actuation -> dropped
+                "Enable the schedule today.",  # actuation -> dropped
+                "Trigger the irrigation cycle.",  # actuation -> dropped
+                "Press the run button.",  # actuation -> dropped
+                "Turn on switch．citrus now.",  # noqa: RUF001  # homoglyph switch. -> dropped
+                "Prune the dead tips.",  # legit -> kept
+            ]
+        )
+    ).suggested_care
+    assert care == ("Give it more morning sun.", "Prune the dead tips.")
+
+
 # ── due_for_review ──────────────────────────────────────────────────
 
 
