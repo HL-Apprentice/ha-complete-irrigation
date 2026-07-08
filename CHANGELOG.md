@@ -4,11 +4,27 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
-## v1.33.3 — 2026-07-07 — patch
+## v1.34.0 — 2026-07-07 — minor
 
-Watering-core + vision-job hardening from a 4-model loop review (Claude + Grok +
-Gemini + Qwen, adversarially verified). No new features; no regressions — every
-prior loop-review guard re-verified intact.
+**Fixes a real watering outage: after an app update restarted HA mid-run, short
+schedules (a birdbath on its own water line) silently stopped firing.**
+
+- **Independent-supply zones.** A zone can now be marked as being on its own water
+  line (config `independent_zones`) — it is exempt from one-zone-at-a-time
+  serialization, so it fires on schedule, concurrently with any other zone, and
+  never blocks (or is blocked by) the shared controller. This is the correct model
+  for a birdbath fill that doesn't share the drip manifold's pressure; its midday
+  runs were being deferred behind the multi-hour Citrus/Trees runs and dropped.
+- **Orphaned-session self-heal.** A chunked run interrupted before its final block
+  (e.g. an HA restart mid-sequence) never cleared its run session; the stale record
+  then *phantom-reserved* the one-zone controller for its whole original window,
+  silently blocking other zones. Finished sessions are now pruned every tick (and on
+  the next tick after a restart), so an interrupted run can no longer starve the yard.
+  This is the direct cause of the birdbath outage after the HACS update to v1.33.
+
+Also rolls up the watering-core + vision-job hardening from the 4-model loop review
+(Claude + Grok + Gemini + Qwen, adversarially verified) — no regressions, every
+prior guard re-verified intact:
 
 - **Fixed: auto-soak could truncate a live same-zone run.** The soak *re-cycle*
   branch was missing the "this zone's valve is already on → let the run finish"

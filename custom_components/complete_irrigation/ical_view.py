@@ -82,7 +82,9 @@ class IrrigationCalendarICSView(HomeAssistantView):
         )
         runs = [
             r
-            for r in resolve_conflicts(raw, POLICY_DEFER_NEW)
+            for r in resolve_conflicts(
+                raw, POLICY_DEFER_NEW, independent_zones=coord.independent_zones
+            )
             if not r.reason.startswith("skipped:")
         ]
 

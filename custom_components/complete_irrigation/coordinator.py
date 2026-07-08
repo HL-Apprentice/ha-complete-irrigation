@@ -28,6 +28,7 @@ from .conflict_resolver import (
     REASON_DEFERRED_LATE,
     committed_runs_from_sessions,
     resolve_conflicts,
+    stale_session_zones,
 )
 from .const import (
     DEFAULT_BUFFER_MINUTES,
@@ -249,6 +250,16 @@ class ScheduleCoordinator:
     @property
     def config(self) -> dict[str, Any]:
         return self._config
+
+    @property
+    def independent_zones(self) -> frozenset[str]:
+        """Zones on their OWN water supply (e.g. a birdbath fill that does not share the
+        drip manifold's pressure). They are exempt from one-zone-at-a-time serialization:
+        they fire on schedule, concurrent with any other zone, and never block others.
+        Public so the panel / calendar / iCal resolvers apply the same exemption the tick
+        does — a partial application would let the zone leak back into serialization."""
+        raw = self._config.get("independent_zones") or []
+        return frozenset(str(z) for z in raw if z)
 
     @property
     def run_history(self) -> RunHistoryStore:
@@ -674,7 +685,15 @@ class ScheduleCoordinator:
         # time. The live registry is active_run_sessions (persisted by the run
         # services). A manual run is invisible to next_runs (it's not a schedule),
         # so this is the only thing that stops a schedule colliding with it.
-        committed = committed_runs_from_sessions(self._config.get("active_run_sessions") or {}, now)
+        # Self-heal orphaned sessions first: a chunked run interrupted before its final
+        # block (e.g. an HA restart mid-sequence) never clears its record, and the stale
+        # session then phantom-reserves the one-zone controller for its whole original
+        # window — silently blocking other zones. Prune the finished ones every tick.
+        self._prune_stale_sessions(now)
+        independent = self.independent_zones
+        committed = committed_runs_from_sessions(
+            self._config.get("active_run_sessions") or {}, now, independent_zones=independent
+        )
         if committed:
             # Drop the already-fired scheduled occurrence a committed session stands
             # in for (its start is in the past) so the resolver models ONE busy
@@ -694,6 +713,7 @@ class ScheduleCoordinator:
             committed + upcoming,
             policy,
             compress_floor_pct=100,  # 100 = no compression (defer-late only)
+            independent_zones=independent,
         )
         due = due_runs_since(resolved, last, now)
         # Committed runs are blockers ONLY — never (re)fire one even if its actual
@@ -953,6 +973,26 @@ class ScheduleCoordinator:
         current = combine_moisture(readings, combine_mode)
         return current, analysis_ids, readings, sorted(excluded & set(moisture_entities))
 
+    def _prune_stale_sessions(self, now: datetime) -> None:
+        """Drop run sessions whose deadline (+ buffer + catch margin) has passed. An
+        orphaned session — a chunked run interrupted before its final block never cleared
+        its record — otherwise lingers and phantom-reserves the one-zone controller for
+        its whole original window, silently blocking other zones (this is exactly how an
+        app update that restarts HA mid-run could stop watering). Such a session is
+        ALREADY ignored as a blocker (same threshold), so pruning changes no scheduling
+        decision — it only stops orphans surviving across restarts, so the store self-heals.
+        """
+        sessions = self._config.get("active_run_sessions")
+        if not sessions:
+            return
+        stale = stale_session_zones(sessions, now)
+        if not stale:
+            return
+        for zone in stale:
+            sessions.pop(zone, None)
+        _LOGGER.info("Pruned %d finished run session(s) from the store: %s", len(stale), stale)
+        self._hass.async_create_task(self.async_save_config())
+
     # ── Auto-soak recovery (v1.19) ────────────────────────────────
 
     def _other_zone_busy(self, zone_id: str, now: datetime) -> bool:
@@ -961,9 +1001,14 @@ class ScheduleCoordinator:
         scheduled tick is already serialized by resolve_conflicts, but AUTO-SOAK fires
         outside that path, so it must consult this before opening a valve or it could
         drive a second zone into a running one (hydraulic collision on a single-zone
-        controller). Reuses the same committed-blocker definition as the resolver."""
+        controller). Reuses the same committed-blocker definition as the resolver —
+        including the independent-supply exemption, so an independent zone's run neither
+        counts as busy here nor is itself gated by one."""
         sessions = self._config.get("active_run_sessions") or {}
-        return any(r.zone_entity_id != zone_id for r in committed_runs_from_sessions(sessions, now))
+        blockers = committed_runs_from_sessions(
+            sessions, now, independent_zones=self.independent_zones
+        )
+        return any(r.zone_entity_id != zone_id for r in blockers)
 
     async def _tick_auto_soak(self, now: datetime) -> None:
         """Closed-loop low-moisture recovery, driven once per tick.

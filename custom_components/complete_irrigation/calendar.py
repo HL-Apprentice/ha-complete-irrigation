@@ -84,7 +84,9 @@ class IrrigationCalendar(CalendarEntity):
         )
         upcoming = [
             r
-            for r in resolve_conflicts(raw, POLICY_DEFER_NEW)
+            for r in resolve_conflicts(
+                raw, POLICY_DEFER_NEW, independent_zones=self._coordinator.independent_zones
+            )
             if not r.reason.startswith("skipped:")
         ]
         event: CalendarEvent | None = None
@@ -111,7 +113,9 @@ class IrrigationCalendar(CalendarEntity):
         )
         runs = [
             r
-            for r in resolve_conflicts(raw, POLICY_DEFER_NEW)
+            for r in resolve_conflicts(
+                raw, POLICY_DEFER_NEW, independent_zones=self._coordinator.independent_zones
+            )
             if not r.reason.startswith("skipped:")
         ]
         return [_to_event(r) for r in runs]
