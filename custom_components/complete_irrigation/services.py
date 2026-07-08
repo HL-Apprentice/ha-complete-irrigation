@@ -32,9 +32,11 @@ from homeassistant.util import dt as dt_util
 
 from .care_tasks import (
     CARE_KINDS,
+    CARE_PLAN_PRESETS,
     MAX_INTERVAL_DAYS,
     MIN_INTERVAL_DAYS,
     CareTask,
+    seed_care_plan,
 )
 from .chunked_run import (
     DEFAULT_BLOCK_GAP_SECONDS,
@@ -108,6 +110,7 @@ SERVICE_ADD_CARE_TASK = "add_care_task"
 SERVICE_UPDATE_CARE_TASK = "update_care_task"
 SERVICE_DELETE_CARE_TASK = "delete_care_task"
 SERVICE_COMPLETE_CARE_TASK = "complete_care_task"
+SERVICE_SEED_CARE_PLAN = "seed_care_plan"  # v1.36 — one-tap plan from a preset
 
 _HHMM_RE = r"^([01]\d|2[0-3]):[0-5]\d$"  # quiet-hours 24h time, validated at the boundary
 
@@ -565,6 +568,13 @@ _UPDATE_CARE_TASK_SCHEMA = vol.Schema(
 )
 _DELETE_CARE_TASK_SCHEMA = vol.Schema({vol.Required("task_id"): cv.string})
 _COMPLETE_CARE_TASK_SCHEMA = vol.Schema({vol.Required("task_id"): cv.string})
+# v1.36 — one-tap care-plan seeding from a plant-type preset.
+_SEED_CARE_PLAN_SCHEMA = vol.Schema(
+    {
+        vol.Required("plant_id"): cv.string,
+        vol.Required("preset"): vol.In(sorted(CARE_PLAN_PRESETS)),
+    }
+)
 
 
 def _find_coordinator(hass: HomeAssistant):
@@ -1874,6 +1884,35 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         await coord.async_save_care_tasks()
         _LOGGER.info("Updated care task %s", merged.id)
 
+    async def handle_seed_care_plan(call: ServiceCall) -> None:
+        if not await _require_admin(hass, call):  # config write — admin only
+            return
+        data = _SEED_CARE_PLAN_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None:
+            return
+        plant = coord.plants.get(data["plant_id"])
+        if plant is None:
+            raise vol.Invalid(f"no such plant {data['plant_id']}")
+        tasks = seed_care_plan(plant.id, data["preset"], id_factory=lambda: uuid.uuid4().hex[:12])
+        # Idempotent: skip kinds the plant already has a task for.
+        existing_kinds = {t.kind for t in coord.care_tasks.for_plant(plant.id)}
+        added = 0
+        for t in tasks:
+            if t.kind in existing_kinds:
+                continue
+            coord.care_tasks.add(t)
+            added += 1
+        if added:
+            await coord.async_save_care_tasks()
+        _LOGGER.info(
+            "Seeded care plan '%s' for %s: %d task(s) added, %d already present",
+            data["preset"],
+            plant.name,
+            added,
+            len(tasks) - added,
+        )
+
     async def handle_delete_care_task(call: ServiceCall) -> None:
         if not await _require_admin(hass, call):  # destructive — admin only
             return
@@ -2089,6 +2128,9 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         SERVICE_COMPLETE_CARE_TASK,
         handle_complete_care_task,
         schema=_COMPLETE_CARE_TASK_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_SEED_CARE_PLAN, handle_seed_care_plan, schema=_SEED_CARE_PLAN_SCHEMA
     )
 
     # ── Weather + per-zone moisture configuration ──────────────────
@@ -2359,6 +2401,7 @@ def _async_unregister_services(hass: HomeAssistant) -> None:
         SERVICE_UPDATE_CARE_TASK,
         SERVICE_DELETE_CARE_TASK,
         SERVICE_COMPLETE_CARE_TASK,
+        SERVICE_SEED_CARE_PLAN,
     ):
         if hass.services.has_service(DOMAIN, svc):
             hass.services.async_remove(DOMAIN, svc)

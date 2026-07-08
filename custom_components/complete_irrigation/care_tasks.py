@@ -141,6 +141,32 @@ class CareTask:
         )
 
 
+# v1.36 — one-tap care-plan presets: sensible starting cadences per plant type
+# (fertilize/prune are Arizona-friendly defaults; the user edits intervals after).
+CARE_PLAN_PRESETS: dict[str, tuple[tuple[str, int], ...]] = {
+    "tree": ((KIND_FERTILIZE, 90), (KIND_MULCH, 365), (KIND_INSPECT, 30)),
+    "shrub": ((KIND_FERTILIZE, 60), (KIND_PRUNE, 180), (KIND_INSPECT, 30)),
+    "flower": ((KIND_FERTILIZE, 30), (KIND_INSPECT, 14)),
+    "cactus_succulent": ((KIND_FERTILIZE, 180), (KIND_INSPECT, 60)),
+    "grass": ((KIND_FERTILIZE, 45), (KIND_INSPECT, 30)),
+}
+
+
+def seed_care_plan(plant_id: str, preset: str, *, id_factory) -> list[CareTask]:
+    """Build the preset's CareTasks for a plant (ids from id_factory). Pure —
+    the caller dedupes against existing tasks and persists. Raises ValueError
+    on an unknown preset (surfaced as a validation error at the boundary)."""
+    plan = CARE_PLAN_PRESETS.get(preset)
+    if plan is None:
+        raise ValueError(
+            f"unknown care-plan preset {preset!r}; expected one of {sorted(CARE_PLAN_PRESETS)}"
+        )
+    return [
+        CareTask(id=str(id_factory()), kind=kind, interval_days=days, plant_id=plant_id)
+        for kind, days in plan
+    ]
+
+
 class CareTaskStore:
     """In-memory dict of CareTask by id (insertion-ordered), PlantStore-shaped."""
 

@@ -1024,3 +1024,29 @@ complete_care_task:
       required: true
       selector:
         text:
+
+seed_care_plan:
+  name: Seed care plan
+  description: >
+    One-tap starter care plan for a plant — creates the preset's fertilize /
+    prune / mulch / inspect reminders (skipping kinds the plant already has).
+    Edit the intervals afterwards to taste.
+  fields:
+    plant_id:
+      name: Plant ID
+      description: The plant to seed a plan for.
+      required: true
+      selector:
+        text:
+    preset:
+      name: Preset
+      description: The plant type whose starter cadences to apply.
+      required: true
+      selector:
+        select:
+          options:
+            - tree
+            - shrub
+            - flower
+            - cactus_succulent
+            - grass
