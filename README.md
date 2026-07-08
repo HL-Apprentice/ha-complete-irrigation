@@ -1,19 +1,19 @@
-<img width="1160" height="1284" alt="Screenshot 2026-05-23 at 11 56 42 AM" src="https://github.com/user-attachments/assets/58d82873-8c9e-4b87-bce1-8d3227d2aefe" />
-<img width="1168" height="437" alt="Screenshot 2026-05-23 at 11 56 19 AM" src="https://github.com/user-attachments/assets/f46f279f-a121-4176-a70f-8eee165825ed" />
-<img width="1163" height="498" alt="Screenshot 2026-05-23 at 11 56 11 AM" src="https://github.com/user-attachments/assets/9b908ac6-43df-4f8e-92e2-1b9f5d2e8550" />
-<img width="1168" height="459" alt="Screenshot 2026-05-23 at 11 55 59 AM" src="https://github.com/user-attachments/assets/aaf05b2f-17ba-4145-baa2-a3f31702648d" />
-<img width="1163" height="651" alt="Screenshot 2026-05-23 at 11 55 52 AM" src="https://github.com/user-attachments/assets/c387e855-fdc8-40c4-ac5b-1fe58875f21a" />
-<img width="1164" height="999" alt="Screenshot 2026-05-23 at 11 55 41 AM" src="https://github.com/user-attachments/assets/c92e31fb-8507-4557-975c-ac7bc815d8f6" />
-<img width="900" height="1284" alt="Screenshot 2026-05-23 at 11 53 47 AM" src="https://github.com/user-attachments/assets/fa82853c-5eee-4de2-9d01-692fbf0b2b3c" />
+<img width="1160" height="1284" alt="Screenshot 2026-05-23 at 11 56 42 AM" src="https://raw.githubusercontent.com/HL-Apprentice/ha-complete-irrigation/main/assets/screenshots/panel-1.png" />
+<img width="1168" height="437" alt="Screenshot 2026-05-23 at 11 56 19 AM" src="https://raw.githubusercontent.com/HL-Apprentice/ha-complete-irrigation/main/assets/screenshots/panel-2.png" />
+<img width="1163" height="498" alt="Screenshot 2026-05-23 at 11 56 11 AM" src="https://raw.githubusercontent.com/HL-Apprentice/ha-complete-irrigation/main/assets/screenshots/panel-3.png" />
+<img width="1168" height="459" alt="Screenshot 2026-05-23 at 11 55 59 AM" src="https://raw.githubusercontent.com/HL-Apprentice/ha-complete-irrigation/main/assets/screenshots/panel-4.png" />
+<img width="1163" height="651" alt="Screenshot 2026-05-23 at 11 55 52 AM" src="https://raw.githubusercontent.com/HL-Apprentice/ha-complete-irrigation/main/assets/screenshots/panel-5.png" />
+<img width="1164" height="999" alt="Screenshot 2026-05-23 at 11 55 41 AM" src="https://raw.githubusercontent.com/HL-Apprentice/ha-complete-irrigation/main/assets/screenshots/panel-6.png" />
+<img width="900" height="1284" alt="Screenshot 2026-05-23 at 11 53 47 AM" src="https://raw.githubusercontent.com/HL-Apprentice/ha-complete-irrigation/main/assets/screenshots/panel-7.png" />
 <p align="center">
-  <img src="assets/icon.png" alt="Complete Irrigation" width="160" height="160" />
+  <img src="https://raw.githubusercontent.com/HL-Apprentice/ha-complete-irrigation/main/assets/icon.png" alt="Complete Irrigation" width="160" height="160" />
 </p>
 
 # HA Complete Irrigation Integration
 
 A Home Assistant custom integration for complete, sensor-driven irrigation control. Works with any controller that exposes zone switches.
 
-> **Latest: v1.23.0.** Smoke-tested against a real HA container per the 3-check protocol every release. Back up your HA before installing; report bugs at the [issues page](https://github.com/HL-Apprentice/ha-complete-irrigation/issues). Security issues: see [SECURITY.md](SECURITY.md). See [CHANGELOG.md](CHANGELOG.md) for what's new.
+> **Smoke-tested against a real HA container per the 3-check protocol every release.** Back up your HA before installing; report bugs at the [issues page](https://github.com/HL-Apprentice/ha-complete-irrigation/issues). Security issues: see [SECURITY.md](SECURITY.md). See [CHANGELOG.md](CHANGELOG.md) for what's new.
 
 ## What it does
 
