@@ -220,7 +220,7 @@ async def list_planned_runs(hass, connection, msg):
         until_dt=until_dt,
         zone_buffer_seconds=coord.config.get("zone_buffer_seconds"),
     )
-    resolved = resolve_conflicts(raw, POLICY_DEFER_NEW)
+    resolved = resolve_conflicts(raw, POLICY_DEFER_NEW, independent_zones=coord.independent_zones)
 
     # v1.18 — attach each schedule's color so the day calendar can tint
     # pills. Build a {schedule_id: color} map once rather than per-run.

@@ -64,7 +64,10 @@ _BLOCKER_CATCH_MARGIN_MINUTES = 2
 
 
 def committed_runs_from_sessions(
-    sessions: dict, now: datetime, buffer_minutes: int = DEFAULT_BUFFER_MINUTES
+    sessions: dict,
+    now: datetime,
+    buffer_minutes: int = DEFAULT_BUFFER_MINUTES,
+    independent_zones: frozenset[str] = frozenset(),
 ) -> list[PlannedRun]:
     """v1.32 — turn the live ``active_run_sessions`` registry (zone -> session dict,
     persisted by the run services) into ``REASON_COMMITTED`` PlannedRuns the resolver
@@ -91,6 +94,8 @@ def committed_runs_from_sessions(
     for zone, s in sessions.items():
         if not zone or not isinstance(s, dict):
             continue
+        if zone in independent_zones:
+            continue  # independent-supply zone (own water line) never blocks the controller
         try:
             started = datetime.fromisoformat(s["started_at"])
             deadline = datetime.fromisoformat(s.get("deadline") or s["water_deadline"])
@@ -125,12 +130,47 @@ def committed_runs_from_sessions(
     return out
 
 
+def stale_session_zones(
+    sessions: dict, now: datetime, buffer_minutes: int = DEFAULT_BUFFER_MINUTES
+) -> list[str]:
+    """Zones whose run session is DEFINITIVELY finished — its deadline plus the same
+    inter-zone buffer + catch margin that ``committed_runs_from_sessions`` uses has
+    elapsed — so the record can be pruned from ``active_run_sessions``.
+
+    This is the self-heal for an ORPHANED session: a chunked run interrupted before its
+    final block (e.g. an HA restart mid-sequence) never clears its session, and the stale
+    record then phantom-reserves the one-zone controller for its whole original window.
+    Such a session is already ignored as a blocker (same threshold), so pruning it changes
+    no scheduling decision — it only stops orphans accumulating and lingering across
+    restarts. Conservative: a malformed / unparseable / tz-naive session is NOT reported
+    (left in place, and already ignored as a blocker) so a merely-weird record is never
+    dropped here.
+    """
+    out: list[str] = []
+    if not isinstance(sessions, dict) or now.tzinfo is None:
+        return out
+    keep = timedelta(minutes=max(0, buffer_minutes) + _BLOCKER_CATCH_MARGIN_MINUTES)
+    for zone, s in sessions.items():
+        if not zone or not isinstance(s, dict):
+            continue
+        try:
+            deadline = datetime.fromisoformat(s.get("deadline") or s["water_deadline"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if deadline.tzinfo is None:
+            continue
+        if deadline + keep <= now:
+            out.append(str(zone))
+    return out
+
+
 def resolve_conflicts(
     runs: list[PlannedRun],
     policy: str = POLICY_DEFER_NEW,
     buffer_minutes: int = DEFAULT_BUFFER_MINUTES,
     cascade_cap_minutes: int = DEFAULT_CASCADE_CAP_MINUTES,
     compress_floor_pct: int = DEFAULT_COMPRESS_FLOOR_PCT,
+    independent_zones: frozenset[str] = frozenset(),
 ) -> list[PlannedRun]:
     """Serialize `runs` one-zone-at-a-time, ordered by start time.
 
@@ -140,9 +180,23 @@ def resolve_conflicts(
     its (actual) start and duration and acts only as a blocker — never
     moved, never compressed. The coordinator marks runs that way so an
     in-progress multi-hour run is respected.
+
+    A run whose zone is in `independent_zones` is on its OWN water supply (e.g. a
+    birdbath fill that does not share the drip manifold's pressure). It does not share
+    the single controller, so it is pulled out of serialization entirely: it fires at
+    its scheduled time, is never deferred/compressed by other zones, and never blocks
+    them. This is the correct model for a zone that can safely run concurrently.
     """
     if not runs:
         return []
+
+    # Independent-supply zones bypass one-zone-at-a-time completely.
+    independent: list[PlannedRun] = []
+    if independent_zones:
+        independent = [r for r in runs if r.zone_entity_id in independent_zones]
+        runs = [r for r in runs if r.zone_entity_id not in independent_zones]
+        if not runs:
+            return sorted(independent, key=lambda r: r.start_at)
 
     buffer = timedelta(minutes=buffer_minutes)
     cap_min = max(0, cascade_cap_minutes)
@@ -235,7 +289,7 @@ def resolve_conflicts(
         )
         for s in state
     ]
-    return sorted(committed_runs + resolved, key=lambda r: r.start_at)
+    return sorted(committed_runs + resolved + independent, key=lambda r: r.start_at)
 
 
 def _push_past_committed(start, dur, intervals, buffer):
