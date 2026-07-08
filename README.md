@@ -29,6 +29,11 @@ A Home Assistant custom integration for complete, sensor-driven irrigation contr
 - **Per-zone temperature + humidity sensors** (display-only) — chips on the Zones tab show live averaged values across multiple sensors.
 - **Notifications** via `notify.*` with master toggle, quiet hours window, morning summary, and **daily low-moisture alert** (fires once at quiet-hours-end if any zone sensor is below its min%).
 - **"New grass" establishment mode** — start from any zone row with a 🌱 button. Bounded multi-cycle schedule that auto-expires.
+- **Plant records + yard map** — per-plant WUCOLS water-need math, photo history with EXIF-GPS placement, and an aerial yard map with draggable markers.
+- **Vision health checks** — an external local vision model (e.g. on a home GPU) compares each plant's photos over time; verdicts are bounded by a safety rail and shown on the plant. Advisory only.
+- **Light surveys (v1.35)** — give a plant an optimal lux range, place a roaming illuminance sensor at it, and a timed survey stores min/avg/max + a too-little/optimal/too-much verdict.
+- **Care-task reminders (v1.35)** — recurring fertilize/prune/mulch/inspect reminders per plant or zone with last-done tracking; due tasks notify and re-nag weekly.
+- **Watering diagnosis (v1.35)** — 🩺 per zone: cross-checks moisture, 14-day run history, and vision concerns into a Signs → Confirm → Suggestions card. Advisory only.
 - **Custom sidebar panel** with Today / Schedules / Zones / Sensors / Weather / Notifications / Settings.
 - **Light + Dark themes** — Auto follows HA/OS preference; ☀️/🌙 toggle on Today cycles Light → Dark → Auto. All text WCAG AA contrast verified.
 - **User-arrangeable weather banner** — ⚙️ gear opens a modal to show/hide and reorder cells (condition, temp, humidity, wind, UV, sunrise/sunset, etc.). Layout persists in browser.

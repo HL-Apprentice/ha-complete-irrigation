@@ -4,6 +4,39 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.35.0 — 2026-07-08 — minor
+
+**Plant-care bundle: light surveys with a roaming lux sensor, recurring care-task
+reminders, species on plant records, and an advisory over/under-watering diagnosis
+card.** Feature set modeled on the best of the consumer plant-care apps
+(Picture This / SmartyPlants), adapted to an irrigation controller that can act on
+its own data. All new surfaces are advisory — nothing here changes watering.
+
+- **Light surveys (roaming lux sensor).** Each plant can carry an optimal
+  illuminance range (`set_plant_light_range`, or presets in the panel). Place a
+  portable lux sensor (e.g. an ESP32/VEML7700 Zigbee stake) at the plant and
+  `start_light_survey` samples it once a minute for a timed window (default
+  10 min), then stores min/avg/max + a verdict — too little / optimal / too much
+  light — on the plant (bounded history, newest-first) and notifies the result.
+  New rail `light_survey.py` bounds every stored value; a flaky sensor degrades
+  to a failed-survey notice, never a stored lie.
+- **Care-task reminders.** Recurring non-watering care (fertilize / prune / mulch /
+  inspect / custom) per plant or zone with last-done tracking (`add_care_task`,
+  `update_care_task`, `delete_care_task`, `complete_care_task` + a panel card).
+  Due tasks notify and re-nag weekly until marked done; completing re-arms the
+  interval from today. New pure module `care_tasks.py` + its own storage key.
+- **Species on plants.** `add_plant`/`update_plant` accept a free-text `species`
+  (common or scientific name) shown in the plant editor.
+- **Watering diagnosis card.** New `watering_diagnosis.py` rail cross-checks a
+  zone's current moisture vs thresholds, its 14-day run history (completed /
+  already-moist skips / aborted), and vision-health concern keywords, and renders
+  a Signs → How to confirm → Suggestions card (🩺 Diagnose on each zone row).
+  Soil evidence outranks keywords — vision concerns alone never trip a verdict;
+  conflicting evidence reports "unknown" with a sensor sanity-check prompt.
+  Advisory only: it suggests schedule changes, it never applies them.
+- New WS commands: `list_care_tasks`, `watering_diagnosis`; `list_plants` now also
+  returns live light-survey progress. All admin-gated like the rest of the API.
+
 ## v1.34.0 — 2026-07-07 — minor
 
 **Fixes a real watering outage: after an app update restarted HA mid-run, short

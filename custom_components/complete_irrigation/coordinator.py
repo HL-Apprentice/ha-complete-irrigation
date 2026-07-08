@@ -19,6 +19,7 @@ from collections.abc import Callable
 from datetime import datetime, time, timedelta
 from typing import TYPE_CHECKING, Any
 
+from .care_tasks import CareTaskStore
 from .conflict_resolver import (
     DEFAULT_CASCADE_CAP_MINUTES,
     POLICY_DEFER_NEW,
@@ -51,9 +52,19 @@ from .coordinator_logic import (
 )
 from .et_calc import SANE_ETO_MAX, select_eto, weekly_eto_inches_from_forecast
 from .hydraulics import DEFAULT_ETO_IN_WEEK
+from .light_survey import (
+    MAX_SURVEYS_KEPT as _MAX_SURVEYS_KEPT,
+)
+from .light_survey import (
+    light_verdict,
+    make_survey_entry,
+    summarize_samples,
+    verdict_text,
+)
 from .moisture_gate import COMBINE_AVERAGE, combine_moisture, evaluate_moisture
 from .notifications import (
     CATEGORY_IMPORTANT,
+    CATEGORY_INFORMATIONAL,
     NotificationDispatcher,
     _parse_hhmm,
 )
@@ -179,6 +190,25 @@ async def _async_load_plants(hass: HomeAssistant, entry_id: str) -> PlantStore:
     return PlantStore.from_serializable(data.get("plants", []))
 
 
+async def _async_load_care_tasks(hass: HomeAssistant, entry_id: str) -> CareTaskStore:
+    """v1.35 — load the recurring care-task reminders."""
+    from homeassistant.helpers.storage import Store
+
+    helper = Store(hass, STORAGE_VERSION, _storage_key(entry_id, "care_tasks"))
+    data = await helper.async_load()
+    if not data:
+        return CareTaskStore()
+    return CareTaskStore.from_serializable(data.get("care_tasks", []))
+
+
+async def _async_save_care_tasks(hass: HomeAssistant, entry_id: str, store: CareTaskStore) -> None:
+    """v1.35 — persist the care-task reminders."""
+    from homeassistant.helpers.storage import Store
+
+    helper = Store(hass, STORAGE_VERSION, _storage_key(entry_id, "care_tasks"))
+    await helper.async_save({"care_tasks": store.to_serializable()})
+
+
 async def _async_save_plants(hass: HomeAssistant, entry_id: str, store: PlantStore) -> None:
     from homeassistant.helpers.storage import Store
 
@@ -242,6 +272,16 @@ class ScheduleCoordinator:
         # interrupted by an HA restart (see _resume_interrupted_runs).
         self._cancel_resume = None
         self._resume_attempts = 0
+        # v1.35 — care-task reminders (fertilize/prune/mulch/inspect). Loaded in
+        # async_setup; mutated via the care-task services. Due-check runs on the
+        # tick, throttled to ~hourly.
+        self._care_tasks: CareTaskStore = CareTaskStore()
+        self._last_care_check: datetime | None = None
+        # v1.35 — active light-survey sessions, keyed by plant id. In-memory by
+        # design (a restart abandons the survey; the sensor stake is unharmed and
+        # the user simply re-starts). Each: {"sensor": entity_id, "until": datetime,
+        # "started": datetime, "minutes": int, "samples": [float, ...]}.
+        self._light_survey_sessions: dict[str, dict[str, Any]] = {}
 
     @property
     def schedule_store(self) -> ScheduleStore:
@@ -268,6 +308,10 @@ class ScheduleCoordinator:
     @property
     def plants(self) -> PlantStore:
         return self._plants
+
+    @property
+    def care_tasks(self) -> CareTaskStore:
+        return self._care_tasks
 
     def register_lockout_listener(self, callback: Callable[[], None]) -> None:
         self._lockout_listeners.append(callback)
@@ -298,6 +342,7 @@ class ScheduleCoordinator:
         self._config.setdefault("zones", {})
         self._run_history = await _async_load_run_history(self._hass, self._entry_id)
         self._plants = await _async_load_plants(self._hass, self._entry_id)
+        self._care_tasks = await _async_load_care_tasks(self._hass, self._entry_id)
         # Prune on load — drops anything past the 90-day window so the
         # store file shrinks over time even if the user rarely opens
         # the History tab.
@@ -599,6 +644,195 @@ class ScheduleCoordinator:
     async def async_save_plants(self) -> None:
         await _async_save_plants(self._hass, self._entry_id, self._plants)
 
+    async def async_save_care_tasks(self) -> None:
+        await _async_save_care_tasks(self._hass, self._entry_id, self._care_tasks)
+
+    # ── Light surveys (v1.35) ──────────────────────────────────────
+
+    def start_light_survey(self, plant_id: str, sensor_entity_id: str, minutes: int) -> None:
+        """Register a survey session; the tick samples it. Caller validated inputs."""
+        from homeassistant.util import dt as dt_util
+
+        now = dt_util.now()
+        self._light_survey_sessions[plant_id] = {
+            "sensor": sensor_entity_id,
+            "started": now,
+            "until": now + timedelta(minutes=minutes),
+            "minutes": minutes,
+            "samples": [],
+        }
+
+    def cancel_light_survey(self, plant_id: str) -> bool:
+        return self._light_survey_sessions.pop(plant_id, None) is not None
+
+    def light_survey_status(self) -> dict[str, dict[str, Any]]:
+        """Active sessions for the WS layer/panel: plant_id -> progress info."""
+        out: dict[str, dict[str, Any]] = {}
+        for pid, s in self._light_survey_sessions.items():
+            out[pid] = {
+                "sensor": s["sensor"],
+                "started": s["started"].isoformat(),
+                "until": s["until"].isoformat(),
+                "minutes": s["minutes"],
+                "samples": len(s["samples"]),
+            }
+        return out
+
+    def _sample_light_sensor(self, entity_id: str) -> float | None:
+        state = self._hass.states.get(entity_id)
+        if state is None or state.state in ("unknown", "unavailable"):
+            return None
+        try:
+            return float(state.state)
+        except (TypeError, ValueError):
+            return None
+
+    async def _tick_light_surveys(self, now: datetime) -> None:
+        """Sample each active survey once per tick; finish + store when due."""
+        if not self._light_survey_sessions:
+            return
+        finished: list[str] = []
+        for pid, sess in self._light_survey_sessions.items():
+            val = self._sample_light_sensor(sess["sensor"])
+            if val is not None:
+                sess["samples"].append(val)
+            if now >= sess["until"]:
+                finished.append(pid)
+        for pid in finished:
+            sess = self._light_survey_sessions.pop(pid)
+            await self._finish_light_survey(pid, sess, now)
+
+    async def _finish_light_survey(
+        self, plant_id: str, sess: dict[str, Any], now: datetime
+    ) -> None:
+        from dataclasses import replace as _dc_replace
+
+        plant = self._plants.get(plant_id)
+        summary = summarize_samples(sess["samples"])
+        if plant is None or summary is None:
+            # Plant deleted mid-survey, or the sensor never produced a usable
+            # reading — report the failure instead of storing a lie.
+            name = plant.name if plant is not None else plant_id
+            _LOGGER.warning(
+                "Light survey for %s produced no usable samples (sensor %s)", name, sess["sensor"]
+            )
+            if self.notifier is not None and plant is not None:
+                await self.notifier.notify(
+                    f"Light survey for {plant.name} collected no usable readings from "
+                    f"{sess['sensor']} — check the sensor and try again.",
+                    title="Light survey failed",
+                    category=CATEGORY_INFORMATIONAL,
+                    event_type="light_survey_failed",
+                )
+            return
+        verdict = light_verdict(summary["lux_avg"], plant.lux_low, plant.lux_high)
+        entry = make_survey_entry(
+            ts=int(now.timestamp()),
+            minutes=sess["minutes"],
+            sensor_entity_id=sess["sensor"],
+            summary=summary,
+            verdict=verdict,
+        )
+        surveys = (entry, *plant.light_surveys)[:_MAX_SURVEYS_KEPT]
+        self._plants.upsert(_dc_replace(plant, light_surveys=surveys))
+        await self.async_save_plants()
+        if self.notifier is not None:
+            await self.notifier.notify(
+                f"{verdict_text(verdict, plant.name)} "
+                f"(avg {summary['lux_avg']:.0f} lux over {summary['samples']} readings"
+                + (
+                    f"; optimal {plant.lux_low}-{plant.lux_high} lux)"
+                    if plant.lux_low is not None
+                    else ")"
+                ),
+                title="Light survey complete",
+                category=CATEGORY_INFORMATIONAL,
+                event_type="light_survey_complete",
+            )
+
+    # ── Watering diagnosis (v1.35) ─────────────────────────────────
+
+    def diagnose_zone_watering(self, zone_entity_id: str):
+        """Assemble live inputs for the pure diagnosis rail. Advisory only."""
+        from homeassistant.util import dt as dt_util
+
+        from .watering_diagnosis import diagnose_zone
+
+        zone_cfg = (self._config.get("zones") or {}).get(zone_entity_id) or {}
+        current = None
+        if zone_cfg.get("moisture_entities"):
+            current, analysis_ids, _readings, _excl = self._zone_moisture_reading(zone_cfg)
+            if not analysis_ids:
+                current = None
+
+        def _pct(key: str, default: float | None) -> float | None:
+            v = zone_cfg.get(key, default)
+            try:
+                f = float(v)
+            except (TypeError, ValueError):
+                return None
+            return f if math.isfinite(f) else None
+
+        # Vision-health concerns from this zone's plants (bounded by the v1.33 rail).
+        concerns: list[str] = []
+        for p in self._plants.by_zone(zone_entity_id):
+            if isinstance(p.health, dict):
+                concerns.extend(
+                    str(c) for c in (p.health.get("concerns") or []) if isinstance(c, str)
+                )
+
+        # Thresholds default to the zone-config values only when sensors exist;
+        # a sensorless zone keeps None thresholds -> STATUS_UNKNOWN from the rail.
+        have_sensors = bool(zone_cfg.get("moisture_entities"))
+        return diagnose_zone(
+            zone_entity_id=zone_entity_id,
+            now=dt_util.now(),
+            current_pct=current,
+            min_pct=_pct("min_pct", DEFAULT_ZONE_MIN_PCT) if have_sensors else None,
+            target_pct=_pct("target_pct", DEFAULT_ZONE_TARGET_PCT) if have_sensors else None,
+            max_pct=_pct("max_pct", DEFAULT_ZONE_MAX_PCT) if have_sensors else None,
+            history=self._run_history.all(),
+            plant_concerns=concerns,
+        )
+
+    # ── Care-task reminders (v1.35) ────────────────────────────────
+
+    async def _tick_care_reminders(self, now: datetime) -> None:
+        """Hourly: notify care tasks that are due (weekly re-nag, quiet-hours
+        handled by the notifier's own delivery rules)."""
+        if self._last_care_check is not None and now - self._last_care_check < timedelta(hours=1):
+            return
+        self._last_care_check = now
+        now_ts = int(now.timestamp())
+        due = self._care_tasks.needing_reminder(now_ts)
+        if not due:
+            return
+        changed = False
+        for task in due:
+            subject = None
+            if task.plant_id:
+                plant = self._plants.get(task.plant_id)
+                if plant is None:
+                    continue  # dangling task; leave for the user to clean up
+                subject = plant.name
+            else:
+                zone_state = self._hass.states.get(task.zone_entity_id)
+                subject = (
+                    zone_state.attributes.get("friendly_name") if zone_state else None
+                ) or task.zone_entity_id
+            if self.notifier is not None:
+                await self.notifier.notify(
+                    f"{task.display_name()} — {subject} is due (every {task.interval_days} "
+                    "days). Mark it done in the panel's Yard tab when finished.",
+                    title="Plant care due",
+                    category=CATEGORY_INFORMATIONAL,
+                    event_type="care_task_due",
+                )
+            self._care_tasks.upsert(task.notified(now_ts))
+            changed = True
+        if changed:
+            await self.async_save_care_tasks()
+
     def clear_lockout(self) -> None:
         if self.lockout_until is not None:
             self.lockout_until = None
@@ -640,6 +874,14 @@ class ScheduleCoordinator:
         # lockout internally; runs even when the schedule path below
         # early-returns during lockout).
         await self._tick_auto_soak(now)
+
+        # v1.35 — sample active light surveys + hourly care-reminder check.
+        # Both are advisory-only and must never break the watering tick.
+        try:
+            await self._tick_light_surveys(now)
+            await self._tick_care_reminders(now)
+        except Exception:
+            _LOGGER.exception("Care/light tick failed (advisory features; watering unaffected)")
 
         # v1.17.3 — if locked out, only schedules with
         # ignore_rain_lockout=True still fire. Others wait for the

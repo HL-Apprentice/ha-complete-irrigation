@@ -30,6 +30,12 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.event import async_call_later, async_track_state_change_event
 from homeassistant.util import dt as dt_util
 
+from .care_tasks import (
+    CARE_KINDS,
+    MAX_INTERVAL_DAYS,
+    MIN_INTERVAL_DAYS,
+    CareTask,
+)
 from .chunked_run import (
     DEFAULT_BLOCK_GAP_SECONDS,
     DEFAULT_CONTROLLER_MAX_RUN_MIN,
@@ -37,6 +43,12 @@ from .chunked_run import (
 )
 from .const import DEFAULT_MANUAL_RUN_MINUTES, DOMAIN, MAX_SCHEDULE_DURATION_MIN
 from .hydraulics import WUCOLS_FACTORS
+from .light_survey import (
+    DEFAULT_SURVEY_MINUTES,
+    MAX_SURVEY_MINUTES,
+    MIN_SURVEY_MINUTES,
+    validate_lux_range,
+)
 from .manual_run import ManualRun, validate_run_duration
 from .notifications import CATEGORY_CRITICAL  # v1.16: promoted from inline imports
 from .plant import PlantRecord
@@ -88,6 +100,14 @@ SERVICE_DELETE_PLANT = "delete_plant"
 SERVICE_SET_YARD_MAP = "set_yard_map"  # v1.30 — fetch + cache the aerial backdrop
 SERVICE_ADD_PLANT_PHOTO = "add_plant_photo"  # v1.32 — per-plant photo + EXIF-GPS place
 SERVICE_SET_PLANT_HEALTH = "set_plant_health"  # v1.33 — store a vision-health verdict
+# v1.35 — light surveys + care-task reminders
+SERVICE_SET_PLANT_LIGHT_RANGE = "set_plant_light_range"
+SERVICE_START_LIGHT_SURVEY = "start_light_survey"
+SERVICE_CANCEL_LIGHT_SURVEY = "cancel_light_survey"
+SERVICE_ADD_CARE_TASK = "add_care_task"
+SERVICE_UPDATE_CARE_TASK = "update_care_task"
+SERVICE_DELETE_CARE_TASK = "delete_care_task"
+SERVICE_COMPLETE_CARE_TASK = "complete_care_task"
 
 _HHMM_RE = r"^([01]\d|2[0-3]):[0-5]\d$"  # quiet-hours 24h time, validated at the boundary
 
@@ -429,12 +449,16 @@ _START_ESTABLISHMENT_SCHEMA = vol.Schema(
 _WUCOLS_CATEGORIES = tuple(sorted(WUCOLS_FACTORS))
 _CANOPY_AREA = vol.All(vol.Coerce(float), vol.Range(min=0.1, max=100000))
 
+_SPECIES = vol.All(cv.string, vol.Length(max=120), _no_control_chars)
+
 _ADD_PLANT_SCHEMA = vol.Schema(
     {
         vol.Required("name"): vol.All(cv.string, vol.Length(min=1, max=80), _no_control_chars),
         vol.Required("wucols_category"): vol.In(_WUCOLS_CATEGORIES),
         vol.Required("canopy_area_sqft"): _CANOPY_AREA,
         vol.Required("zone_entity_id"): cv.entity_id,
+        # v1.35 — optional species (common or scientific name, free text).
+        vol.Optional("species", default=""): _SPECIES,
     }
 )
 
@@ -450,6 +474,8 @@ _UPDATE_PLANT_SCHEMA = vol.Schema(
         # v1.30 — normalized yard-map position (set when a marker is dragged/placed).
         vol.Optional("map_x"): _MAP_COORD,
         vol.Optional("map_y"): _MAP_COORD,
+        # v1.35 — optional species (common or scientific name, free text).
+        vol.Optional("species"): _SPECIES,
     }
 )
 
@@ -489,6 +515,53 @@ _SET_PLANT_HEALTH_SCHEMA = vol.Schema(
         vol.Optional("model", default=""): vol.All(cv.string, vol.Length(max=80)),
     }
 )
+
+# v1.35 — per-plant optimal-lux range. Either both bounds (validated against each
+# other by light_survey.validate_lux_range in the handler) or clear=true to unset.
+_SET_PLANT_LIGHT_RANGE_SCHEMA = vol.Schema(
+    {
+        vol.Required("plant_id"): cv.string,
+        vol.Optional("lux_low"): vol.Coerce(int),
+        vol.Optional("lux_high"): vol.Coerce(int),
+        vol.Optional("clear", default=False): cv.boolean,
+    }
+)
+
+# v1.35 — roaming light survey: sample an illuminance sensor placed at the plant.
+_START_LIGHT_SURVEY_SCHEMA = vol.Schema(
+    {
+        vol.Required("plant_id"): cv.string,
+        vol.Required("sensor_entity_id"): cv.entity_id,
+        vol.Optional("minutes", default=DEFAULT_SURVEY_MINUTES): vol.All(
+            vol.Coerce(int), vol.Range(min=MIN_SURVEY_MINUTES, max=MAX_SURVEY_MINUTES)
+        ),
+    }
+)
+_CANCEL_LIGHT_SURVEY_SCHEMA = vol.Schema({vol.Required("plant_id"): cv.string})
+
+# v1.35 — care-task reminders (fertilize/prune/mulch/inspect/custom).
+_CARE_INTERVAL = vol.All(vol.Coerce(int), vol.Range(min=MIN_INTERVAL_DAYS, max=MAX_INTERVAL_DAYS))
+_CARE_LABEL = vol.All(cv.string, vol.Length(max=120), _no_control_chars)
+_ADD_CARE_TASK_SCHEMA = vol.Schema(
+    {
+        vol.Required("kind"): vol.In(CARE_KINDS),
+        vol.Required("interval_days"): _CARE_INTERVAL,
+        vol.Optional("plant_id", default=""): cv.string,
+        vol.Optional("zone_entity_id", default=""): cv.string,
+        vol.Optional("label", default=""): _CARE_LABEL,
+    }
+)
+_UPDATE_CARE_TASK_SCHEMA = vol.Schema(
+    {
+        vol.Required("task_id"): cv.string,
+        vol.Optional("kind"): vol.In(CARE_KINDS),
+        vol.Optional("interval_days"): _CARE_INTERVAL,
+        vol.Optional("label"): _CARE_LABEL,
+        vol.Optional("enabled"): cv.boolean,
+    }
+)
+_DELETE_CARE_TASK_SCHEMA = vol.Schema({vol.Required("task_id"): cv.string})
+_COMPLETE_CARE_TASK_SCHEMA = vol.Schema({vol.Required("task_id"): cv.string})
 
 
 def _find_coordinator(hass: HomeAssistant):
@@ -1483,6 +1556,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             wucols_category=data["wucols_category"],
             canopy_area_sqft=data["canopy_area_sqft"],
             zone_entity_id=data["zone_entity_id"],
+            species=data.get("species", ""),
         )
         coord.plants.add(plant)
         await coord.async_save_plants()
@@ -1508,6 +1582,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
                 "zone_entity_id",
                 "map_x",
                 "map_y",
+                "species",
             )
             if k in data
         }
@@ -1667,8 +1742,135 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         if coord is None:
             return
         if coord.plants.delete(data["plant_id"]):
+            coord.cancel_light_survey(data["plant_id"])  # v1.35 — drop any live survey
             await coord.async_save_plants()
             _LOGGER.info("Deleted plant %s", data["plant_id"])
+
+    # ── v1.35: light surveys ────────────────────────────────────────
+
+    async def handle_set_plant_light_range(call: ServiceCall) -> None:
+        if not await _require_admin(hass, call):  # config write — admin only
+            return
+        data = _SET_PLANT_LIGHT_RANGE_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None:
+            return
+        existing = coord.plants.get(data["plant_id"])
+        if existing is None:
+            _LOGGER.warning("set_plant_light_range: no such plant %s", data["plant_id"])
+            return
+        if data.get("clear"):
+            low = high = None
+        else:
+            if "lux_low" not in data or "lux_high" not in data:
+                raise vol.Invalid("provide both lux_low and lux_high, or clear=true")
+            low, high = validate_lux_range(data["lux_low"], data["lux_high"])
+        merged = replace(existing, lux_low=low, lux_high=high)
+        coord.plants.upsert(merged)
+        await coord.async_save_plants()
+        _LOGGER.info("Set light range for %s: %s..%s lux", merged.id, low, high)
+
+    async def handle_start_light_survey(call: ServiceCall) -> None:
+        if not await _require_admin(hass, call):  # drives sampling — admin only
+            return
+        data = _START_LIGHT_SURVEY_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None:
+            return
+        plant = coord.plants.get(data["plant_id"])
+        if plant is None:
+            _LOGGER.warning("start_light_survey: no such plant %s", data["plant_id"])
+            return
+        sensor = data["sensor_entity_id"]
+        if hass.states.get(sensor) is None:
+            raise vol.Invalid(f"sensor {sensor} does not exist")
+        coord.start_light_survey(plant.id, sensor, data["minutes"])
+        _LOGGER.info(
+            "Light survey started for %s (%s) on %s for %d min",
+            plant.name,
+            plant.id,
+            sensor,
+            data["minutes"],
+        )
+
+    async def handle_cancel_light_survey(call: ServiceCall) -> None:
+        if not await _require_admin(hass, call):
+            return
+        data = _CANCEL_LIGHT_SURVEY_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None:
+            return
+        if coord.cancel_light_survey(data["plant_id"]):
+            _LOGGER.info("Light survey cancelled for %s", data["plant_id"])
+
+    # ── v1.35: care-task reminders ──────────────────────────────────
+
+    async def handle_add_care_task(call: ServiceCall) -> None:
+        if not await _require_admin(hass, call):  # config write — admin only
+            return
+        data = _ADD_CARE_TASK_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None:
+            return
+        if data["plant_id"] and coord.plants.get(data["plant_id"]) is None:
+            raise vol.Invalid(f"no such plant {data['plant_id']}")
+        # CareTask.__post_init__ enforces plant-or-zone + custom-needs-label.
+        task = CareTask(
+            id=uuid.uuid4().hex[:12],
+            kind=data["kind"],
+            interval_days=data["interval_days"],
+            plant_id=data["plant_id"],
+            zone_entity_id=data["zone_entity_id"],
+            label=data["label"],
+        )
+        coord.care_tasks.add(task)
+        await coord.async_save_care_tasks()
+        _LOGGER.info("Added care task %s (%s every %dd)", task.id, task.kind, task.interval_days)
+
+    async def handle_update_care_task(call: ServiceCall) -> None:
+        if not await _require_admin(hass, call):
+            return
+        data = _UPDATE_CARE_TASK_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None:
+            return
+        existing = coord.care_tasks.get(data["task_id"])
+        if existing is None:
+            _LOGGER.warning("update_care_task: no such task %s", data["task_id"])
+            return
+        overrides = {k: data[k] for k in ("kind", "interval_days", "label", "enabled") if k in data}
+        merged = replace(existing, **overrides)
+        coord.care_tasks.upsert(merged)
+        await coord.async_save_care_tasks()
+        _LOGGER.info("Updated care task %s", merged.id)
+
+    async def handle_delete_care_task(call: ServiceCall) -> None:
+        if not await _require_admin(hass, call):  # destructive — admin only
+            return
+        data = _DELETE_CARE_TASK_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None:
+            return
+        if coord.care_tasks.delete(data["task_id"]):
+            await coord.async_save_care_tasks()
+            _LOGGER.info("Deleted care task %s", data["task_id"])
+
+    async def handle_complete_care_task(call: ServiceCall) -> None:
+        if not await _require_admin(hass, call):
+            return
+        data = _COMPLETE_CARE_TASK_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None:
+            return
+        existing = coord.care_tasks.get(data["task_id"])
+        if existing is None:
+            _LOGGER.warning("complete_care_task: no such task %s", data["task_id"])
+            return
+        from homeassistant.util import dt as dt_util
+
+        coord.care_tasks.upsert(existing.completed(int(dt_util.now().timestamp())))
+        await coord.async_save_care_tasks()
+        _LOGGER.info("Care task %s marked done", existing.id)
 
     async def handle_set_yard_map(call: ServiceCall) -> None:
         if not await _require_admin(hass, call):  # writes file + outbound fetch — admin only
@@ -1798,6 +2000,39 @@ async def _async_register_services(hass: HomeAssistant) -> None:
     )
     hass.services.async_register(
         DOMAIN, SERVICE_SET_PLANT_HEALTH, handle_set_plant_health, schema=_SET_PLANT_HEALTH_SCHEMA
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_SET_PLANT_LIGHT_RANGE,
+        handle_set_plant_light_range,
+        schema=_SET_PLANT_LIGHT_RANGE_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_START_LIGHT_SURVEY,
+        handle_start_light_survey,
+        schema=_START_LIGHT_SURVEY_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_CANCEL_LIGHT_SURVEY,
+        handle_cancel_light_survey,
+        schema=_CANCEL_LIGHT_SURVEY_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_ADD_CARE_TASK, handle_add_care_task, schema=_ADD_CARE_TASK_SCHEMA
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_UPDATE_CARE_TASK, handle_update_care_task, schema=_UPDATE_CARE_TASK_SCHEMA
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_DELETE_CARE_TASK, handle_delete_care_task, schema=_DELETE_CARE_TASK_SCHEMA
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_COMPLETE_CARE_TASK,
+        handle_complete_care_task,
+        schema=_COMPLETE_CARE_TASK_SCHEMA,
     )
 
     # ── Weather + per-zone moisture configuration ──────────────────
@@ -2061,6 +2296,13 @@ def _async_unregister_services(hass: HomeAssistant) -> None:
         SERVICE_SET_YARD_MAP,
         SERVICE_ADD_PLANT_PHOTO,
         SERVICE_SET_PLANT_HEALTH,
+        SERVICE_SET_PLANT_LIGHT_RANGE,
+        SERVICE_START_LIGHT_SURVEY,
+        SERVICE_CANCEL_LIGHT_SURVEY,
+        SERVICE_ADD_CARE_TASK,
+        SERVICE_UPDATE_CARE_TASK,
+        SERVICE_DELETE_CARE_TASK,
+        SERVICE_COMPLETE_CARE_TASK,
     ):
         if hass.services.has_service(DOMAIN, svc):
             hass.services.async_remove(DOMAIN, svc)
