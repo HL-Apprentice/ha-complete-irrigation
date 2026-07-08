@@ -31,6 +31,25 @@ _ESRI_EXPORT = (
 )
 DEFAULT_SPAN_M = 60.0  # a typical residential lot is ~tens of metres across
 MAX_IMAGE_PX = 1536  # cap the longer image edge (keeps the fetch small + sharp)
+# Esri's export refuses to render sharper than its imagery cache (observed 2026-07:
+# HTTP 500 "Error: bytes" below ~0.24 m/px; ~level-19 cache is ~0.3 m/px). Fetch at
+# or above this scale and UPSCALE locally for display — same bbox, so marker math
+# is untouched. 0.3 keeps a safety margin over the measured 0.25-works/0.22-fails cliff.
+MIN_EXPORT_M_PER_PX = 0.3
+
+
+def safe_export_size(span_m: float, width: int, height: int) -> tuple[int, int]:
+    """Shrink a requested (width, height) so the export stays at or above
+    MIN_EXPORT_M_PER_PX for a span_m-wide bbox (Esri 500s on anything sharper).
+    Aspect is preserved; returns the original size when it's already coarse enough."""
+    longer = max(width, height)
+    if longer <= 0 or span_m <= 0:
+        return (width, height)
+    max_px = int(span_m / MIN_EXPORT_M_PER_PX)
+    if longer <= max_px:
+        return (width, height)
+    scale = max_px / longer
+    return (max(1, round(width * scale)), max(1, round(height * scale)))
 
 
 @dataclass(frozen=True)

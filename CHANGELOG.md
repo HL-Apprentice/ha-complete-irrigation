@@ -4,6 +4,17 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.35.1 — 2026-07-08 — patch
+
+**Fixes "unable to fetch" on yard-map setup.** Esri's World Imagery export
+service changed server-side: it now returns HTTP 500 for any request sharper
+than its imagery cache (~0.3 m/px) instead of upsampling — a ~60 m residential
+yard at 1536 px asked for 0.04 m/px, so every fetch failed. The service now
+fetches at the sharpest scale Esri will serve (`safe_export_size`, floor
+0.3 m/px — verified live against the measured 0.25-works/0.22-fails cliff) and
+upscales locally with Pillow for crisp display. The stored bbox is unchanged,
+so existing plant-marker positions and GPS auto-placement are unaffected.
+
 ## v1.35.0 — 2026-07-08 — minor
 
 **Plant-care bundle: light surveys with a roaming lux sensor, recurring care-task

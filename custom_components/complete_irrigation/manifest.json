@@ -1,13 +1,19 @@
 {
   "domain": "complete_irrigation",
   "name": "HA Complete Irrigation Integration",
-  "codeowners": ["@HL-Apprentice"],
+  "codeowners": [
+    "@HL-Apprentice"
+  ],
   "config_flow": true,
-  "dependencies": ["calendar", "frontend", "http"],
+  "dependencies": [
+    "calendar",
+    "frontend",
+    "http"
+  ],
   "documentation": "https://github.com/HL-Apprentice/ha-complete-irrigation",
   "integration_type": "service",
   "iot_class": "calculated",
   "issue_tracker": "https://github.com/HL-Apprentice/ha-complete-irrigation/issues",
   "requirements": [],
-  "version": "1.35.0"
+  "version": "1.35.1"
 }

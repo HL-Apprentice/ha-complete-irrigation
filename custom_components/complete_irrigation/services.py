@@ -1915,7 +1915,12 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         from homeassistant.helpers.aiohttp_client import async_get_clientsession
         from homeassistant.util import dt as dt_util
 
-        from .yard_map import bbox_from_center, esri_export_url, image_size_for_bbox
+        from .yard_map import (
+            bbox_from_center,
+            esri_export_url,
+            image_size_for_bbox,
+            safe_export_size,
+        )
 
         lat = data.get("latitude", hass.config.latitude)
         lon = data.get("longitude", hass.config.longitude)
@@ -1926,7 +1931,11 @@ async def _async_register_services(hass: HomeAssistant) -> None:
 
         bbox = bbox_from_center(float(lat), float(lon), span)
         width, height = image_size_for_bbox(bbox)
-        url = esri_export_url(bbox, width, height)
+        # Esri's export now HTTP-500s on requests sharper than its imagery cache
+        # (~0.3 m/px) — fetch at the sharpest scale it will serve, then upscale
+        # locally back to the display size (same bbox, marker math untouched).
+        fetch_w, fetch_h = safe_export_size(span, width, height)
+        url = esri_export_url(bbox, fetch_w, fetch_h)
 
         session = async_get_clientsession(hass)
         try:
@@ -1952,8 +1961,25 @@ async def _async_register_services(hass: HomeAssistant) -> None:
 
         def _save() -> None:
             os.makedirs(abs_dir, exist_ok=True)
+            payload = content
+            if (fetch_w, fetch_h) != (width, height):
+                # Fetched coarser than display size (Esri cache-scale floor) —
+                # upscale for crisp rendering. Pillow ships with HA core; if it's
+                # somehow unavailable, save the small image (still fully usable).
+                try:
+                    import io
+
+                    from PIL import Image
+
+                    img = Image.open(io.BytesIO(content))
+                    img = img.convert("RGB").resize((width, height), Image.LANCZOS)
+                    buf = io.BytesIO()
+                    img.save(buf, format="JPEG", quality=88)
+                    payload = buf.getvalue()
+                except Exception as err:  # cosmetic step — never fatal
+                    _LOGGER.warning("set_yard_map: upscale skipped (%s)", err)
             with open(abs_path, "wb") as fh:
-                fh.write(content)
+                fh.write(payload)
 
         try:
             await hass.async_add_executor_job(_save)
