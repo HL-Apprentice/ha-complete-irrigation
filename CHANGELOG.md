@@ -4,6 +4,29 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.33.3 — 2026-07-07 — patch
+
+Watering-core + vision-job hardening from a 4-model loop review (Claude + Grok +
+Gemini + Qwen, adversarially verified). No new features; no regressions — every
+prior loop-review guard re-verified intact.
+
+- **Fixed: auto-soak could truncate a live same-zone run.** The soak *re-cycle*
+  branch was missing the "this zone's valve is already on → let the run finish"
+  guard that the first-cycle branch has, so a soak cycle-2 firing during the soak
+  wait could supersede and cut short a scheduled/manual run on the same zone
+  (under-watering). Added the matching guard; both soak branches now agree.
+- **Fixed: hot-weather boost could silently drop a run on the hottest days.** A
+  long base run × a large boost could exceed the 480-minute cap; because the run
+  is dispatched fire-and-forget, the boundary's rejection was raised in a detached
+  task and swallowed — the run just vanished. The boost is now clamped to the cap
+  before dispatch. `MAX_SCHEDULE_DURATION_MIN` moved to `const.py` so the boundary
+  and the boost share one ceiling.
+- **Hardened the external vision-health job** (`tools/vision_health_job.py`):
+  rejects any `/local/` photo path containing `..` (defense-in-depth path-traversal
+  guard, matching the job's "never trust health.json" design), and a non-numeric
+  `VH_MAX_PLANTS` now falls back to the default instead of crashing at import.
+- +4 regression tests driving the real coordinator paths (511 total).
+
 ## v1.33.2 — 2026-07-05 — patch
 
 - **Fixed: the Today screen showed the wrong version (stuck at "v1.19.0").** The panel's
