@@ -1982,7 +1982,13 @@ async def _async_register_services(hass: HomeAssistant) -> None:
                 if resp.status != 200:
                     _LOGGER.warning("set_yard_map: aerial service returned HTTP %s", resp.status)
                     return
+                if resp.content_length is not None and resp.content_length > 15_000_000:
+                    _LOGGER.warning("set_yard_map: aerial response too large, refusing")
+                    return
                 content = await resp.read()
+                if len(content) > 15_000_000:
+                    _LOGGER.warning("set_yard_map: aerial body too large, refusing")
+                    return
         except Exception as err:  # network / timeout / client errors — never crash
             _LOGGER.warning("set_yard_map: aerial fetch failed: %s", err)
             return
@@ -2011,11 +2017,16 @@ async def _async_register_services(hass: HomeAssistant) -> None:
                     from PIL import Image
 
                     img = Image.open(io.BytesIO(content))
+                    # Decoded-dimension sanity vs what we asked for — a decompression
+                    # bomb must neither be resized in-memory nor saved raw to /local.
+                    if img.width * img.height > fetch_w * fetch_h * 4:
+                        _LOGGER.warning("set_yard_map: decoded image absurdly large, refusing")
+                        return
                     img = img.convert("RGB").resize((width, height), Image.LANCZOS)
                     buf = io.BytesIO()
                     img.save(buf, format="JPEG", quality=88)
                     payload = buf.getvalue()
-                except Exception as err:  # cosmetic step — never fatal
+                except Exception as err:  # keep the small original rather than fail
                     _LOGGER.warning("set_yard_map: upscale skipped (%s)", err)
             with open(abs_path, "wb") as fh:
                 fh.write(payload)
