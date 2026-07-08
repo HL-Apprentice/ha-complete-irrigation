@@ -4,6 +4,23 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.36.0 — 2026-07-08 — minor
+
+**Stress triangulation + one-tap care plans.** (Also carries the v1.35.1
+yard-map fix below — released together as one tag.)
+
+- **Light verdicts join the watering diagnosis** as corroborating signs: a
+  plant surveyed at MORE light than optimal raises water demand (and scorch
+  can mimic underwatering); LESS light means slower-drying soil and
+  corroborates overwatering. Light alone never trips a verdict — soil
+  evidence stays in charge. Fresh verdicts (<=120 days) only.
+- **Vision job context**: health.json now carries each plant's species, lux
+  range, and latest light verdict; the NAS vision job appends them to its
+  prompt so health assessments account for the plant's light situation.
+- **One-tap care plans**: `seed_care_plan` service + panel row — pick
+  tree / shrub / flower / cactus & succulent / grass and the starter
+  fertilize/prune/mulch/inspect reminders are created (idempotent).
+
 ## v1.35.1 — 2026-07-08 — patch
 
 **Fixes "unable to fetch" on yard-map setup.** Esri's World Imagery export
