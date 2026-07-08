@@ -334,3 +334,34 @@ def test_run_zone_schema_accepts_long_scheduled_durations():
         assert result["minutes"] == float(mins)
     with pytest.raises(vol.Invalid):  # still bounded — no absurd values
         _RUN_ZONE_SCHEMA({"entity_id": "switch.x", "minutes": 999})
+
+
+def test_add_care_task_schema_zone_entity_validation():
+    """v1.35 review fix — zone_entity_id must be empty or a real entity-id format
+    (it is echoed into notifications), never an arbitrary string."""
+    import voluptuous as vol
+
+    from custom_components.complete_irrigation.services import _ADD_CARE_TASK_SCHEMA
+
+    base = {"kind": "prune", "interval_days": 30}
+    ok = _ADD_CARE_TASK_SCHEMA({**base, "zone_entity_id": "switch.trees"})
+    assert ok["zone_entity_id"] == "switch.trees"
+    ok_empty = _ADD_CARE_TASK_SCHEMA({**base, "plant_id": "abc"})
+    assert ok_empty["zone_entity_id"] == ""
+    with pytest.raises(vol.Invalid):
+        _ADD_CARE_TASK_SCHEMA({**base, "zone_entity_id": "not an entity\nid"})
+
+
+def test_care_task_store_for_plant_supports_cascade_delete():
+    """v1.35 review fix — delete_plant cascades via for_plant(); lock its contract."""
+    from custom_components.complete_irrigation.care_tasks import CareTask, CareTaskStore
+
+    store = CareTaskStore()
+    store.add(CareTask(id="a1", kind="fertilize", interval_days=30, plant_id="p1"))
+    store.add(CareTask(id="a2", kind="prune", interval_days=60, plant_id="p1"))
+    store.add(CareTask(id="a3", kind="mulch", interval_days=90, zone_entity_id="switch.x"))
+    mine = store.for_plant("p1")
+    assert {t.id for t in mine} == {"a1", "a2"}
+    for t in mine:
+        assert store.delete(t.id)
+    assert [t.id for t in store.all()] == ["a3"]

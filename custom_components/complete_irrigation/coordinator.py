@@ -699,7 +699,12 @@ class ScheduleCoordinator:
             if now >= sess["until"]:
                 finished.append(pid)
         for pid in finished:
-            sess = self._light_survey_sessions.pop(pid)
+            # Race-tolerant pop: the await below yields, so a cancel_light_survey /
+            # delete_plant landing mid-batch may have already removed a later pid —
+            # skip it rather than KeyError-aborting the rest of the batch.
+            sess = self._light_survey_sessions.pop(pid, None)
+            if sess is None:
+                continue
             await self._finish_light_survey(pid, sess, now)
 
     async def _finish_light_survey(

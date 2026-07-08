@@ -547,7 +547,10 @@ _ADD_CARE_TASK_SCHEMA = vol.Schema(
         vol.Required("kind"): vol.In(CARE_KINDS),
         vol.Required("interval_days"): _CARE_INTERVAL,
         vol.Optional("plant_id", default=""): cv.string,
-        vol.Optional("zone_entity_id", default=""): cv.string,
+        # Empty (task is plant-scoped) or a real entity id — same validator every
+        # other zone field in this file uses; the raw string is echoed into
+        # notifications, so it must be format-bounded here.
+        vol.Optional("zone_entity_id", default=""): vol.Any("", cv.entity_id),
         vol.Optional("label", default=""): _CARE_LABEL,
     }
 )
@@ -1744,6 +1747,18 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         if coord.plants.delete(data["plant_id"]):
             coord.cancel_light_survey(data["plant_id"])  # v1.35 — drop any live survey
             await coord.async_save_plants()
+            # v1.35 — cascade: a care task for a deleted plant would stay
+            # permanently "due" and can't be retargeted; remove them too.
+            orphaned = coord.care_tasks.for_plant(data["plant_id"])
+            if orphaned:
+                for t in orphaned:
+                    coord.care_tasks.delete(t.id)
+                await coord.async_save_care_tasks()
+                _LOGGER.info(
+                    "Deleted %d care task(s) attached to plant %s",
+                    len(orphaned),
+                    data["plant_id"],
+                )
             _LOGGER.info("Deleted plant %s", data["plant_id"])
 
     # ── v1.35: light surveys ────────────────────────────────────────
@@ -1764,7 +1779,12 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         else:
             if "lux_low" not in data or "lux_high" not in data:
                 raise vol.Invalid("provide both lux_low and lux_high, or clear=true")
-            low, high = validate_lux_range(data["lux_low"], data["lux_high"])
+            try:
+                low, high = validate_lux_range(data["lux_low"], data["lux_high"])
+            except ValueError as err:
+                # Surface the rail's message as a proper validation error, not an
+                # unknown_error traceback in the caller's face.
+                raise vol.Invalid(str(err)) from err
         merged = replace(existing, lux_low=low, lux_high=high)
         coord.plants.upsert(merged)
         await coord.async_save_plants()
@@ -1814,15 +1834,21 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             return
         if data["plant_id"] and coord.plants.get(data["plant_id"]) is None:
             raise vol.Invalid(f"no such plant {data['plant_id']}")
-        # CareTask.__post_init__ enforces plant-or-zone + custom-needs-label.
-        task = CareTask(
-            id=uuid.uuid4().hex[:12],
-            kind=data["kind"],
-            interval_days=data["interval_days"],
-            plant_id=data["plant_id"],
-            zone_entity_id=data["zone_entity_id"],
-            label=data["label"],
-        )
+        if data["zone_entity_id"] and hass.states.get(data["zone_entity_id"]) is None:
+            raise vol.Invalid(f"no such zone entity {data['zone_entity_id']}")
+        # CareTask.__post_init__ enforces plant-or-zone + custom-needs-label —
+        # surfaced as a proper validation error, not an unknown_error traceback.
+        try:
+            task = CareTask(
+                id=uuid.uuid4().hex[:12],
+                kind=data["kind"],
+                interval_days=data["interval_days"],
+                plant_id=data["plant_id"],
+                zone_entity_id=data["zone_entity_id"],
+                label=data["label"],
+            )
+        except ValueError as err:
+            raise vol.Invalid(str(err)) from err
         coord.care_tasks.add(task)
         await coord.async_save_care_tasks()
         _LOGGER.info("Added care task %s (%s every %dd)", task.id, task.kind, task.interval_days)
@@ -1839,7 +1865,11 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             _LOGGER.warning("update_care_task: no such task %s", data["task_id"])
             return
         overrides = {k: data[k] for k in ("kind", "interval_days", "label", "enabled") if k in data}
-        merged = replace(existing, **overrides)
+        try:
+            merged = replace(existing, **overrides)
+        except ValueError as err:
+            # e.g. switching kind to custom without a label — a validation error.
+            raise vol.Invalid(str(err)) from err
         coord.care_tasks.upsert(merged)
         await coord.async_save_care_tasks()
         _LOGGER.info("Updated care task %s", merged.id)
