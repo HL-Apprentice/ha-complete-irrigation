@@ -139,9 +139,33 @@ def fetch_image_b64(local_path: str, token: str) -> str | None:
     return base64.b64encode(raw).decode("ascii")
 
 
-def ask_vision(images_b64: list[str]) -> dict | None:
+def plant_context(p: dict) -> str:
+    """v1.36 — optional per-plant context appended to the prompt: species, optimal
+    lux range, and the latest light-survey verdict. All values come from the
+    integration's health.json (already rail-bounded); kept short + plain-text."""
+    bits: list[str] = []
+    species = str(p.get("species") or "").strip()
+    if species:
+        bits.append(f"The plant is a {species[:120]}.")
+    rng = p.get("lux_range")
+    if isinstance(rng, dict) and rng.get("low") is not None:
+        bits.append(f"Its preferred light range is {rng['low']}-{rng['high']} lux.")
+    light = p.get("light")
+    if isinstance(light, dict) and light.get("verdict") in ("too_low", "too_high", "optimal"):
+        word = {
+            "too_low": "LESS light than it prefers",
+            "too_high": "MORE light than it prefers",
+            "optimal": "light within its preferred range",
+        }[light["verdict"]]
+        bits.append(f"A recent light survey at its spot measured {word}.")
+    if not bits:
+        return ""
+    return " Context: " + " ".join(bits)
+
+
+def ask_vision(images_b64: list[str], context: str = "") -> dict | None:
     """Call the local vision model; return the parsed JSON verdict or None."""
-    content = [{"type": "text", "text": _PROMPT}]
+    content = [{"type": "text", "text": _PROMPT + context}]
     for b64 in images_b64:
         content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
     body = json.dumps(
@@ -225,7 +249,7 @@ def main() -> int:
         if not imgs:
             _log(f"{name} ({pid}): no fetchable photos — skipping")
             continue
-        verdict = ask_vision(imgs)
+        verdict = ask_vision(imgs, context=plant_context(p))
         if verdict is None:
             _log(f"{name} ({pid}): no usable verdict — skipping")
             continue
