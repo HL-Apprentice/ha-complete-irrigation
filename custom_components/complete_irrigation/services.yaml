@@ -826,3 +826,201 @@ set_plant_health:
       required: false
       selector:
         text:
+
+set_plant_light_range:
+  name: Set plant light range
+  description: >
+    Set (or clear) a plant's optimal illuminance range in lux. Light surveys are
+    verdicted against this range ("too little / optimal / too much light").
+  fields:
+    plant_id:
+      name: Plant ID
+      description: The id of the plant.
+      required: true
+      selector:
+        text:
+    lux_low:
+      name: Lux low
+      description: Lower bound of the optimal range (lux). Set together with lux_high.
+      required: false
+      selector:
+        number:
+          min: 1
+          max: 200000
+          step: any
+          mode: box
+    lux_high:
+      name: Lux high
+      description: Upper bound of the optimal range (lux). Set together with lux_low.
+      required: false
+      selector:
+        number:
+          min: 1
+          max: 200000
+          step: any
+          mode: box
+    clear:
+      name: Clear
+      description: Set true to remove the plant's light range instead.
+      required: false
+      selector:
+        boolean:
+
+start_light_survey:
+  name: Start light survey
+  description: >
+    Sample an illuminance sensor placed at a plant for a timed window; the summarized
+    reading is stored on the plant and verdicted against its optimal lux range.
+    Designed for a roaming sensor stake you move from plant to plant.
+  fields:
+    plant_id:
+      name: Plant ID
+      description: The plant the sensor is placed at.
+      required: true
+      selector:
+        text:
+    sensor_entity_id:
+      name: Illuminance sensor
+      description: The lux sensor entity to sample.
+      required: true
+      selector:
+        entity:
+          domain: sensor
+          device_class: illuminance
+    minutes:
+      name: Minutes
+      description: Survey length in minutes (sampled about once a minute).
+      required: false
+      default: 10
+      selector:
+        number:
+          min: 1
+          max: 240
+          step: 1
+          mode: box
+
+cancel_light_survey:
+  name: Cancel light survey
+  description: Cancel a running light survey for a plant (nothing is stored).
+  fields:
+    plant_id:
+      name: Plant ID
+      description: The plant whose survey to cancel.
+      required: true
+      selector:
+        text:
+
+add_care_task:
+  name: Add care task
+  description: >
+    Add a recurring care reminder (fertilize / prune / mulch / inspect / custom)
+    for a plant or a zone. A due task notifies (and re-nags weekly) until marked done.
+  fields:
+    kind:
+      name: Kind
+      description: The kind of care.
+      required: true
+      selector:
+        select:
+          options:
+            - fertilize
+            - prune
+            - mulch
+            - inspect
+            - custom
+    interval_days:
+      name: Interval (days)
+      description: How often this care is due.
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 3650
+          step: 1
+          mode: box
+    plant_id:
+      name: Plant ID
+      description: The plant this task is for (or use zone_entity_id instead).
+      required: false
+      selector:
+        text:
+    zone_entity_id:
+      name: Zone
+      description: The zone this task is for (or use plant_id instead).
+      required: false
+      selector:
+        entity:
+          domain: switch
+    label:
+      name: Label
+      description: Display label (required for kind = custom).
+      required: false
+      selector:
+        text:
+
+update_care_task:
+  name: Update care task
+  description: Update a care task's kind, interval, label, or enabled state.
+  fields:
+    task_id:
+      name: Task ID
+      description: The id of the care task.
+      required: true
+      selector:
+        text:
+    kind:
+      name: Kind
+      description: New kind.
+      required: false
+      selector:
+        select:
+          options:
+            - fertilize
+            - prune
+            - mulch
+            - inspect
+            - custom
+    interval_days:
+      name: Interval (days)
+      description: New interval.
+      required: false
+      selector:
+        number:
+          min: 1
+          max: 3650
+          step: 1
+          mode: box
+    label:
+      name: Label
+      description: New display label.
+      required: false
+      selector:
+        text:
+    enabled:
+      name: Enabled
+      description: Enable or disable the reminder.
+      required: false
+      selector:
+        boolean:
+
+delete_care_task:
+  name: Delete care task
+  description: Delete a care task permanently.
+  fields:
+    task_id:
+      name: Task ID
+      description: The id of the care task to delete.
+      required: true
+      selector:
+        text:
+
+complete_care_task:
+  name: Complete care task
+  description: Mark a care task done now — its next reminder re-arms from today.
+  fields:
+    task_id:
+      name: Task ID
+      description: The id of the care task to mark done.
+      required: true
+      selector:
+        text:

@@ -58,6 +58,16 @@ class PlantRecord:
     # before it is stored here). A serialized HealthReport dict, or None if the plant
     # has never been assessed. Advisory only; absent in pre-v1.33 records -> None.
     health: dict[str, Any] | None = None
+    # v1.35 — species (free text, common or scientific) + optimal-lux range for the
+    # roaming light-survey feature. Range is both-set or both-None (validated by
+    # light_survey.validate_lux_range at the service boundary; re-checked here so a
+    # crafted .storage record can't smuggle NaN/inverted bounds into the verdict math).
+    species: str = ""
+    lux_low: int | None = None
+    lux_high: int | None = None
+    # v1.35 — newest-first bounded light-survey history (entries produced by
+    # light_survey.make_survey_entry, re-cleaned on load by clean_stored_surveys).
+    light_surveys: tuple[dict[str, Any], ...] = ()
 
     def __post_init__(self) -> None:
         if not self.id:
@@ -97,6 +107,18 @@ class PlantRecord:
         # rail before storage). Keep the record-level check light + advisory.
         if self.health is not None and not isinstance(self.health, dict):
             raise ValueError("health must be a dict or None")
+        # v1.35 — species is a short free-text string; lux range is both-or-neither
+        # with the same bounds the service boundary enforces.
+        if not isinstance(self.species, str) or len(self.species) > 120:
+            raise ValueError("species must be a string of at most 120 chars")
+        if (self.lux_low is None) != (self.lux_high is None):
+            raise ValueError("lux_low and lux_high must be set together")
+        if self.lux_low is not None and self.lux_high is not None:
+            from .light_survey import validate_lux_range
+
+            validate_lux_range(self.lux_low, self.lux_high)
+        if not isinstance(self.light_surveys, tuple):
+            raise ValueError("light_surveys must be a tuple")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -109,6 +131,10 @@ class PlantRecord:
             "map_y": self.map_y,
             "photos": [dict(p) for p in self.photos],
             "health": dict(self.health) if isinstance(self.health, dict) else None,
+            "species": self.species,
+            "lux_low": self.lux_low,
+            "lux_high": self.lux_high,
+            "light_surveys": [dict(s) for s in self.light_surveys],
         }
 
     @classmethod
@@ -132,6 +158,18 @@ class PlantRecord:
             and isinstance(p.get("path"), str)
             and p["path"].startswith("/local/")
         )
+        # v1.35 — lux range: both-or-neither; a malformed pair degrades to None
+        # (no range) rather than dropping the whole record on load.
+        from .light_survey import clean_stored_surveys, validate_lux_range
+
+        lux_low: int | None = None
+        lux_high: int | None = None
+        try:
+            if data.get("lux_low") is not None and data.get("lux_high") is not None:
+                lux_low, lux_high = validate_lux_range(data["lux_low"], data["lux_high"])
+        except ValueError:
+            lux_low = lux_high = None
+
         return cls(
             id=str(data["id"]),
             name=str(data["name"]),
@@ -142,6 +180,10 @@ class PlantRecord:
             map_y=_coord("map_y"),
             photos=photos,
             health=data.get("health") if isinstance(data.get("health"), dict) else None,
+            species=str(data.get("species") or "")[:120],
+            lux_low=lux_low,
+            lux_high=lux_high,
+            light_surveys=clean_stored_surveys(data.get("light_surveys")),
         )
 
     def to_calc_plant(self) -> Plant:

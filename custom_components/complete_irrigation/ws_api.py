@@ -31,6 +31,8 @@ WS_TYPE_LIST_PLANNED_RUNS = f"{DOMAIN}/list_planned_runs"
 WS_TYPE_LIST_PLANTS = f"{DOMAIN}/list_plants"
 WS_TYPE_YARD_REPORT = f"{DOMAIN}/yard_report"
 WS_TYPE_GET_DAILY_PLAN = f"{DOMAIN}/get_daily_plan"
+WS_TYPE_LIST_CARE_TASKS = f"{DOMAIN}/list_care_tasks"  # v1.35
+WS_TYPE_WATERING_DIAGNOSIS = f"{DOMAIN}/watering_diagnosis"  # v1.35
 
 
 def _find_coordinator(hass: HomeAssistant):
@@ -248,12 +250,60 @@ async def list_planned_runs(hass, connection, msg):
 @websocket_api.websocket_command({vol.Required("type"): WS_TYPE_LIST_PLANTS})
 @websocket_api.async_response
 async def list_plants(hass, connection, msg):
-    """Return all plants (serialized) for the panel's plant editor."""
+    """Return all plants (serialized) for the panel's plant editor. v1.35 adds
+    the active light-survey sessions (plant_id -> progress) so the panel can
+    show a live 'surveying…' state without a new round-trip."""
     coord = _find_coordinator(hass)
     if coord is None:
-        connection.send_result(msg["id"], {"plants": []})
+        connection.send_result(msg["id"], {"plants": [], "active_light_surveys": {}})
         return
-    connection.send_result(msg["id"], {"plants": coord.plants.to_serializable()})
+    connection.send_result(
+        msg["id"],
+        {
+            "plants": coord.plants.to_serializable(),
+            "active_light_surveys": coord.light_survey_status(),
+        },
+    )
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): WS_TYPE_LIST_CARE_TASKS})
+@websocket_api.async_response
+async def list_care_tasks(hass, connection, msg):
+    """v1.35 — care-task reminders with computed due state for the panel."""
+    from homeassistant.util import dt as dt_util
+
+    coord = _find_coordinator(hass)
+    if coord is None:
+        connection.send_result(msg["id"], {"tasks": []})
+        return
+    now_ts = int(dt_util.now().timestamp())
+    tasks = []
+    for t in coord.care_tasks.all():
+        d = t.to_dict()
+        d["next_due_ts"] = t.next_due_ts()
+        d["is_due"] = t.is_due(now_ts)
+        d["display_name"] = t.display_name()
+        tasks.append(d)
+    connection.send_result(msg["id"], {"tasks": tasks})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): WS_TYPE_WATERING_DIAGNOSIS,
+        vol.Required("zone_entity_id"): str,
+    }
+)
+@websocket_api.async_response
+async def watering_diagnosis(hass, connection, msg):
+    """v1.35 — advisory over/under-watering diagnosis card for one zone."""
+    coord = _find_coordinator(hass)
+    if coord is None:
+        connection.send_result(msg["id"], {"diagnosis": None})
+        return
+    card = coord.diagnose_zone_watering(msg["zone_entity_id"])
+    connection.send_result(msg["id"], {"diagnosis": card.to_dict()})
 
 
 @websocket_api.require_admin
@@ -307,3 +357,5 @@ def async_register_ws_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, list_plants)
     websocket_api.async_register_command(hass, yard_report)
     websocket_api.async_register_command(hass, get_daily_plan)
+    websocket_api.async_register_command(hass, list_care_tasks)
+    websocket_api.async_register_command(hass, watering_diagnosis)

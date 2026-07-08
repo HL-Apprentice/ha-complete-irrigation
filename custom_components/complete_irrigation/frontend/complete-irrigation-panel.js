@@ -33,6 +33,23 @@
     trees: "Trees: deep watering. Lower min%, occasional deep cycles work better than frequent shallow ones.",
     custom: "Custom: pick your own min/target/max thresholds based on your soil + plant type.",
   };
+  // v1.35 — light presets for the plant form. Value is "low:high" in lux;
+  // choosing one fills the two editable Lux low/high number inputs.
+  const LIGHT_PRESETS = [
+    ["", "(none)"],
+    ["32000:100000", "Full sun 32000–100000 lux"],
+    ["10000:32000", "Partial sun 10000–32000 lux"],
+    ["3000:10000", "Bright shade 3000–10000 lux"],
+    ["500:3000", "Deep shade 500–3000 lux"],
+  ];
+  // v1.35 — survey verdict → human label. Badge color comes from the
+  // matching .light-<verdict> CSS class.
+  const LIGHT_VERDICT_META = {
+    too_low: "Too low",
+    optimal: "Optimal",
+    too_high: "Too high",
+    no_range: "No range",
+  };
   const ELEMENT_NAME = "complete-irrigation-panel";
   // v1.19.0 — scroll containers whose positions must survive an
   // innerHTML rebuild. `main` is the page scroller; the rest scroll
@@ -48,7 +65,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.34.0";
+  const PANEL_VERSION = "v1.35.0";
   const DEFAULT_MANUAL_MINUTES = 10;
   const MAX_MANUAL_MINUTES = 480; // 8 h — matches the backend schedule cap; long
   // runs are delivered in controller-cap blocks (v1.25). Was 60, which blocked
@@ -132,6 +149,11 @@
       canopy_area_sqft: "",
       zone_entity_id: "",
       photos: [], // v1.32 — gallery of {ts, path, note} for the open editor
+      species: "", // v1.35 — optional botanical/common species name
+      lux_low: "", // v1.35 — light range draft (strings; empty = unset)
+      lux_high: "",
+      light_survey_sensor: "", // v1.35 — survey controls draft (edit form only)
+      light_survey_minutes: "10",
     };
   }
 
@@ -353,6 +375,17 @@
       this._mapBusy = false; // v1.30 — set_yard_map fetch in flight
       this._yardLoaded = false;
       this._plantEditor = null; // null = form hidden; object = add/edit draft
+      // v1.35 — light surveys + care tasks + watering diagnosis state.
+      this._activeLightSurveys = {}; // plant_id -> {sensor, started, until, minutes, samples}
+      this._careTasks = []; // list_care_tasks rows (fetched with the yard)
+      this._careDraft = {
+        // add-form draft so background re-renders don't wipe typing
+        care_kind: "fertilize",
+        care_label: "",
+        care_interval: "90",
+        care_subject: "",
+      };
+      this._zoneDiagnosis = {}; // zone entity_id -> diagnosis result (expanded row)
 
       // Sensor (moisture) modal state
       this._sensorModalOpen = false;
@@ -660,6 +693,15 @@
               zone_entity_id: p.zone_entity_id,
               photos: Array.isArray(p.photos) ? p.photos : [],
               health: p.health || null,
+              // v1.35 — species + light range (draft strings; empty = unset)
+              species: p.species || "",
+              lux_low: p.lux_low != null ? String(p.lux_low) : "",
+              lux_high: p.lux_high != null ? String(p.lux_high) : "",
+              _hadLightRange: p.lux_low != null && p.lux_high != null,
+              // Survey controls: default the sensor from the most recent survey.
+              light_survey_sensor:
+                (Array.isArray(p.light_surveys) && p.light_surveys[0]?.sensor) || "",
+              light_survey_minutes: "10",
             };
           }
           return this._renderNow();
@@ -686,6 +728,18 @@
         if (action === "weekly-unsnooze") return this._weeklySnooze(0);
         if (action === "open-establishment")
           return this._openEstablishmentModal(node.dataset.entityId, node.dataset.zoneName);
+        // v1.35 — light surveys + care tasks + watering diagnosis.
+        if (action === "start-light-survey")
+          return this._startLightSurvey(node.dataset.plantId);
+        if (action === "cancel-light-survey")
+          return this._cancelLightSurvey(node.dataset.plantId);
+        if (action === "care-task-done")
+          return this._completeCareTask(node.dataset.taskId);
+        if (action === "care-task-delete")
+          return this._deleteCareTask(node.dataset.taskId, node.dataset.taskName);
+        if (action === "care-task-add") return this._addCareTask();
+        if (action === "zone-diagnose")
+          return this._diagnoseZone(node.dataset.entityId);
         if (action === "zone-move-up") return this._reorderZone(node.dataset.entityId, -1);
         if (action === "zone-move-down") return this._reorderZone(node.dataset.entityId, 1);
         if (action === "day-cal-prev") {
@@ -890,6 +944,24 @@
         }
         return; // value already shown by the control; no re-render
       }
+      if (action === "light-preset") {
+        // v1.35 — preset fills the two editable lux inputs. "" = (none)
+        // → leave whatever the user already has in the fields.
+        if (this._plantEditor && t.value) {
+          const [lo, hi] = t.value.split(":");
+          this._plantEditor.lux_low = lo;
+          this._plantEditor.lux_high = hi;
+          return this._renderNow(); // re-render so the number inputs update
+        }
+        return;
+      }
+      if (action === "care-field") {
+        // v1.35 — care-task add form draft (survives background re-renders).
+        if (this._careDraft && t.name in this._careDraft) {
+          this._careDraft[t.name] = t.value;
+        }
+        return; // value already shown by the control; no re-render
+      }
       if (action === "photo-file") {
         const file = t.files && t.files[0];
         if (file) this._addPlantPhoto(file, t.dataset.plantId);
@@ -1040,6 +1112,13 @@
       if (t.dataset?.action === "plant-field") {
         if (this._plantEditor && t.name in this._plantEditor) {
           this._plantEditor[t.name] = t.value;
+        }
+        return;
+      }
+      // v1.35 — care-task add form: same keep-typing-alive treatment.
+      if (t.dataset?.action === "care-field") {
+        if (this._careDraft && t.name in this._careDraft) {
+          this._careDraft[t.name] = t.value;
         }
         return;
       }
@@ -1554,11 +1633,16 @@
       // v2 — pull the plant list + the computed per-loop design report.
       if (!this._hass?.callWS) return;
       try {
-        const [plantsRes, reportRes] = await Promise.all([
+        const [plantsRes, reportRes, tasksRes] = await Promise.all([
           this._hass.callWS({ type: "complete_irrigation/list_plants" }),
           this._hass.callWS({ type: "complete_irrigation/yard_report" }),
+          this._hass.callWS({ type: "complete_irrigation/list_care_tasks" }),
         ]);
         this._plants = (plantsRes && plantsRes.plants) || [];
+        // v1.35 — in-flight illuminance surveys ride along on list_plants.
+        this._activeLightSurveys =
+          (plantsRes && plantsRes.active_light_surveys) || {};
+        this._careTasks = (tasksRes && tasksRes.tasks) || [];
         this._yardReports = (reportRes && reportRes.reports) || [];
         this._yardEto = reportRes ? reportRes.eto_in_week : null;
         this._yardEff = reportRes ? reportRes.drip_efficiency : null;
@@ -1579,6 +1663,21 @@
         this._scheduleRender();
       } catch (err) {
         console.error("[complete-irrigation] yard fetch failed:", err);
+      }
+    }
+
+    async _fetchCareTasks() {
+      // v1.35 — light re-fetch after a care-task mutation (the full
+      // _fetchYard is unnecessary — nothing else changed).
+      if (!this._hass?.callWS) return;
+      try {
+        const res = await this._hass.callWS({
+          type: "complete_irrigation/list_care_tasks",
+        });
+        this._careTasks = (res && res.tasks) || [];
+        this._scheduleRender();
+      } catch (err) {
+        console.error("[complete-irrigation] list_care_tasks failed:", err);
       }
     }
 
@@ -2018,13 +2117,45 @@
         wucols_category: e.wucols_category,
         canopy_area_sqft: area,
         zone_entity_id: zone,
+        // v1.35 — optional species (backend caps at 120 chars; the input's
+        // maxlength matches, the slice is belt-and-suspenders).
+        species: (e.species || "").trim().slice(0, 120),
       };
+      // v1.35 — light range rides along on an EDIT: both fields set → save
+      // the range after the plant save; both cleared on a plant that HAD a
+      // range → clear it. (On add the user sets the range via a later edit.)
+      const luxLowRaw = String(e.lux_low == null ? "" : e.lux_low).trim();
+      const luxHighRaw = String(e.lux_high == null ? "" : e.lux_high).trim();
+      const luxLow = parseInt(luxLowRaw, 10);
+      const luxHigh = parseInt(luxHighRaw, 10);
+      const bothSet =
+        luxLowRaw !== "" &&
+        luxHighRaw !== "" &&
+        Number.isFinite(luxLow) &&
+        Number.isFinite(luxHigh);
+      if (bothSet && luxLow >= luxHigh) {
+        alert("Lux low must be less than lux high.");
+        return;
+      }
       try {
         if (e.id) {
           await this._hass.callService("complete_irrigation", "update_plant", {
             plant_id: e.id,
             ...payload,
           });
+          if (bothSet) {
+            await this._hass.callService(
+              "complete_irrigation",
+              "set_plant_light_range",
+              { plant_id: e.id, lux_low: luxLow, lux_high: luxHigh }
+            );
+          } else if (luxLowRaw === "" && luxHighRaw === "" && e._hadLightRange) {
+            await this._hass.callService(
+              "complete_irrigation",
+              "set_plant_light_range",
+              { plant_id: e.id, clear: true }
+            );
+          }
         } else {
           await this._hass.callService("complete_irrigation", "add_plant", payload);
         }
@@ -2045,6 +2176,138 @@
       } catch (err) {
         alert("Failed to delete plant: " + (err?.message || err));
       }
+    }
+
+    // ── v1.35 light surveys ────────────────────────────────────────
+    async _startLightSurvey(plantId) {
+      // Kick off an illuminance survey; the backend samples the sensor for
+      // N minutes and stores a verdict against the plant's light range.
+      if (!plantId) return;
+      const e = this._plantEditor || {};
+      const sensor = (e.light_survey_sensor || "").trim();
+      const minutes = parseInt(e.light_survey_minutes, 10);
+      if (!sensor) {
+        alert("Enter the illuminance sensor entity id (e.g. sensor.back_yard_illuminance).");
+        return;
+      }
+      if (!(minutes >= 1) || minutes > 240) {
+        alert("Survey length must be between 1 and 240 minutes.");
+        return;
+      }
+      try {
+        await this._hass.callService("complete_irrigation", "start_light_survey", {
+          plant_id: plantId,
+          sensor_entity_id: sensor,
+          minutes,
+        });
+        // Refreshes active_light_surveys → the controls flip to "Surveying…".
+        await this._fetchYard();
+      } catch (err) {
+        alert("Failed to start the light survey: " + (err?.message || err));
+      }
+    }
+
+    async _cancelLightSurvey(plantId) {
+      if (!plantId) return;
+      try {
+        await this._hass.callService("complete_irrigation", "cancel_light_survey", {
+          plant_id: plantId,
+        });
+        await this._fetchYard();
+      } catch (err) {
+        alert("Failed to cancel the survey: " + (err?.message || err));
+      }
+    }
+
+    // ── v1.35 care tasks ───────────────────────────────────────────
+    async _addCareTask() {
+      // Read the rendered controls (selects show their pick even when the
+      // user never fired a change event); the draft only preserves typing.
+      const root = this.shadowRoot;
+      const kind = root?.querySelector('select[name="care_kind"]')?.value || "fertilize";
+      const label = (root?.querySelector('input[name="care_label"]')?.value || "").trim();
+      const interval = parseInt(
+        root?.querySelector('input[name="care_interval"]')?.value || "0",
+        10
+      );
+      const subject = root?.querySelector('select[name="care_subject"]')?.value || "";
+      if (!(interval >= 1)) {
+        alert("Enter a repeat interval of at least 1 day.");
+        return;
+      }
+      if (!subject) {
+        alert("Pick a plant or zone for this task.");
+        return;
+      }
+      if (kind === "custom" && !label) {
+        alert("A custom task needs a label.");
+        return;
+      }
+      const payload = { kind, interval_days: interval };
+      if (label) payload.label = label;
+      if (subject.startsWith("plant:")) payload.plant_id = subject.slice(6);
+      else payload.zone_entity_id = subject.slice(5);
+      try {
+        await this._hass.callService("complete_irrigation", "add_care_task", payload);
+        this._careDraft.care_label = ""; // fresh label for the next add
+        await this._fetchCareTasks();
+      } catch (err) {
+        alert("Failed to add the care task: " + (err?.message || err));
+      }
+    }
+
+    async _completeCareTask(taskId) {
+      if (!taskId) return;
+      try {
+        await this._hass.callService("complete_irrigation", "complete_care_task", {
+          task_id: taskId,
+        });
+        await this._fetchCareTasks();
+      } catch (err) {
+        alert("Failed to complete the task: " + (err?.message || err));
+      }
+    }
+
+    async _deleteCareTask(taskId, name) {
+      if (!taskId) return;
+      if (!confirm(`Delete care task "${name || taskId}"?`)) return;
+      try {
+        await this._hass.callService("complete_irrigation", "delete_care_task", {
+          task_id: taskId,
+        });
+        await this._fetchCareTasks();
+      } catch (err) {
+        alert("Failed to delete the task: " + (err?.message || err));
+      }
+    }
+
+    // ── v1.35 watering diagnosis ───────────────────────────────────
+    async _diagnoseZone(entityId) {
+      // Toggle: a second click on 🩺 collapses the open panel.
+      if (!entityId || !this._hass?.callWS) return;
+      if (this._zoneDiagnosis[entityId]) {
+        delete this._zoneDiagnosis[entityId];
+        return this._renderNow();
+      }
+      this._zoneDiagnosis[entityId] = { loading: true };
+      this._renderNow();
+      try {
+        const res = await this._hass.callWS({
+          type: "complete_irrigation/watering_diagnosis",
+          zone_entity_id: entityId,
+        });
+        this._zoneDiagnosis[entityId] = (res && res.diagnosis) || {
+          status: "unknown",
+          signs: [],
+          confirm: [],
+          suggestions: [],
+        };
+      } catch (err) {
+        delete this._zoneDiagnosis[entityId];
+        console.error("[complete-irrigation] watering_diagnosis failed:", err);
+        alert("Failed to run the diagnosis: " + (err?.message || err));
+      }
+      this._renderNow();
     }
 
     async _applyEto() {
@@ -3563,6 +3826,9 @@
         : `<button class="btn btn-small" data-action="hide-zone" data-entity-id="${escapeAttr(zone.entityId)}">🚫 Hide from Today</button>`;
       const grassBtn =
         `<button class="btn btn-small" data-action="open-establishment" data-entity-id="${escapeAttr(zone.entityId)}" data-zone-name="${escapeAttr(zone.name)}">🌱 New Planting</button>`;
+      // v1.35 — advisory watering diagnosis. Toggles the panel under the row.
+      const diagBtn =
+        `<button class="btn btn-small" data-action="zone-diagnose" data-entity-id="${escapeAttr(zone.entityId)}">🩺 Diagnose</button>`;
       // Reorder controls. ↑ disabled on first row, ↓ disabled on last.
       // They apply to both Today and Zones (shared zone_order config).
       const upBtn =
@@ -3589,9 +3855,42 @@
         `<div class="zone-row-actions">` +
         `<div class="zone-reorder-group">${upBtn}${downBtn}</div>` +
         grassBtn +
+        diagBtn +
         hideBtn +
         `</div>` +
+        this._renderZoneDiagnosis(zone.entityId) +
         `</article>`
+      );
+    }
+
+    _renderZoneDiagnosis(entityId) {
+      // v1.35 — advisory over/under-watering read-out, expanded under the
+      // zone row after a 🩺 Diagnose click. Purely informational.
+      const d = this._zoneDiagnosis[entityId];
+      if (!d) return "";
+      if (d.loading) {
+        return `<div class="zone-diag"><span class="zone-diag-loading">Running diagnosis…</span></div>`;
+      }
+      const meta = {
+        ok: { cls: "ok", label: "No watering issues detected" },
+        possible_overwatering: { cls: "warn", label: "Possible overwatering" },
+        possible_underwatering: { cls: "warn", label: "Possible underwatering" },
+      };
+      const m = meta[d.status] || { cls: "none", label: "Not enough data to diagnose" };
+      const list = (title, arr) =>
+        Array.isArray(arr) && arr.length
+          ? `<div class="zone-diag-block"><span class="zone-diag-sub">${title}</span><ul>` +
+            arr.map((x) => `<li>${escapeHtml(String(x))}</li>`).join("") +
+            `</ul></div>`
+          : "";
+      return (
+        `<div class="zone-diag">` +
+        `<div class="zone-diag-head zone-diag-${m.cls}">${escapeHtml(m.label)}</div>` +
+        list("Signs", d.signs) +
+        list("How to confirm", d.confirm) +
+        list("Suggestions", d.suggestions) +
+        `<span class="zone-diag-foot">Advisory only — no schedule was changed.</span>` +
+        `</div>`
       );
     }
 
@@ -4967,6 +5266,8 @@
           : `<button class="btn btn-primary yard-add" data-action="add-plant">+ Add plant</button>`) +
         // Plant list
         this._renderPlantList() +
+        // v1.35 — recurring care reminders (fertilize/prune/mulch/inspect)
+        this._renderCareTasks() +
         // Per-loop design report
         this._renderYardReport()
       );
@@ -5043,6 +5344,11 @@
         `<input name="name" data-action="plant-field" type="text" value="${escapeAttr(
           e.name
         )}" placeholder="e.g. Lemon tree" required /></div>` +
+        // v1.35 — optional species (free text, backend caps at 120)
+        `<div><label>Species</label>` +
+        `<input name="species" data-action="plant-field" type="text" maxlength="120" value="${escapeAttr(
+          e.species || ""
+        )}" placeholder="e.g. Citrus limon" /></div>` +
         `<div><label>Water-use category</label>` +
         `<select name="wucols_category" data-action="plant-field">` +
         cats
@@ -5068,11 +5374,34 @@
           )
           .join("") +
         `</select></div>` +
+        // v1.35 — light range. The preset fills the two lux inputs; both
+        // stay editable. Selected preset is inferred from the current pair.
+        `<div><label>Light preset</label>` +
+        `<select name="light_preset" data-action="light-preset">` +
+        LIGHT_PRESETS.map(([v, l]) => {
+          const cur = `${String(e.lux_low == null ? "" : e.lux_low).trim()}:${String(
+            e.lux_high == null ? "" : e.lux_high
+          ).trim()}`;
+          return `<option value="${escapeAttr(v)}"${
+            v && cur === v ? " selected" : ""
+          }>${escapeHtml(l)}</option>`;
+        }).join("") +
+        `</select></div>` +
+        `<div><label>Lux low</label>` +
+        `<input name="lux_low" data-action="plant-field" type="number" min="0" step="1" value="${escapeAttr(
+          String(e.lux_low == null ? "" : e.lux_low)
+        )}" placeholder="e.g. 3000" /></div>` +
+        `<div><label>Lux high</label>` +
+        `<input name="lux_high" data-action="plant-field" type="number" min="0" step="1" value="${escapeAttr(
+          String(e.lux_high == null ? "" : e.lux_high)
+        )}" placeholder="e.g. 10000" /></div>` +
         `</div>` +
         // v1.32 — photo history (only on a saved plant; you attach photos to an id).
         (e.id ? this._renderPhotoSection(e) : "") +
         // v1.33 — last vision-health verdict (if any).
         (e.id ? this._renderHealthSection(e) : "") +
+        // v1.35 — light range + illuminance surveys (saved plants only).
+        (e.id ? this._renderLightSection(e) : "") +
         `<div class="yard-form-actions">` +
         `<button class="btn btn-primary" type="submit">${e.id ? "Save" : "Add plant"}</button>` +
         `<button class="btn btn-small" type="button" data-action="cancel-plant">Cancel</button>` +
@@ -5151,6 +5480,88 @@
       );
     }
 
+    _renderLightSection(e) {
+      // v1.35 — the plant's light range + illuminance survey history and
+      // controls. Modeled on _renderHealthSection: advisory display; the
+      // range itself is edited via the Lux low/high inputs above.
+      const p = (this._plants || []).find((x) => x.id === e.id) || {};
+      const surveys = Array.isArray(p.light_surveys) ? p.light_surveys : [];
+      const latest = surveys.length ? surveys[0] : null; // newest-first
+      const hasRange = p.lux_low != null && p.lux_high != null;
+      const rangeTxt = hasRange
+        ? `Optimal ${escapeHtml(String(p.lux_low))}–${escapeHtml(String(p.lux_high))} lux`
+        : "No range set";
+      const fmtLux = (v) => escapeHtml(String(Math.round(Number(v) || 0)));
+      const fmtDay = (ts) =>
+        escapeHtml(ts ? new Date(ts * 1000).toLocaleDateString() : "");
+      const verdictLabel = (v) =>
+        escapeHtml(LIGHT_VERDICT_META[v] || String(v == null ? "" : v));
+      const latestHtml = latest
+        ? `<div class="light-row">` +
+          `<span class="light-badge light-${escapeAttr(
+            String(latest.verdict || "no_range")
+          )}">${verdictLabel(latest.verdict)}</span>` +
+          `<span class="light-latest">Avg ${fmtLux(latest.lux_avg)} lux · ${escapeHtml(
+            String(latest.samples)
+          )} readings · ${fmtDay(latest.ts)}</span>` +
+          `</div>`
+        : `<p class="light-empty">No surveys yet — run one to see how much light this spot actually gets.</p>`;
+      const hist = surveys
+        .slice(0, 5)
+        .map(
+          (s) =>
+            `<li>${fmtDay(s.ts)} · ${fmtLux(s.lux_avg)} lux avg · ${verdictLabel(
+              s.verdict
+            )}</li>`
+        )
+        .join("");
+      // Survey controls — or the in-flight status if one is already running.
+      const active = (this._activeLightSurveys || {})[e.id];
+      let controls;
+      if (active) {
+        let untilTxt = "";
+        if (active.until) {
+          const d = new Date(active.until);
+          if (!isNaN(d)) {
+            untilTxt = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+          }
+        }
+        controls =
+          `<div class="light-survey-active">` +
+          `<span class="light-surveying">Surveying… ${escapeHtml(
+            String(active.samples == null ? 0 : active.samples)
+          )} readings so far${untilTxt ? ` (until ${escapeHtml(untilTxt)})` : ""}</span>` +
+          `<button class="btn btn-small" type="button" data-action="cancel-light-survey" data-plant-id="${escapeAttr(
+            e.id
+          )}">Cancel</button>` +
+          `</div>`;
+      } else {
+        controls =
+          `<div class="light-survey-controls">` +
+          `<div class="light-survey-sensor"><label>Illuminance sensor</label>` +
+          `<input name="light_survey_sensor" data-action="plant-field" type="text" value="${escapeAttr(
+            e.light_survey_sensor || ""
+          )}" placeholder="sensor.back_yard_illuminance" /></div>` +
+          `<div class="light-survey-minutes"><label>Minutes</label>` +
+          `<input name="light_survey_minutes" data-action="plant-field" type="number" min="1" max="240" step="1" value="${escapeAttr(
+            String(e.light_survey_minutes || 10)
+          )}" /></div>` +
+          `<button class="btn btn-small" type="button" data-action="start-light-survey" data-plant-id="${escapeAttr(
+            e.id
+          )}">Start survey</button>` +
+          `</div>`;
+      }
+      return (
+        `<div class="plant-light">` +
+        `<label class="plant-light-title">Light</label>` +
+        `<div class="light-row"><span class="light-range">${rangeTxt}</span></div>` +
+        latestHtml +
+        (hist ? `<ul class="light-history">${hist}</ul>` : "") +
+        controls +
+        `</div>`
+      );
+    }
+
     async _addPlantPhoto(file, plantId) {
       if (!file || !plantId || this._photoBusy) return;
       this._photoBusy = true;
@@ -5216,6 +5627,105 @@
         `<div class="yard-table-wrap"><table class="yard-table">` +
         `<thead><tr><th>Name</th><th>Category</th><th>Area</th><th>Zone</th><th></th></tr></thead>` +
         `<tbody>${rows}</tbody></table></div>`
+      );
+    }
+
+    _careSubject(t) {
+      // v1.35 — a task points at either a plant (resolve its name) or a zone.
+      if (t.plant_id) {
+        const p = (this._plants || []).find((x) => x.id === t.plant_id);
+        return p ? p.name : t.plant_id;
+      }
+      return t.zone_entity_id || "";
+    }
+
+    _renderCareTasks() {
+      // v1.35 — recurring care reminders (fertilize/prune/mulch/inspect/custom).
+      const tasks = this._careTasks || [];
+      const rows = tasks
+        .map((t) => {
+          const due = !t.enabled
+            ? `<span class="care-task-due">Paused</span>`
+            : t.is_due
+            ? `<span class="care-task-due due-now">Due now</span>`
+            : `<span class="care-task-due">Due ${escapeHtml(
+                t.next_due_ts
+                  ? new Date(t.next_due_ts * 1000).toLocaleDateString()
+                  : "now"
+              )}</span>`;
+          return (
+            `<li class="care-task-row${t.enabled ? "" : " care-task-disabled"}">` +
+            `<span class="care-task-name">${escapeHtml(t.display_name || "")}</span>` +
+            `<span class="care-task-meta">${escapeHtml(
+              this._careSubject(t)
+            )} · every ${escapeHtml(String(t.interval_days))} days</span>` +
+            due +
+            `<span class="care-task-actions">` +
+            `<button class="btn btn-small" data-action="care-task-done" data-task-id="${escapeAttr(
+              t.id
+            )}">✓ Done</button>` +
+            `<button class="btn btn-small" data-action="care-task-delete" data-task-id="${escapeAttr(
+              t.id
+            )}" data-task-name="${escapeAttr(t.display_name || "")}" title="Delete">🗑</button>` +
+            `</span>` +
+            `</li>`
+          );
+        })
+        .join("");
+      const kinds = [
+        ["fertilize", "Fertilize"],
+        ["prune", "Prune"],
+        ["mulch", "Mulch"],
+        ["inspect", "Inspect"],
+        ["custom", "Custom"],
+      ];
+      const draft = this._careDraft || {};
+      const plantOpts = (this._plants || [])
+        .map(
+          (p) =>
+            `<option value="plant:${escapeAttr(p.id)}"${
+              draft.care_subject === `plant:${p.id}` ? " selected" : ""
+            }>${escapeHtml(p.name)}</option>`
+        )
+        .join("");
+      const zoneOpts = this._zones()
+        .map(
+          (z) =>
+            `<option value="zone:${escapeAttr(z.entityId)}"${
+              draft.care_subject === `zone:${z.entityId}` ? " selected" : ""
+            }>${escapeHtml(z.name)}</option>`
+        )
+        .join("");
+      return (
+        `<h3 class="yard-h3">Care tasks</h3>` +
+        `<div class="card care-tasks">` +
+        (rows
+          ? `<ul class="care-task-list">${rows}</ul>`
+          : `<p class="care-tasks-empty">No care tasks yet — add a recurring reminder below.</p>`) +
+        `<div class="care-add">` +
+        `<div><label>Kind</label><select name="care_kind" data-action="care-field">` +
+        kinds
+          .map(
+            ([v, l]) =>
+              `<option value="${v}"${draft.care_kind === v ? " selected" : ""}>${l}</option>`
+          )
+          .join("") +
+        `</select></div>` +
+        `<div class="care-add-label"><label>Label</label>` +
+        `<input name="care_label" data-action="care-field" type="text" maxlength="120" value="${escapeAttr(
+          draft.care_label || ""
+        )}" placeholder="Required for custom" /></div>` +
+        `<div><label>Every (days)</label>` +
+        `<input name="care_interval" data-action="care-field" type="number" min="1" step="1" value="${escapeAttr(
+          String(draft.care_interval || 90)
+        )}" /></div>` +
+        `<div><label>Plant / zone</label><select name="care_subject" data-action="care-field">` +
+        (plantOpts ? `<optgroup label="Plants">${plantOpts}</optgroup>` : "") +
+        (zoneOpts ? `<optgroup label="Zones">${zoneOpts}</optgroup>` : "") +
+        `</select></div>` +
+        `<button class="btn btn-primary" type="button" data-action="care-task-add">Add</button>` +
+        `</div>` +
+        `</div>`
       );
     }
 
@@ -5835,6 +6345,41 @@
         `.health-block{margin:6px 0}` +
         `.health-sub{display:block;font-size:11px;color:var(--ci-text-2);text-transform:uppercase;letter-spacing:0.03em}` +
         `.health-block ul{margin:2px 0 0;padding-left:18px;font-size:13px}` +
+        // v1.35 — plant light range + illuminance survey section
+        `.plant-light{margin-top:14px;border-top:1px solid var(--ci-border);padding-top:12px}` +
+        `.plant-light-title{display:block;font-size:13px;color:var(--ci-text-2);margin-bottom:8px}` +
+        `.light-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;font-size:13px}` +
+        `.light-range{font-weight:600;color:var(--ci-text)}` +
+        `.light-badge{font-size:13px;font-weight:600;padding:2px 8px;border-radius:10px;background:var(--ci-hover);color:var(--ci-text)}` +
+        `.light-too_low{background:rgba(249,168,37,0.18);color:#b26a00}` +
+        `.light-optimal{background:rgba(67,160,71,0.16);color:#2e7d32}` +
+        `.light-too_high{background:rgba(219,68,55,0.16);color:#c62828}` +
+        `.light-no_range{background:var(--ci-hover);color:var(--ci-text-2)}` +
+        `.light-latest{font-size:13px;color:var(--ci-text-2)}` +
+        `.light-empty{margin:0 0 8px;font-size:13px;color:var(--ci-text-2)}` +
+        `.light-history{margin:6px 0 8px;padding-left:18px;font-size:13px;color:var(--ci-text-2)}` +
+        `.light-history li{margin:2px 0}` +
+        `.light-survey-controls{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-top:8px}` +
+        `.light-survey-controls label{display:block;font-size:13px;color:var(--ci-text-2);margin-bottom:4px}` +
+        `.light-survey-sensor{flex:1;min-width:220px}` +
+        `.light-survey-minutes input{width:90px}` +
+        `.light-survey-active{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px}` +
+        `.light-surveying{font-size:13px;font-weight:600;color:var(--ci-accent)}` +
+        // v1.35 — care-tasks card (Yard tab)
+        `.care-task-list{list-style:none;margin:0 0 12px;padding:0;display:flex;flex-direction:column;gap:8px}` +
+        `.care-task-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 10px;border:1px solid var(--ci-border);border-radius:8px}` +
+        `.care-task-disabled{opacity:0.55}` +
+        `.care-task-name{font-weight:600;font-size:13px;color:var(--ci-text)}` +
+        `.care-task-meta{font-size:13px;color:var(--ci-text-2)}` +
+        `.care-task-due{font-size:13px;font-weight:600;padding:2px 8px;border-radius:10px;background:var(--ci-hover);color:var(--ci-text-2);white-space:nowrap}` +
+        `.care-task-due.due-now{background:rgba(219,68,55,0.16);color:#c62828}` +
+        `.care-task-actions{display:flex;gap:6px;margin-left:auto}` +
+        `.care-tasks-empty{margin:0 0 12px;font-size:13px;color:var(--ci-text-2)}` +
+        `.care-add{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;border-top:1px solid var(--ci-border);padding-top:12px}` +
+        `.care-add label{display:block;font-size:13px;color:var(--ci-text-2);margin-bottom:4px}` +
+        `.care-add input,.care-add select{padding:8px 10px;border:1px solid var(--ci-border);border-radius:6px;background:var(--ci-input-bg);color:inherit;font:inherit;box-sizing:border-box}` +
+        `.care-add-label{flex:1;min-width:180px}` +
+        `.care-add-label input{width:100%}` +
         // v1.32 — advisory "Today's plan" card
         `.daily-plan-card{margin-bottom:18px;padding:14px 16px;border:1px solid var(--ci-border);border-radius:10px;background:var(--ci-card)}` +
         `.plan-summary{margin:4px 0 10px;font-size:13px;color:var(--ci-text)}` +
@@ -6120,6 +6665,18 @@
         `.zone-reorder{font-size:10px;line-height:1;padding:2px 6px;border:1px solid var(--ci-border);border-radius:4px;background:transparent;color:var(--ci-text-2);cursor:pointer}` +
         `.zone-reorder:hover:not([disabled]){background:var(--ci-hover);color:var(--ci-text)}` +
         `.zone-reorder[disabled]{opacity:0.3;cursor:not-allowed}` +
+        // v1.35 — per-zone watering diagnosis (expands under the row; the
+        // row is a grid, so span every column)
+        `.zone-diag{grid-column:1 / -1;border-top:1px solid var(--ci-border);padding-top:10px;font-size:13px}` +
+        `.zone-diag-head{font-weight:600;font-size:13px;margin-bottom:6px}` +
+        `.zone-diag-ok{color:#2e7d32}` +
+        `.zone-diag-warn{color:#b26a00}` +
+        `.zone-diag-none{color:var(--ci-text-2)}` +
+        `.zone-diag-block{margin:6px 0}` +
+        `.zone-diag-sub{display:block;font-size:13px;color:var(--ci-text-2);text-transform:uppercase;letter-spacing:0.03em}` +
+        `.zone-diag-block ul{margin:2px 0 0;padding-left:18px;font-size:13px}` +
+        `.zone-diag-loading{display:block;font-size:13px;color:var(--ci-text-2)}` +
+        `.zone-diag-foot{display:block;margin-top:6px;font-size:13px;color:var(--ci-text-2)}` +
         // ── Sensors tab ───────────────────────────────────────────
         `.sensor-zone-list{display:flex;flex-direction:column;gap:10px}` +
         `.sensor-zone-card{background:var(--ci-card);border:1px solid var(--ci-border);border-radius:12px;padding:14px 16px}` +
