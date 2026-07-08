@@ -783,7 +783,9 @@ class ScheduleCoordinator:
         # v1.36 — the plants' latest light-survey verdicts (fresh within 120 days)
         # as corroborating stress signals for the rail.
         light_verdicts: list[dict] = []
-        fresh_cutoff = dt_util.now().timestamp() - 120 * 86400
+        now_ts = dt_util.now().timestamp()
+        fresh_cutoff = now_ts - 120 * 86400
+        fresh_ceiling = now_ts + 86400  # a day of clock-skew slack; future-dated = stale
         for p in self._plants.by_zone(zone_entity_id):
             if isinstance(p.health, dict):
                 concerns.extend(
@@ -791,7 +793,7 @@ class ScheduleCoordinator:
                 )
             if p.light_surveys:
                 latest = p.light_surveys[0]  # newest-first, rail-cleaned on load
-                if latest.get("ts", 0) >= fresh_cutoff:
+                if fresh_cutoff <= latest.get("ts", 0) <= fresh_ceiling:
                     light_verdicts.append({"plant": p.name, "verdict": latest.get("verdict")})
 
         # Thresholds default to the zone-config values only when sensors exist;
