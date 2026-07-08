@@ -385,6 +385,9 @@
         care_label: "",
         care_interval: "90",
         care_subject: "",
+        // v1.36 — "seed a starter plan" row selections
+        seed_plant: "",
+        seed_preset: "tree",
       };
       this._zoneDiagnosis = {}; // zone entity_id -> diagnosis result (expanded row)
 
@@ -780,6 +783,7 @@
         if (action === "care-task-delete")
           return this._deleteCareTask(node.dataset.taskId, node.dataset.taskName);
         if (action === "care-task-add") return this._addCareTask();
+        if (action === "care-plan-seed") return this._seedCarePlan();
         if (action === "zone-diagnose")
           return this._diagnoseZone(node.dataset.entityId);
         if (action === "zone-move-up") return this._reorderZone(node.dataset.entityId, -1);
@@ -2334,6 +2338,32 @@
         await this._fetchCareTasks();
       } catch (err) {
         alert("Failed to delete the task: " + (err?.message || err));
+      }
+    }
+
+    async _seedCarePlan() {
+      // v1.36 — one-click starter care plan (backend is idempotent: kinds
+      // the plant already has are skipped). Reads the rendered selects like
+      // _addCareTask; the draft only preserves the picks across re-renders.
+      if (!(this._plants || []).length) {
+        alert("Add a plant first — starter plans attach to a plant.");
+        return;
+      }
+      const root = this.shadowRoot;
+      const plantId = root?.querySelector('select[name="seed_plant"]')?.value || "";
+      const preset = root?.querySelector('select[name="seed_preset"]')?.value || "tree";
+      if (!plantId) {
+        alert("Pick a plant to seed.");
+        return;
+      }
+      try {
+        await this._hass.callService("complete_irrigation", "seed_care_plan", {
+          plant_id: plantId,
+          preset,
+        });
+        await this._fetchCareTasks();
+      } catch (err) {
+        alert("Failed to seed the care plan: " + (err?.message || err));
       }
     }
 
@@ -5787,6 +5817,49 @@
         `</select></div>` +
         `<button class="btn btn-primary" type="button" data-action="care-task-add">Add</button>` +
         `</div>` +
+        this._renderCareSeedRow() +
+        `</div>`
+      );
+    }
+
+    _renderCareSeedRow() {
+      // v1.36 — compact "seed a starter plan" row: pick a plant + preset,
+      // and the backend creates that preset's starter tasks (idempotent).
+      const presets = [
+        ["tree", "Tree"],
+        ["shrub", "Shrub"],
+        ["flower", "Flower"],
+        ["cactus_succulent", "Cactus & succulent"],
+        ["grass", "Grass"],
+      ];
+      const draft = this._careDraft || {};
+      const plants = this._plants || [];
+      const plantOpts = plants
+        .map(
+          (p) =>
+            `<option value="${escapeAttr(p.id)}"${
+              draft.seed_plant === p.id ? " selected" : ""
+            }>${escapeHtml(p.name)}</option>`
+        )
+        .join("");
+      const presetOpts = presets
+        .map(
+          ([v, l]) =>
+            `<option value="${escapeAttr(v)}"${
+              draft.seed_preset === v ? " selected" : ""
+            }>${escapeHtml(l)}</option>`
+        )
+        .join("");
+      return (
+        `<div class="care-seed">` +
+        `<span class="care-seed-title">Seed a starter plan:</span>` +
+        `<select name="seed_plant" data-action="care-field"${
+          plants.length ? "" : " disabled"
+        }>${plantOpts}</select>` +
+        `<select name="seed_preset" data-action="care-field">${presetOpts}</select>` +
+        `<button class="btn btn-small" type="button" data-action="care-plan-seed"${
+          plants.length ? "" : " disabled"
+        }>Seed plan</button>` +
         `</div>`
       );
     }
@@ -6443,6 +6516,10 @@
         `.care-add input,.care-add select{padding:8px 10px;border:1px solid var(--ci-border);border-radius:6px;background:var(--ci-input-bg);color:inherit;font:inherit;box-sizing:border-box}` +
         `.care-add-label{flex:1;min-width:180px}` +
         `.care-add-label input{width:100%}` +
+        // v1.36 — "seed a starter plan" row
+        `.care-seed{display:flex;gap:10px;align-items:center;flex-wrap:wrap;border-top:1px solid var(--ci-border);margin-top:12px;padding-top:12px}` +
+        `.care-seed-title{font-size:13px;font-weight:600;color:var(--ci-text-2)}` +
+        `.care-seed select{padding:8px 10px;border:1px solid var(--ci-border);border-radius:6px;background:var(--ci-input-bg);color:inherit;font:inherit;box-sizing:border-box}` +
         // v1.32 — advisory "Today's plan" card
         `.daily-plan-card{margin-bottom:18px;padding:14px 16px;border:1px solid var(--ci-border);border-radius:10px;background:var(--ci-card)}` +
         `.plan-summary{margin:4px 0 10px;font-size:13px;color:var(--ci-text)}` +

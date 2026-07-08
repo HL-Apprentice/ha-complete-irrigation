@@ -780,11 +780,19 @@ class ScheduleCoordinator:
 
         # Vision-health concerns from this zone's plants (bounded by the v1.33 rail).
         concerns: list[str] = []
+        # v1.36 — the plants' latest light-survey verdicts (fresh within 120 days)
+        # as corroborating stress signals for the rail.
+        light_verdicts: list[dict] = []
+        fresh_cutoff = dt_util.now().timestamp() - 120 * 86400
         for p in self._plants.by_zone(zone_entity_id):
             if isinstance(p.health, dict):
                 concerns.extend(
                     str(c) for c in (p.health.get("concerns") or []) if isinstance(c, str)
                 )
+            if p.light_surveys:
+                latest = p.light_surveys[0]  # newest-first, rail-cleaned on load
+                if latest.get("ts", 0) >= fresh_cutoff:
+                    light_verdicts.append({"plant": p.name, "verdict": latest.get("verdict")})
 
         # Thresholds default to the zone-config values only when sensors exist;
         # a sensorless zone keeps None thresholds -> STATUS_UNKNOWN from the rail.
@@ -798,6 +806,7 @@ class ScheduleCoordinator:
             max_pct=_pct("max_pct", DEFAULT_ZONE_MAX_PCT) if have_sensors else None,
             history=self._run_history.all(),
             plant_concerns=concerns,
+            light_verdicts=light_verdicts,
         )
 
     # ── Care-task reminders (v1.35) ────────────────────────────────
