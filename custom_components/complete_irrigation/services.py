@@ -35,7 +35,7 @@ from .chunked_run import (
     DEFAULT_CONTROLLER_MAX_RUN_MIN,
     plan_blocks,
 )
-from .const import DEFAULT_MANUAL_RUN_MINUTES, DOMAIN
+from .const import DEFAULT_MANUAL_RUN_MINUTES, DOMAIN, MAX_SCHEDULE_DURATION_MIN
 from .hydraulics import WUCOLS_FACTORS
 from .manual_run import ManualRun, validate_run_duration
 from .notifications import CATEGORY_CRITICAL  # v1.16: promoted from inline imports
@@ -89,7 +89,6 @@ SERVICE_SET_YARD_MAP = "set_yard_map"  # v1.30 — fetch + cache the aerial back
 SERVICE_ADD_PLANT_PHOTO = "add_plant_photo"  # v1.32 — per-plant photo + EXIF-GPS place
 SERVICE_SET_PLANT_HEALTH = "set_plant_health"  # v1.33 — store a vision-health verdict
 
-MAX_SCHEDULE_DURATION_MIN = 480  # 8 hours — safety cap for scheduled runs
 _HHMM_RE = r"^([01]\d|2[0-3]):[0-5]\d$"  # quiet-hours 24h time, validated at the boundary
 
 # Voluptuous schema for validation at the HA boundary.

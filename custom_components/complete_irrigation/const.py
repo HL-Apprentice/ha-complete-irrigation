@@ -94,8 +94,11 @@ DEFAULT_CASCADE_DEFER_LIMIT = 3
 DEFAULT_COMPRESS_FLOOR_PCT = 70
 DEFAULT_MANUAL_RUN_MINUTES = 10
 # (v1.24 removed MAX_MANUAL_RUN_MINUTES=60 — it was wrongly applied to scheduled
-#  runs via run_zone, silently blocking every schedule over 60 min. The single
-#  absolute cap is now MAX_SCHEDULE_DURATION_MIN=480 in services.py.)
+#  runs via run_zone, silently blocking every schedule over 60 min.)
+# The single absolute cap on any dispatched run (8 hours). Lives here — the package
+# import-leaf — so BOTH the service boundary (services.py) and the coordinator's
+# hot-weather boost clamp to the same ceiling.
+MAX_SCHEDULE_DURATION_MIN = 480
 
 # Per-zone moisture defaults when the user hasn't configured min/target/max
 # (matches the "lawn" preset in PLANT_CATEGORIES above). Used by the

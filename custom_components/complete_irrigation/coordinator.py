@@ -35,6 +35,7 @@ from .const import (
     DEFAULT_ZONE_MIN_PCT,
     DEFAULT_ZONE_TARGET_PCT,
     DOMAIN,
+    MAX_SCHEDULE_DURATION_MIN,
 )
 
 # v1.16 — pure-logic helpers live in coordinator_logic.py now; re-exported
@@ -1067,6 +1068,9 @@ class ScheduleCoordinator:
                         event_type="auto_soak_gave_up",
                     )
                 continue
+            zone_state = self._hass.states.get(zone_id)
+            if zone_state is not None and zone_state.state == "on":
+                continue  # a scheduled/manual run for this zone is live — let it finish
             if self._other_zone_busy(zone_id, now):
                 continue  # one-zone-at-a-time: wait for the other zone to finish
             await self._start_soak_run(
@@ -1240,7 +1244,14 @@ class ScheduleCoordinator:
         }
         if not hw.boost:
             return adjusted_minutes, None
-        new_minutes = max(1, round(adjusted_minutes * hw.multiplier))
+        # Clamp to the same absolute ceiling the service boundary enforces. Without this
+        # a long base run x boost can exceed MAX_SCHEDULE_DURATION_MIN; because _fire_run
+        # dispatches run_zone with blocking=False, the boundary's ValueError would be
+        # raised inside a fire-and-forget task (not caught here) and the run would vanish
+        # silently on the hottest days.
+        new_minutes = min(
+            MAX_SCHEDULE_DURATION_MIN, max(1, round(adjusted_minutes * hw.multiplier))
+        )
         note = f"hot-weather boost (high {forecast_high}F >= {threshold}F) x{hw.multiplier:.2f}"
         return new_minutes, note
 

@@ -47,6 +47,15 @@ def _env(name: str, default: str) -> str:
     return os.environ.get(name, default)
 
 
+def _int_env(name: str, default: int) -> int:
+    """Like _env but tolerant: a non-numeric VH_MAX_PLANTS must not crash the whole
+    job at import with an unhandled ValueError — fall back to the default instead."""
+    try:
+        return int(os.environ.get(name, "") or default)
+    except (TypeError, ValueError):
+        return default
+
+
 CFG = {
     "health_url": _env(
         "VH_HEALTH_URL", "http://homeassistant.local:8123/api/complete_irrigation/health.json"
@@ -55,7 +64,7 @@ CFG = {
     "token_file": _env("VH_TOKEN_FILE", str(HOME / ".config/vision-health/ha_token")),
     "vision_url": _env("VH_VISION_URL", "http://127.0.0.1:8000/v1/chat/completions"),
     "vision_model": _env("VH_VISION_MODEL", "Qwen2.5-VL-7B-Instruct"),
-    "max_plants": int(_env("VH_MAX_PLANTS", "4")),
+    "max_plants": _int_env("VH_MAX_PLANTS", 4),
     "dry_run": _env("VH_DRY_RUN", "") not in ("", "0", "false", "no"),
 }
 
@@ -113,6 +122,13 @@ def fetch_health(token: str) -> dict:
 def fetch_image_b64(local_path: str, token: str) -> str | None:
     """Fetch a /local/... photo from HA and return base64 (or None on failure)."""
     if not local_path or not local_path.startswith("/local/"):
+        return None
+    # Defence-in-depth: the host is already fixed (CFG['ha_url']) and redirects are
+    # refused, but never let a crafted health.json path use "../" to climb out of
+    # /local/ into another admin-token-authorised HA endpoint. The rail architecture's
+    # own premise is that this job must not trust the data it is handed.
+    if ".." in local_path:
+        _log(f"  refusing suspicious photo path {local_path}")
         return None
     url = CFG["ha_url"].rstrip("/") + local_path.split("?", 1)[0]
     try:
