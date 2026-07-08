@@ -390,3 +390,54 @@ def test_safe_export_size_degenerate_inputs():
     assert safe_export_size(0.0, 1536, 1282) == (1536, 1282)
     assert safe_export_size(60.0, 0, 0) == (0, 0)
     assert safe_export_size(60.0, 1, 1) == (1, 1)  # tiny request stays tiny
+
+
+# ════════════════════════════════════════════════════════════════════
+# v1.36 — light-verdict stress triangulation + care-plan seeding
+# ════════════════════════════════════════════════════════════════════
+
+
+def test_diagnosis_light_verdict_corroborates_but_never_trips():
+    # Healthy soil + too_high light -> still OK (light alone never trips).
+    d = _diag(30.0, light_verdicts=[{"plant": "Citrus", "verdict": "too_high"}])
+    assert d.status == STATUS_OK
+    # Dry soil + too_high light -> under verdict WITH the light sign attached.
+    hist = [_run(STATUS_COMPLETED, i) for i in (1, 3, 5)]
+    d = _diag(12.0, history=hist, light_verdicts=[{"plant": "Citrus", "verdict": "too_high"}])
+    assert d.status == STATUS_POSSIBLE_UNDER
+    assert any("MORE light" in s for s in d.signs)
+    assert d.evidence["light_verdicts"] == [{"plant": "Citrus", "verdict": "too_high"}]
+
+
+def test_diagnosis_low_light_corroborates_overwatering():
+    d = _diag(50.0, light_verdicts=[{"plant": "Fern", "verdict": "too_low"}])
+    assert d.status == STATUS_POSSIBLE_OVER
+    assert any("LESS light" in s for s in d.signs)
+
+
+def test_diagnosis_optimal_and_junk_light_verdicts_ignored():
+    d = _diag(
+        30.0,
+        light_verdicts=[
+            {"plant": "A", "verdict": "optimal"},
+            {"plant": "B", "verdict": "evil"},
+            "junk",
+        ],
+    )
+    assert d.status == STATUS_OK
+    assert d.evidence["light_verdicts"] == []
+
+
+def test_seed_care_plan_presets():
+    from custom_components.complete_irrigation.care_tasks import (
+        CARE_PLAN_PRESETS,
+        seed_care_plan,
+    )
+
+    counter = iter(range(100))
+    tasks = seed_care_plan("p1", "tree", id_factory=lambda: f"id{next(counter)}")
+    assert [(t.kind, t.interval_days) for t in tasks] == list(CARE_PLAN_PRESETS["tree"])
+    assert all(t.plant_id == "p1" for t in tasks)
+    assert len({t.id for t in tasks}) == len(tasks)  # unique ids
+    with pytest.raises(ValueError):
+        seed_care_plan("p1", "bonsai", id_factory=lambda: "x")

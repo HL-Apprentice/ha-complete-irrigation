@@ -100,9 +100,23 @@ def diagnose_zone(
     max_pct: float | None,
     history: list[RunHistoryRecord],
     plant_concerns: list[str] | None = None,
+    light_verdicts: list[dict] | None = None,
 ) -> ZoneDiagnosis:
-    """Deterministic diagnosis from existing signals. Advisory only."""
+    """Deterministic diagnosis from existing signals. Advisory only.
+
+    ``light_verdicts`` (v1.36) — the zone's plants' latest light-survey verdicts,
+    each ``{"plant": name, "verdict": too_low|optimal|too_high}``. Light is a
+    CORROBORATING sign only (same rule as vision keywords): a plant getting more
+    light than it prefers raises water demand and can mimic underwatering; less
+    light means soil dries slower and corroborates overwatering. It never trips
+    a verdict on its own — soil evidence stays in charge.
+    """
     concerns = [str(c)[:160] for c in (plant_concerns or []) if isinstance(c, str)][:24]
+    lights = [
+        lv
+        for lv in (light_verdicts or [])
+        if isinstance(lv, dict) and lv.get("verdict") in ("too_low", "too_high")
+    ][:12]
     recent = _recent([r for r in history if r.zone_entity_id == zone_entity_id], now)
     completed = [r for r in recent if r.status == STATUS_COMPLETED]
     aborted = [r for r in recent if r.status == STATUS_ABORTED]
@@ -118,6 +132,9 @@ def diagnose_zone(
         "min_pct": min_pct,
         "target_pct": target_pct,
         "max_pct": max_pct,
+        "light_verdicts": [
+            {"plant": str(lv.get("plant") or "")[:80], "verdict": lv["verdict"]} for lv in lights
+        ],
     }
 
     have_reading = (
@@ -147,6 +164,15 @@ def diagnose_zone(
     over_hits = _concern_hits(concerns, _OVER_KEYWORDS)
     if over_hits:
         over_signs.append("Vision health flagged: " + "; ".join(over_hits[:3]) + ".")
+    low_light = [
+        str(lv.get("plant") or "a plant")[:80] for lv in lights if lv["verdict"] == "too_low"
+    ]
+    if low_light:
+        over_signs.append(
+            "Light surveys measured LESS light than optimal at: "
+            + ", ".join(low_light[:3])
+            + " — shadier spots dry out slower, so the same schedule waters them relatively more."
+        )
 
     if min_pct is not None and cur < float(min_pct):
         if len(completed) >= 3:
@@ -167,6 +193,15 @@ def diagnose_zone(
     under_hits = _concern_hits(concerns, _UNDER_KEYWORDS)
     if under_hits:
         under_signs.append("Vision health flagged: " + "; ".join(under_hits[:3]) + ".")
+    high_light = [
+        str(lv.get("plant") or "a plant")[:80] for lv in lights if lv["verdict"] == "too_high"
+    ]
+    if high_light:
+        under_signs.append(
+            "Light surveys measured MORE light than optimal at: "
+            + ", ".join(high_light[:3])
+            + " — sunnier spots raise water demand, and light scorch can mimic underwatering."
+        )
 
     # Moisture evidence outranks keyword corroboration: only diagnose a direction
     # the soil actually supports; keywords alone never trip a verdict.

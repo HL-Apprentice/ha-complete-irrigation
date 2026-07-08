@@ -198,6 +198,13 @@ class IrrigationHealthView(HomeAssistantView):
                 "due_for_review": bool(p.photos)
                 and due_for_review((p.health or {}).get("assessed_at"), now_iso),
                 "review": select_review_photos(list(p.photos)),
+                # v1.36 — context for the vision job's prompt: species + optimal lux
+                # range + the latest light-survey verdict (all rail-bounded values).
+                "species": p.species,
+                "lux_range": (
+                    {"low": p.lux_low, "high": p.lux_high} if p.lux_low is not None else None
+                ),
+                "light": (dict(p.light_surveys[0]) if p.light_surveys else None),
             }
             for p in coord.plants.all()
         ]
