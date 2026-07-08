@@ -356,3 +356,37 @@ def test_diagnosis_serializes():
     out = d.to_dict()
     assert out["status"] == STATUS_POSSIBLE_OVER
     assert isinstance(out["signs"], list) and isinstance(out["evidence"], dict)
+
+
+# ════════════════════════════════════════════════════════════════════
+# yard_map safe_export_size (v1.35.1 — Esri cache-scale floor)
+# ════════════════════════════════════════════════════════════════════
+
+
+def test_safe_export_size_shrinks_sharp_requests():
+    from custom_components.complete_irrigation.yard_map import (
+        MIN_EXPORT_M_PER_PX,
+        safe_export_size,
+    )
+
+    # A 60 m yard at 1536 px would be 0.04 m/px — Esri 500s; must shrink to >= 0.3.
+    fw, fh = safe_export_size(60.0, 1536, 1282)
+    assert max(fw, fh) == int(60.0 / MIN_EXPORT_M_PER_PX)  # 200 px
+    assert 60.0 / max(fw, fh) >= MIN_EXPORT_M_PER_PX - 1e-9
+    # Aspect preserved (within rounding).
+    assert abs(fw / fh - 1536 / 1282) < 0.02
+
+
+def test_safe_export_size_passes_coarse_requests_through():
+    from custom_components.complete_irrigation.yard_map import safe_export_size
+
+    # 600 m at 1536 px = 0.39 m/px — already coarser than the floor: unchanged.
+    assert safe_export_size(600.0, 1536, 1282) == (1536, 1282)
+
+
+def test_safe_export_size_degenerate_inputs():
+    from custom_components.complete_irrigation.yard_map import safe_export_size
+
+    assert safe_export_size(0.0, 1536, 1282) == (1536, 1282)
+    assert safe_export_size(60.0, 0, 0) == (0, 0)
+    assert safe_export_size(60.0, 1, 1) == (1, 1)  # tiny request stays tiny
