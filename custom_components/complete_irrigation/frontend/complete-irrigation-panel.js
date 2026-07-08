@@ -377,6 +377,7 @@
       this._plantEditor = null; // null = form hidden; object = add/edit draft
       // v1.35 — light surveys + care tasks + watering diagnosis state.
       this._activeLightSurveys = {}; // plant_id -> {sensor, started, until, minutes, samples}
+      this._lightSurveyPoll = null; // 30s list_plants refetch while a survey runs (Yard open)
       this._careTasks = []; // list_care_tasks rows (fetched with the yard)
       this._careDraft = {
         // add-form draft so background re-renders don't wipe typing
@@ -576,6 +577,8 @@
         clearInterval(this._countdownTimer);
         this._countdownTimer = null;
       }
+      // v1.35 — and the 30s light-survey poll, for the same reason.
+      this._stopLightSurveyPoll();
     }
 
     _onAnyScroll() {
@@ -598,6 +601,45 @@
       if (this._nowLineTimer) {
         clearInterval(this._nowLineTimer);
         this._nowLineTimer = null;
+      }
+    }
+
+    _syncLightSurveyPoll() {
+      // v1.35 — while an illuminance survey is running AND the Yard tab is
+      // open, refetch list_plants every 30s so "Surveying… N readings"
+      // ticks up and the controls flip back when the backend finishes.
+      // Idempotent: never stacks a second interval; self-clears when no
+      // surveys remain or the user leaves the Yard tab.
+      const wanted =
+        this._currentSection === "yard" &&
+        Object.keys(this._activeLightSurveys || {}).length > 0;
+      if (!wanted) return this._stopLightSurveyPoll();
+      if (this._lightSurveyPoll) return;
+      this._lightSurveyPoll = setInterval(() => this._pollLightSurveys(), 30000);
+    }
+
+    _stopLightSurveyPoll() {
+      if (this._lightSurveyPoll) {
+        clearInterval(this._lightSurveyPoll);
+        this._lightSurveyPoll = null;
+      }
+    }
+
+    async _pollLightSurveys() {
+      // Light refetch: list_plants only — it carries both the survey
+      // history and active_light_surveys; the yard report + care tasks
+      // didn't change, so skip them.
+      if (!this._hass?.callWS) return;
+      try {
+        const res = await this._hass.callWS({
+          type: "complete_irrigation/list_plants",
+        });
+        this._plants = (res && res.plants) || [];
+        this._activeLightSurveys = (res && res.active_light_surveys) || {};
+        this._syncLightSurveyPoll(); // self-clear once every survey completes
+        this._scheduleRender();
+      } catch (err) {
+        console.error("[complete-irrigation] light-survey poll failed:", err);
       }
     }
 
@@ -1354,6 +1396,9 @@
       // v1.19.0 — keep the now-line drifting only while Today is open.
       if (sectionId === "today") this._startNowLineTimer();
       else this._stopNowLineTimer();
+      // v1.35 — survey-status poll only runs while Yard is open (entering
+      // Yard re-arms it via the _fetchYard above once surveys are known).
+      if (sectionId !== "yard") this._stopLightSurveyPoll();
       // v1.32 — advisory "Today's plan" card; refetch on each Today open.
       if (sectionId === "today") this._fetchDailyPlan();
       // Today + Zones both rely on the cached PlannedRuns for their
@@ -1660,6 +1705,9 @@
           : null;
         this._yardMap = reportRes ? reportRes.yard_map || null : null; // v1.30
         this._yardLoaded = true;
+        // v1.35 — start/stop the 30s survey-status poll to match the
+        // just-fetched active_light_surveys (idempotent).
+        this._syncLightSurveyPoll();
         this._scheduleRender();
       } catch (err) {
         console.error("[complete-irrigation] yard fetch failed:", err);
@@ -2121,24 +2169,32 @@
         // maxlength matches, the slice is belt-and-suspenders).
         species: (e.species || "").trim().slice(0, 120),
       };
-      // v1.35 — light range rides along on an EDIT: both fields set → save
-      // the range after the plant save; both cleared on a plant that HAD a
-      // range → clear it. (On add the user sets the range via a later edit.)
-      const luxLowRaw = String(e.lux_low == null ? "" : e.lux_low).trim();
-      const luxHighRaw = String(e.lux_high == null ? "" : e.lux_high).trim();
-      const luxLow = parseInt(luxLowRaw, 10);
-      const luxHigh = parseInt(luxHighRaw, 10);
-      const bothSet =
-        luxLowRaw !== "" &&
-        luxHighRaw !== "" &&
-        Number.isFinite(luxLow) &&
-        Number.isFinite(luxHigh);
-      if (bothSet && luxLow >= luxHigh) {
-        alert("Lux low must be less than lux high.");
-        return;
-      }
       try {
         if (e.id) {
+          // v1.35 — light range rides along on an EDIT only (the form hides
+          // the lux fields on add: add_plant takes none, so a range there
+          // would be silently discarded). Validate BEFORE any call so a bad
+          // range can't half-apply — and can never block an add.
+          const luxLowRaw = String(e.lux_low == null ? "" : e.lux_low).trim();
+          const luxHighRaw = String(e.lux_high == null ? "" : e.lux_high).trim();
+          const luxLow = parseInt(luxLowRaw, 10);
+          const luxHigh = parseInt(luxHighRaw, 10);
+          const bothSet =
+            luxLowRaw !== "" &&
+            luxHighRaw !== "" &&
+            Number.isFinite(luxLow) &&
+            Number.isFinite(luxHigh);
+          const bothEmpty = luxLowRaw === "" && luxHighRaw === "";
+          if (!bothSet && !bothEmpty) {
+            // Half-filled pair would be a silent no-op — say so and keep
+            // the editor open.
+            alert("Enter both Lux low and Lux high, or clear both to remove the range.");
+            return;
+          }
+          if (bothSet && luxLow >= luxHigh) {
+            alert("Lux low must be less than lux high.");
+            return;
+          }
           await this._hass.callService("complete_irrigation", "update_plant", {
             plant_id: e.id,
             ...payload,
@@ -2149,7 +2205,7 @@
               "set_plant_light_range",
               { plant_id: e.id, lux_low: luxLow, lux_high: luxHigh }
             );
-          } else if (luxLowRaw === "" && luxHighRaw === "" && e._hadLightRange) {
+          } else if (bothEmpty && e._hadLightRange) {
             await this._hass.callService(
               "complete_irrigation",
               "set_plant_light_range",
@@ -5374,27 +5430,33 @@
           )
           .join("") +
         `</select></div>` +
-        // v1.35 — light range. The preset fills the two lux inputs; both
-        // stay editable. Selected preset is inferred from the current pair.
-        `<div><label>Light preset</label>` +
-        `<select name="light_preset" data-action="light-preset">` +
-        LIGHT_PRESETS.map(([v, l]) => {
-          const cur = `${String(e.lux_low == null ? "" : e.lux_low).trim()}:${String(
-            e.lux_high == null ? "" : e.lux_high
-          ).trim()}`;
-          return `<option value="${escapeAttr(v)}"${
-            v && cur === v ? " selected" : ""
-          }>${escapeHtml(l)}</option>`;
-        }).join("") +
-        `</select></div>` +
-        `<div><label>Lux low</label>` +
-        `<input name="lux_low" data-action="plant-field" type="number" min="0" step="1" value="${escapeAttr(
-          String(e.lux_low == null ? "" : e.lux_low)
-        )}" placeholder="e.g. 3000" /></div>` +
-        `<div><label>Lux high</label>` +
-        `<input name="lux_high" data-action="plant-field" type="number" min="0" step="1" value="${escapeAttr(
-          String(e.lux_high == null ? "" : e.lux_high)
-        )}" placeholder="e.g. 10000" /></div>` +
+        // v1.35 — light range (SAVED plants only: add_plant takes no lux
+        // fields, so on add the pair would be silently discarded — show a
+        // hint instead, like the photo/health/light sections below). The
+        // preset fills the two lux inputs; both stay editable. Selected
+        // preset is inferred from the current pair.
+        (e.id
+          ? `<div><label>Light preset</label>` +
+            `<select name="light_preset" data-action="light-preset">` +
+            LIGHT_PRESETS.map(([v, l]) => {
+              const cur = `${String(e.lux_low == null ? "" : e.lux_low).trim()}:${String(
+                e.lux_high == null ? "" : e.lux_high
+              ).trim()}`;
+              return `<option value="${escapeAttr(v)}"${
+                v && cur === v ? " selected" : ""
+              }>${escapeHtml(l)}</option>`;
+            }).join("") +
+            `</select></div>` +
+            `<div><label>Lux low</label>` +
+            `<input name="lux_low" data-action="plant-field" type="number" min="0" step="1" value="${escapeAttr(
+              String(e.lux_low == null ? "" : e.lux_low)
+            )}" placeholder="e.g. 3000" /></div>` +
+            `<div><label>Lux high</label>` +
+            `<input name="lux_high" data-action="plant-field" type="number" min="0" step="1" value="${escapeAttr(
+              String(e.lux_high == null ? "" : e.lux_high)
+            )}" placeholder="e.g. 10000" /></div>`
+          : `<div><label>Light range</label>` +
+            `<span class="light-add-hint">Save the plant first, then set its light range.</span></div>`) +
         `</div>` +
         // v1.32 — photo history (only on a saved plant; you attach photos to an id).
         (e.id ? this._renderPhotoSection(e) : "") +
@@ -6346,6 +6408,7 @@
         `.health-sub{display:block;font-size:11px;color:var(--ci-text-2);text-transform:uppercase;letter-spacing:0.03em}` +
         `.health-block ul{margin:2px 0 0;padding-left:18px;font-size:13px}` +
         // v1.35 — plant light range + illuminance survey section
+        `.light-add-hint{display:block;font-size:13px;color:var(--ci-text-2);padding:8px 0}` +
         `.plant-light{margin-top:14px;border-top:1px solid var(--ci-border);padding-top:12px}` +
         `.plant-light-title{display:block;font-size:13px;color:var(--ci-text-2);margin-bottom:8px}` +
         `.light-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;font-size:13px}` +
