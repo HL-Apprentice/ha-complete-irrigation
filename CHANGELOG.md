@@ -4,6 +4,23 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.37.0 — 2026-07-09 — minor
+
+**"Plant Brain": photo → species identification + one-tap care sheet, on your
+own GPU.** Point the integration at a local OpenAI-compatible vision endpoint
+(Settings → Vision endpoint; e.g. Ollama on a LAN box), tap 🔍 Identify on any
+plant with a photo, and a bounded SUGGESTION lands on the plant — species +
+common name, confidence, sunlight class, temperature tolerance, WUCOLS category,
+care-plan preset, watering/fertilizing cadence. Apply sets species + optimal-lux
+range + WUCOLS and seeds the starter care plan in one tap; Dismiss discards.
+Nothing applies without you. New rail `species_id.py` bounds every field
+(enum/isinstance guards, control-char + bidi stripping, finite-number checks);
+a tampered store degrades to "no suggestion", never a crash. Also: new official
+icon (smart-home + water drop). 4-model review (Grok/Gemini/Claude; Qwen
+timed out) — both HIGH gate findings fixed pre-release (vision endpoint
+persistence; unhashable-enum load crash), plus response-size cap, path
+containment, and text-sanitizer hardening. 569 tests.
+
 ## v1.36.0 — 2026-07-08 — minor
 
 **Stress triangulation + one-tap care plans.** (Also carries the v1.35.1

@@ -517,3 +517,30 @@ def test_species_suggestion_lux_mapping_and_plant_roundtrip():
     d = p.to_dict()
     d["species_suggestion"] = {"species": ""}  # junk degrades to None
     assert PlantRecord.from_dict(d).species_suggestion is None
+
+
+def test_species_suggestion_unhashable_enums_degrade_not_crash():
+    """v1.37 gate blocker: list/dict enum values must degrade to None (a TypeError
+    on load would drop the WHOLE plant record -> watering-affecting rail violation)."""
+    from custom_components.complete_irrigation.species_id import (
+        clean_stored_suggestion,
+        validate_suggestion,
+    )
+
+    raw = {"species": "Rose", "sunlight_class": ["full_sun"], "wucols_category": {"a": 1}}
+    out = validate_suggestion(raw, model="m", now_iso="t")
+    assert out["sunlight_class"] is None and out["wucols_category"] is None
+    assert clean_stored_suggestion({"species": "x", "care_plan_preset": ["tree"]}) is not None
+    # And the whole plant record survives a poisoned stored suggestion.
+    d = _plant().to_dict()
+    d["species_suggestion"] = {"species": "x", "sunlight_class": []}
+    rec = PlantRecord.from_dict(d)
+    assert rec.name == "Citrus"
+
+
+def test_species_suggestion_strips_bidi_and_c1_controls():
+    from custom_components.complete_irrigation.species_id import _clean_text
+
+    assert "‮" not in _clean_text("evil‮gnp", 120)
+    assert "\x85" not in _clean_text("a\x85b", 120)
+    assert "\x1b" not in _clean_text("2026\x1b]0;x\x07", 40)

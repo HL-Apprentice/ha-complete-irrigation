@@ -431,6 +431,8 @@ _GENERAL_CONFIG_FIELDS: dict[str, Any] = {
     "admin_only_services": bool,  # v1.17.11
     "controller_max_run_minutes": int,  # v1.25
     "block_gap_seconds": int,  # v1.25
+    "vision_url": lambda v: v.strip(),  # v1.37 — empty string clears
+    "vision_model": lambda v: v.strip(),  # v1.37
 }
 
 
@@ -1981,6 +1983,14 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         if not rel.startswith("/local/") or ".." in rel:
             raise vol.Invalid("plant photo path is not usable")
         abs_path = hass.config.path("www", *rel[len("/local/") :].split("/"))
+        # Belt-and-suspenders containment: the resolved path must stay inside www/
+        # (the prefix + ".." checks above make escape unreachable, but resolve()
+        # also defeats any symlink/odd-segment trickery in a tampered store).
+        from pathlib import Path as _Path
+
+        www_root = _Path(hass.config.path("www")).resolve()
+        if not _Path(abs_path).resolve().is_relative_to(www_root):
+            raise vol.Invalid("plant photo path is not usable")
 
         def _read() -> bytes:
             with open(abs_path, "rb") as fh:
@@ -2021,7 +2031,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             ) as resp:
                 if resp.status != 200:
                     raise vol.Invalid(f"vision endpoint returned HTTP {resp.status}")
-                raw = await resp.read()
+                raw = await resp.content.read(1_000_001)
                 if len(raw) > 1_000_000:
                     raise vol.Invalid("vision endpoint response too large")
         except vol.Invalid:
