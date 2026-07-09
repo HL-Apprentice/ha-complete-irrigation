@@ -1,0 +1,132 @@
+"""Species-identification rail (v1.37) — photo → species + care-sheet SUGGESTION.
+
+The consumer plant apps identify a species from a photo and populate the whole
+care sheet. Ours does it locally: the integration sends a plant's newest photo to
+a user-configured OpenAI-compatible vision endpoint (e.g. Qwen2.5-VL on the NAS
+GPU), and THIS rail bounds the model's reply into a SpeciesSuggestion before it
+is stored. Nothing is applied automatically — the suggestion sits on the plant
+until the user applies it (species + lux range + optional care-plan seed) or
+dismisses it. Advisory only; watering is untouched.
+
+Pure + HA-free, same discipline as vision_health.py: a hostile or hallucinating
+model can never plant unbounded text, non-finite numbers, or an unknown enum in
+.storage.
+"""
+
+from __future__ import annotations
+
+import math
+import re
+import unicodedata
+from typing import Any
+
+from .care_tasks import CARE_PLAN_PRESETS
+from .hydraulics import WUCOLS_FACTORS
+from .light_survey import MAX_LUX
+
+# Sunlight classes (the consumer-app vocabulary) → optimal-lux presets. Applying a
+# suggestion maps its sunlight class onto the plant's lux range for light surveys.
+SUNLIGHT_LUX: dict[str, tuple[int, int]] = {
+    "full_sun": (32000, 100000),
+    "partial_sun": (10000, 32000),
+    "bright_shade": (3000, 10000),
+    "deep_shade": (500, 3000),
+}
+
+_MAX_NAME_CHARS = 120
+_MAX_NOTE_CHARS = 240
+_TEMP_F_MIN, _TEMP_F_MAX = -60.0, 140.0
+_DEFAULT_CONFIDENCE = 0.5
+
+_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _clean_text(v: Any, limit: int) -> str:
+    if not isinstance(v, str):
+        return ""
+    s = _CONTROL_RE.sub(" ", unicodedata.normalize("NFKC", v)).strip()
+    return s[:limit]
+
+
+def _clean_float(v: Any, lo: float, hi: float) -> float | None:
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(f) or not (lo <= f <= hi):
+        return None
+    return f
+
+
+def _clean_int(v: Any, lo: int, hi: int) -> int | None:
+    f = _clean_float(v, lo, hi)
+    return None if f is None else int(f)
+
+
+def validate_suggestion(raw: Any, *, model: str, now_iso: str) -> dict[str, Any] | None:
+    """Bound a raw model reply into a stored suggestion dict, or None if unusable.
+
+    Required: a non-empty species. Everything else optional and dropped when out
+    of bounds — a partial suggestion is still useful; a lie-shaped one is not.
+    """
+    if not isinstance(raw, dict):
+        return None
+    species = _clean_text(raw.get("species"), _MAX_NAME_CHARS)
+    if not species:
+        return None
+
+    out: dict[str, Any] = {
+        "species": species,
+        "common_name": _clean_text(raw.get("common_name"), _MAX_NAME_CHARS),
+        "confidence": _clean_float(raw.get("confidence"), 0.0, 1.0),
+        "identified_at": str(now_iso)[:40],
+        "model": _clean_text(model, 80),
+        "note": _clean_text(raw.get("note"), _MAX_NOTE_CHARS),
+    }
+    if out["confidence"] is None:
+        out["confidence"] = _DEFAULT_CONFIDENCE
+
+    sunlight = raw.get("sunlight_class")
+    out["sunlight_class"] = sunlight if sunlight in SUNLIGHT_LUX else None
+
+    # Temperature tolerance (°F), both-or-neither with sane ordering.
+    t_lo = _clean_float(raw.get("temp_low_f"), _TEMP_F_MIN, _TEMP_F_MAX)
+    t_hi = _clean_float(raw.get("temp_high_f"), _TEMP_F_MIN, _TEMP_F_MAX)
+    if t_lo is not None and t_hi is not None and t_lo < t_hi:
+        out["temp_low_f"], out["temp_high_f"] = round(t_lo), round(t_hi)
+    else:
+        out["temp_low_f"] = out["temp_high_f"] = None
+
+    wucols = raw.get("wucols_category")
+    out["wucols_category"] = wucols if wucols in WUCOLS_FACTORS else None
+
+    preset = raw.get("care_plan_preset")
+    out["care_plan_preset"] = preset if preset in CARE_PLAN_PRESETS else None
+
+    # Cadences: watering (days between waterings, seasonal ballpark) and
+    # fertilizing (days; 0 = not necessary).
+    out["water_every_days"] = _clean_int(raw.get("water_every_days"), 1, 60)
+    out["fertilize_every_days"] = _clean_int(raw.get("fertilize_every_days"), 0, 3650)
+    return out
+
+
+def clean_stored_suggestion(raw: Any) -> dict[str, Any] | None:
+    """Load-path guard for PlantRecord.from_dict — re-bound whatever .storage
+    holds (hand-tampered files degrade to None, never to a crash)."""
+    if not isinstance(raw, dict):
+        return None
+    return validate_suggestion(
+        raw,
+        model=str(raw.get("model") or ""),
+        now_iso=str(raw.get("identified_at") or ""),
+    )
+
+
+def suggested_lux_range(suggestion: dict[str, Any]) -> tuple[int, int] | None:
+    """The lux range a suggestion's sunlight class maps to (bounded by MAX_LUX)."""
+    cls = suggestion.get("sunlight_class")
+    rng = SUNLIGHT_LUX.get(cls) if isinstance(cls, str) else None
+    if rng is None:
+        return None
+    low, high = rng
+    return (max(1, low), min(MAX_LUX, high))

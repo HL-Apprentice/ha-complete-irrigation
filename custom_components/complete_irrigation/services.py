@@ -111,6 +111,9 @@ SERVICE_UPDATE_CARE_TASK = "update_care_task"
 SERVICE_DELETE_CARE_TASK = "delete_care_task"
 SERVICE_COMPLETE_CARE_TASK = "complete_care_task"
 SERVICE_SEED_CARE_PLAN = "seed_care_plan"  # v1.36 — one-tap plan from a preset
+SERVICE_IDENTIFY_PLANT_SPECIES = "identify_plant_species"  # v1.37 — photo -> suggestion
+SERVICE_APPLY_SPECIES_SUGGESTION = "apply_species_suggestion"
+SERVICE_DISMISS_SPECIES_SUGGESTION = "dismiss_species_suggestion"
 
 _HHMM_RE = r"^([01]\d|2[0-3]):[0-5]\d$"  # quiet-hours 24h time, validated at the boundary
 
@@ -390,6 +393,10 @@ _SET_GENERAL_CONFIG_SCHEMA = vol.Schema(
     {
         # PRD #38 — inter-zone valve-settle buffer for multi-zone schedules.
         vol.Optional("zone_buffer_seconds"): vol.All(vol.Coerce(int), vol.Range(min=0, max=600)),
+        # v1.37 — OpenAI-compatible vision endpoint for species identification
+        # (e.g. Ollama/vLLM on a LAN GPU box). Empty string clears it.
+        vol.Optional("vision_url"): vol.All(cv.string, vol.Length(max=300)),
+        vol.Optional("vision_model"): vol.All(cv.string, vol.Length(max=120)),
         # PRD #81 — snooze the Sunday weekly reminder until this date.
         vol.Optional("weekly_reminder_snoozed_until"): vol.Any(None, cv.date),
         # User-defined zone ordering for the panel (Today + Zones tabs).
@@ -574,6 +581,30 @@ _SEED_CARE_PLAN_SCHEMA = vol.Schema(
         vol.Required("plant_id"): cv.string,
         vol.Required("preset"): vol.In(sorted(CARE_PLAN_PRESETS)),
     }
+)
+
+# v1.37 — species identification round-trip.
+_IDENTIFY_SPECIES_SCHEMA = vol.Schema({vol.Required("plant_id"): cv.string})
+_APPLY_SUGGESTION_SCHEMA = vol.Schema(
+    {
+        vol.Required("plant_id"): cv.string,
+        vol.Optional("seed_plan", default=True): cv.boolean,
+    }
+)
+_DISMISS_SUGGESTION_SCHEMA = vol.Schema({vol.Required("plant_id"): cv.string})
+
+_SPECIES_PROMPT = (
+    "You are a botanist identifying the plant in the photo. Reply with ONLY minified "
+    'JSON, no prose: {"species":"scientific name","common_name":"common name",'
+    '"confidence":0.0-1.0,"sunlight_class":"full_sun|partial_sun|bright_shade|deep_shade",'
+    '"temp_low_f":int,"temp_high_f":int,'
+    '"wucols_category":"very_low|low|moderate|high",'
+    '"care_plan_preset":"tree|shrub|flower|cactus_succulent|grass",'
+    '"water_every_days":int,"fertilize_every_days":int (0 = not necessary),'
+    '"note":"one short sentence"} '
+    "Base temperature tolerance and water/fertilizer cadence on the species' typical "
+    "outdoor care in a hot arid climate. If unsure of the species, give your best "
+    "guess with a low confidence."
 )
 
 
@@ -1913,6 +1944,171 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             len(tasks) - added,
         )
 
+    # ── v1.37: species identification ───────────────────────────────
+
+    async def handle_identify_plant_species(call: ServiceCall) -> None:
+        if not await _require_admin(hass, call):  # outbound call + config write
+            return
+        data = _IDENTIFY_SPECIES_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None:
+            return
+        plant = coord.plants.get(data["plant_id"])
+        if plant is None:
+            raise vol.Invalid(f"no such plant {data['plant_id']}")
+        if not plant.photos:
+            raise vol.Invalid("add a photo of the plant first")
+        vision_url = str(coord.config.get("vision_url") or "").strip()
+        if not vision_url.startswith(("http://", "https://")):
+            raise vol.Invalid(
+                "set a vision endpoint first (set_general_config vision_url = an "
+                "OpenAI-compatible /v1/chat/completions URL)"
+            )
+        model = str(coord.config.get("vision_model") or "").strip() or "default"
+
+        import base64
+        import json as _json
+
+        import aiohttp
+        from homeassistant.helpers.aiohttp_client import async_get_clientsession
+        from homeassistant.util import dt as dt_util
+
+        from .species_id import validate_suggestion
+
+        # Newest photo path is server-set "/local/complete_irrigation/plants/<id>/…"
+        # (from_dict guarantees the /local/ prefix; the id is slug-safe). Re-guard anyway.
+        rel = str(plant.photos[0]["path"]).split("?", 1)[0]
+        if not rel.startswith("/local/") or ".." in rel:
+            raise vol.Invalid("plant photo path is not usable")
+        abs_path = hass.config.path("www", *rel[len("/local/") :].split("/"))
+
+        def _read() -> bytes:
+            with open(abs_path, "rb") as fh:
+                return fh.read(12_000_000)
+
+        try:
+            img = await hass.async_add_executor_job(_read)
+        except OSError as err:
+            raise vol.Invalid(f"could not read the plant photo: {err}") from err
+        b64 = base64.b64encode(img).decode("ascii")
+
+        body = _json.dumps(
+            {
+                "model": model,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": _SPECIES_PROMPT},
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
+                            },
+                        ],
+                    }
+                ],
+                "temperature": 0.2,
+                "max_tokens": 400,
+            }
+        )
+        session = async_get_clientsession(hass)
+        try:
+            async with session.post(
+                vision_url,
+                data=body,
+                headers={"Content-Type": "application/json"},
+                timeout=aiohttp.ClientTimeout(total=120),
+            ) as resp:
+                if resp.status != 200:
+                    raise vol.Invalid(f"vision endpoint returned HTTP {resp.status}")
+                raw = await resp.read()
+                if len(raw) > 1_000_000:
+                    raise vol.Invalid("vision endpoint response too large")
+        except vol.Invalid:
+            raise
+        except Exception as err:
+            raise vol.Invalid(f"vision endpoint unreachable: {err}") from err
+
+        try:
+            text = _json.loads(raw)["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, ValueError, TypeError) as err:
+            raise vol.Invalid("vision endpoint returned an unexpected envelope") from err
+        start, end = text.find("{"), text.rfind("}")
+        obj = None
+        if start >= 0 and end > start:
+            try:
+                obj = _json.loads(text[start : end + 1])
+            except ValueError:
+                obj = None
+        suggestion = validate_suggestion(obj, model=model, now_iso=dt_util.utcnow().isoformat())
+        if suggestion is None:
+            raise vol.Invalid("the model could not identify the plant — try a clearer photo")
+
+        coord.plants.upsert(replace(plant, species_suggestion=suggestion))
+        await coord.async_save_plants()
+        _LOGGER.info(
+            "Species suggestion for %s: %s (%.0f%%)",
+            plant.name,
+            suggestion["species"],
+            suggestion["confidence"] * 100,
+        )
+
+    async def handle_apply_species_suggestion(call: ServiceCall) -> None:
+        if not await _require_admin(hass, call):
+            return
+        data = _APPLY_SUGGESTION_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None:
+            return
+        plant = coord.plants.get(data["plant_id"])
+        if plant is None or not isinstance(plant.species_suggestion, dict):
+            raise vol.Invalid("no pending suggestion for that plant")
+        sug = plant.species_suggestion
+
+        from .species_id import suggested_lux_range
+
+        common, sci = sug.get("common_name") or "", sug.get("species") or ""
+        species_text = (f"{common} ({sci})" if common and sci else common or sci)[:120]
+        overrides: dict = {"species": species_text, "species_suggestion": None}
+        rng = suggested_lux_range(sug)
+        if rng is not None:
+            overrides["lux_low"], overrides["lux_high"] = rng
+        if sug.get("wucols_category"):
+            overrides["wucols_category"] = sug["wucols_category"]
+        coord.plants.upsert(replace(plant, **overrides))
+        await coord.async_save_plants()
+
+        seeded = 0
+        if data["seed_plan"] and sug.get("care_plan_preset"):
+            existing_kinds = {t.kind for t in coord.care_tasks.for_plant(plant.id)}
+            for t in seed_care_plan(
+                plant.id, sug["care_plan_preset"], id_factory=lambda: uuid.uuid4().hex[:12]
+            ):
+                if t.kind not in existing_kinds:
+                    coord.care_tasks.add(t)
+                    seeded += 1
+            if seeded:
+                await coord.async_save_care_tasks()
+        _LOGGER.info(
+            "Applied species suggestion to %s: %s (+%d care task(s))",
+            plant.name,
+            species_text,
+            seeded,
+        )
+
+    async def handle_dismiss_species_suggestion(call: ServiceCall) -> None:
+        if not await _require_admin(hass, call):
+            return
+        data = _DISMISS_SUGGESTION_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None:
+            return
+        plant = coord.plants.get(data["plant_id"])
+        if plant is None or plant.species_suggestion is None:
+            return
+        coord.plants.upsert(replace(plant, species_suggestion=None))
+        await coord.async_save_plants()
+
     async def handle_delete_care_task(call: ServiceCall) -> None:
         if not await _require_admin(hass, call):  # destructive — admin only
             return
@@ -2142,6 +2338,24 @@ async def _async_register_services(hass: HomeAssistant) -> None:
     )
     hass.services.async_register(
         DOMAIN, SERVICE_SEED_CARE_PLAN, handle_seed_care_plan, schema=_SEED_CARE_PLAN_SCHEMA
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_IDENTIFY_PLANT_SPECIES,
+        handle_identify_plant_species,
+        schema=_IDENTIFY_SPECIES_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_APPLY_SPECIES_SUGGESTION,
+        handle_apply_species_suggestion,
+        schema=_APPLY_SUGGESTION_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_DISMISS_SPECIES_SUGGESTION,
+        handle_dismiss_species_suggestion,
+        schema=_DISMISS_SUGGESTION_SCHEMA,
     )
 
     # ── Weather + per-zone moisture configuration ──────────────────
@@ -2413,6 +2627,9 @@ def _async_unregister_services(hass: HomeAssistant) -> None:
         SERVICE_DELETE_CARE_TASK,
         SERVICE_COMPLETE_CARE_TASK,
         SERVICE_SEED_CARE_PLAN,
+        SERVICE_IDENTIFY_PLANT_SPECIES,
+        SERVICE_APPLY_SPECIES_SUGGESTION,
+        SERVICE_DISMISS_SPECIES_SUGGESTION,
     ):
         if hass.services.has_service(DOMAIN, svc):
             hass.services.async_remove(DOMAIN, svc)

@@ -441,3 +441,79 @@ def test_seed_care_plan_presets():
     assert len({t.id for t in tasks}) == len(tasks)  # unique ids
     with pytest.raises(ValueError):
         seed_care_plan("p1", "bonsai", id_factory=lambda: "x")
+
+
+# ════════════════════════════════════════════════════════════════════
+# v1.37 — species_id rail
+# ════════════════════════════════════════════════════════════════════
+
+
+def test_species_suggestion_bounds_everything():
+    from custom_components.complete_irrigation.species_id import validate_suggestion
+
+    raw = {
+        "species": "Pittosporum tobira" + "\x00" * 5,
+        "common_name": "Japanese pittosporum",
+        "confidence": 0.92,
+        "sunlight_class": "full_sun",
+        "temp_low_f": 23,
+        "temp_high_f": 106,
+        "wucols_category": "moderate",
+        "care_plan_preset": "shrub",
+        "water_every_days": 1,
+        "fertilize_every_days": 0,
+        "note": "n" * 999,
+    }
+    out = validate_suggestion(raw, model="qwen2.5vl", now_iso="2026-07-09T00:00:00Z")
+    assert out["species"] == "Pittosporum tobira"
+    assert out["sunlight_class"] == "full_sun"
+    assert (out["temp_low_f"], out["temp_high_f"]) == (23, 106)
+    assert out["fertilize_every_days"] == 0
+    assert len(out["note"]) == 240
+
+
+def test_species_suggestion_rejects_junk():
+    from custom_components.complete_irrigation.species_id import validate_suggestion
+
+    assert validate_suggestion(None, model="m", now_iso="t") is None
+    assert validate_suggestion({"species": ""}, model="m", now_iso="t") is None
+    out = validate_suggestion(
+        {
+            "species": "X",
+            "confidence": float("nan"),
+            "sunlight_class": "vantablack",
+            "temp_low_f": 200,
+            "temp_high_f": -100,
+            "wucols_category": "soggy",
+            "care_plan_preset": "bonsai",
+            "water_every_days": 0,
+        },
+        model="m",
+        now_iso="t",
+    )
+    assert out["confidence"] == 0.5  # NaN -> default
+    assert out["sunlight_class"] is None
+    assert out["temp_low_f"] is None and out["temp_high_f"] is None
+    assert out["wucols_category"] is None and out["care_plan_preset"] is None
+    assert out["water_every_days"] is None
+
+
+def test_species_suggestion_lux_mapping_and_plant_roundtrip():
+    from custom_components.complete_irrigation.species_id import (
+        SUNLIGHT_LUX,
+        suggested_lux_range,
+        validate_suggestion,
+    )
+
+    sug = validate_suggestion(
+        {"species": "X", "sunlight_class": "bright_shade"}, model="m", now_iso="t"
+    )
+    assert suggested_lux_range(sug) == SUNLIGHT_LUX["bright_shade"]
+    assert suggested_lux_range({"sunlight_class": None}) is None
+    # PlantRecord stores + reloads the suggestion through the load-path cleaner.
+    p = _plant(species_suggestion=sug)
+    rec = PlantRecord.from_dict(p.to_dict())
+    assert rec.species_suggestion["species"] == "X"
+    d = p.to_dict()
+    d["species_suggestion"] = {"species": ""}  # junk degrades to None
+    assert PlantRecord.from_dict(d).species_suggestion is None

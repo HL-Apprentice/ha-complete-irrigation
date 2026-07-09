@@ -1,0 +1,30 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="water" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4FC3F7"/>
+      <stop offset="1" stop-color="#0277BD"/>
+    </linearGradient>
+    <linearGradient id="house" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#29B6F6"/>
+      <stop offset="1" stop-color="#039BE5"/>
+    </linearGradient>
+  </defs>
+  <!-- house silhouette: gable roof + body, rounded -->
+  <path d="M256 64 L448 232 L448 416 Q448 448 416 448 L96 448 Q64 448 64 416 L64 232 Z"
+        fill="url(#house)"/>
+  <!-- inner cutout to make the house an outline -->
+  <path d="M256 118 L406 250 L406 398 Q406 406 398 406 L114 406 Q106 406 106 398 L106 250 Z"
+        fill="#FFFFFF"/>
+  <!-- water drop centered in the house -->
+  <path d="M256 168 C256 168 172 268 172 322 C172 372 209 402 256 402 C303 402 340 372 340 322 C340 268 256 168 256 168 Z"
+        fill="url(#water)"/>
+  <!-- drop highlight -->
+  <path d="M225 306 C215 330 222 356 244 366 C230 344 232 322 240 300 Z" fill="#B3E5FC" opacity="0.85"/>
+  <!-- leaf accent on the roof edge -->
+  <path d="M352 150 Q396 128 424 148 Q412 188 366 190 Q348 172 352 150 Z" fill="#66BB6A"/>
+  <path d="M356 186 Q388 162 420 150" stroke="#2E7D32" stroke-width="7" fill="none" stroke-linecap="round"/>
+  <!-- smart signal arcs above the drop tip -->
+  <path d="M212 130 Q256 98 300 130" stroke="#FFB300" stroke-width="17" fill="none" stroke-linecap="round"/>
+  <path d="M228 158 Q256 138 284 158" stroke="#FFB300" stroke-width="15" fill="none" stroke-linecap="round"/>
+  <circle cx="256" cy="186" r="10" fill="#FFB300"/>
+</svg>
