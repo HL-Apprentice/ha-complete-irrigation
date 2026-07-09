@@ -113,7 +113,6 @@ SERVICE_COMPLETE_CARE_TASK = "complete_care_task"
 SERVICE_SEED_CARE_PLAN = "seed_care_plan"  # v1.36 — one-tap plan from a preset
 SERVICE_IDENTIFY_PLANT_SPECIES = "identify_plant_species"  # v1.37 — photo -> suggestion
 SERVICE_ADD_PLANT_FROM_PHOTO = "add_plant_from_photo"  # v1.38 — photo-first creation
-SERVICE_ADD_PLANT_FROM_PHOTO = "add_plant_from_photo"  # v1.38 — photo-first creation
 SERVICE_APPLY_SPECIES_SUGGESTION = "apply_species_suggestion"
 SERVICE_DISMISS_SPECIES_SUGGESTION = "dismiss_species_suggestion"
 
@@ -603,17 +602,6 @@ _ADD_PLANT_FROM_PHOTO_SCHEMA = vol.Schema(
         vol.Optional("name", default=""): vol.All(cv.string, vol.Length(max=80), _no_control_chars),
         vol.Optional("emitter_count"): vol.All(vol.Coerce(int), vol.Range(min=1, max=100)),
         vol.Optional("emitter_gph"): vol.All(vol.Coerce(float), vol.Range(min=0.1, max=50)),
-    }
-)
-# v1.38 — photo-first: the zone is the only required knowledge; everything else
-# comes from the photo (identify -> auto-apply) with editable defaults.
-_ADD_PLANT_FROM_PHOTO_SCHEMA = vol.Schema(
-    {
-        vol.Required("zone_entity_id"): cv.entity_id,
-        vol.Required("image_base64"): vol.All(cv.string, vol.Length(min=64, max=_MAX_PHOTO_B64)),
-        vol.Optional("latitude"): vol.All(vol.Coerce(float), vol.Range(min=-90, max=90)),
-        vol.Optional("longitude"): vol.All(vol.Coerce(float), vol.Range(min=-180, max=180)),
-        vol.Optional("name", default=""): vol.All(cv.string, vol.Length(max=80), _no_control_chars),
     }
 )
 _APPLY_SUGGESTION_SCHEMA = vol.Schema(
@@ -1668,6 +1656,12 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             )
             if k in data
         }
+        # v1.38 — a one-sided emitter pair is a user error, not an unknown_error:
+        # check against the MERGED values (either field may already be set).
+        m_count = overrides.get("emitter_count", existing.emitter_count)
+        m_gph = overrides.get("emitter_gph", existing.emitter_gph)
+        if (m_count is None) != (m_gph is None):
+            raise vol.Invalid("set both emitter_count and emitter_gph, or neither")
         # replace() re-runs PlantRecord validation on the merged record.
         merged = replace(existing, **overrides)
         coord.plants.upsert(merged)
@@ -2119,6 +2113,8 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             return
         from homeassistant.util import dt as dt_util
 
+        if (data.get("emitter_count") is None) != (data.get("emitter_gph") is None):
+            raise vol.Invalid("set both emitter_count and emitter_gph, or neither")
         name = data["name"].strip() or f"New plant {dt_util.now().strftime('%b %d %H:%M')}"
         plant = PlantRecord(
             id=uuid.uuid4().hex[:12],
@@ -2135,9 +2131,15 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         for k in ("latitude", "longitude"):
             if k in data:
                 photo_payload[k] = data[k]
-        await hass.services.async_call(
-            DOMAIN, SERVICE_ADD_PLANT_PHOTO, photo_payload, blocking=True, context=call.context
-        )
+        try:
+            await hass.services.async_call(
+                DOMAIN, SERVICE_ADD_PLANT_PHOTO, photo_payload, blocking=True, context=call.context
+            )
+        except Exception:
+            # No photo -> nothing to identify; don't strand a photo-less record.
+            coord.plants.delete(plant.id)
+            await coord.async_save_plants()
+            raise
         fresh = coord.plants.get(plant.id)
         try:
             suggestion = await _run_identify(coord, fresh)
@@ -2469,12 +2471,6 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         SERVICE_IDENTIFY_PLANT_SPECIES,
         handle_identify_plant_species,
         schema=_IDENTIFY_SPECIES_SCHEMA,
-    )
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_ADD_PLANT_FROM_PHOTO,
-        handle_add_plant_from_photo,
-        schema=_ADD_PLANT_FROM_PHOTO_SCHEMA,
     )
     hass.services.async_register(
         DOMAIN,
