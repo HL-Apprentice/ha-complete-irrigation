@@ -4,6 +4,12 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.37.1 — 2026-07-09 — patch
+
+- **Vision-endpoint save now confirms visibly** — the Save button flips to
+  "✓ Saved" for a moment after a successful save (it previously saved silently,
+  which read as doing nothing).
+
 ## v1.37.0 — 2026-07-09 — minor
 
 **"Plant Brain": photo → species identification + one-tap care sheet, on your

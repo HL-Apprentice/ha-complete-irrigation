@@ -72,7 +72,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.37.0";
+  const PANEL_VERSION = "v1.37.1";
   const DEFAULT_MANUAL_MINUTES = 10;
   const MAX_MANUAL_MINUTES = 480; // 8 h — matches the backend schedule cap; long
   // runs are delivered in controller-cap blocks (v1.25). Was 60, which blocked
@@ -3108,7 +3108,7 @@
         `<input name="vision_model" data-action="vision-field" type="text" value="${escapeAttr(
           (this._visionDraft || c).vision_model || ""
         )}" placeholder="e.g. qwen2.5-vl" />` +
-        `<div class="modal-actions"><button type="button" class="btn btn-primary" data-action="save-vision-endpoint">Save vision endpoint</button></div>` +
+        `<div class="modal-actions"><button type="button" class="btn btn-primary" data-action="save-vision-endpoint">${this._visionSaved ? "✓ Saved" : "Save vision endpoint"}</button></div>` +
         `</div>` +
         `</section>` +
         `<section class="settings-card">` +
@@ -3156,6 +3156,13 @@
         });
         this._visionDraft = null; // re-hydrate from the saved config
         await this._fetchConfig();
+        // Visible confirmation: flip the button label for a moment.
+        this._visionSaved = true;
+        this._renderNow();
+        setTimeout(() => {
+          this._visionSaved = false;
+          this._renderNow();
+        }, 2500);
       } catch (err) {
         alert("Failed to save the vision endpoint: " + (err?.message || err));
       }
