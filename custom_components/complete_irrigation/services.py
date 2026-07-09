@@ -112,6 +112,8 @@ SERVICE_DELETE_CARE_TASK = "delete_care_task"
 SERVICE_COMPLETE_CARE_TASK = "complete_care_task"
 SERVICE_SEED_CARE_PLAN = "seed_care_plan"  # v1.36 — one-tap plan from a preset
 SERVICE_IDENTIFY_PLANT_SPECIES = "identify_plant_species"  # v1.37 — photo -> suggestion
+SERVICE_ADD_PLANT_FROM_PHOTO = "add_plant_from_photo"  # v1.38 — photo-first creation
+SERVICE_ADD_PLANT_FROM_PHOTO = "add_plant_from_photo"  # v1.38 — photo-first creation
 SERVICE_APPLY_SPECIES_SUGGESTION = "apply_species_suggestion"
 SERVICE_DISMISS_SPECIES_SUGGESTION = "dismiss_species_suggestion"
 
@@ -488,6 +490,9 @@ _UPDATE_PLANT_SCHEMA = vol.Schema(
         vol.Optional("map_y"): _MAP_COORD,
         # v1.35 — optional species (common or scientific name, free text).
         vol.Optional("species"): _SPECIES,
+        # v1.38 — installed drip emitters (count x GPH), set together.
+        vol.Optional("emitter_count"): vol.All(vol.Coerce(int), vol.Range(min=1, max=100)),
+        vol.Optional("emitter_gph"): vol.All(vol.Coerce(float), vol.Range(min=0.1, max=50)),
     }
 )
 
@@ -587,10 +592,37 @@ _SEED_CARE_PLAN_SCHEMA = vol.Schema(
 
 # v1.37 — species identification round-trip.
 _IDENTIFY_SPECIES_SCHEMA = vol.Schema({vol.Required("plant_id"): cv.string})
+# v1.38 — photo-first: zone + photo are all that's required; drip emitters are the
+# other user-only fact (optional here, editable later). The LLM fills the rest.
+_ADD_PLANT_FROM_PHOTO_SCHEMA = vol.Schema(
+    {
+        vol.Required("zone_entity_id"): cv.entity_id,
+        vol.Required("image_base64"): vol.All(cv.string, vol.Length(min=64, max=_MAX_PHOTO_B64)),
+        vol.Optional("latitude"): vol.All(vol.Coerce(float), vol.Range(min=-90, max=90)),
+        vol.Optional("longitude"): vol.All(vol.Coerce(float), vol.Range(min=-180, max=180)),
+        vol.Optional("name", default=""): vol.All(cv.string, vol.Length(max=80), _no_control_chars),
+        vol.Optional("emitter_count"): vol.All(vol.Coerce(int), vol.Range(min=1, max=100)),
+        vol.Optional("emitter_gph"): vol.All(vol.Coerce(float), vol.Range(min=0.1, max=50)),
+    }
+)
+# v1.38 — photo-first: the zone is the only required knowledge; everything else
+# comes from the photo (identify -> auto-apply) with editable defaults.
+_ADD_PLANT_FROM_PHOTO_SCHEMA = vol.Schema(
+    {
+        vol.Required("zone_entity_id"): cv.entity_id,
+        vol.Required("image_base64"): vol.All(cv.string, vol.Length(min=64, max=_MAX_PHOTO_B64)),
+        vol.Optional("latitude"): vol.All(vol.Coerce(float), vol.Range(min=-90, max=90)),
+        vol.Optional("longitude"): vol.All(vol.Coerce(float), vol.Range(min=-180, max=180)),
+        vol.Optional("name", default=""): vol.All(cv.string, vol.Length(max=80), _no_control_chars),
+    }
+)
 _APPLY_SUGGESTION_SCHEMA = vol.Schema(
     {
         vol.Required("plant_id"): cv.string,
         vol.Optional("seed_plan", default=True): cv.boolean,
+        # v1.38 — also apply the photo-estimated canopy (photo-first flow only;
+        # off by default so applying never clobbers a user-entered canopy).
+        vol.Optional("apply_canopy", default=False): cv.boolean,
     }
 )
 _DISMISS_SUGGESTION_SCHEMA = vol.Schema({vol.Required("plant_id"): cv.string})
@@ -603,10 +635,12 @@ _SPECIES_PROMPT = (
     '"wucols_category":"very_low|low|moderate|high",'
     '"care_plan_preset":"tree|shrub|flower|cactus_succulent|grass",'
     '"water_every_days":int,"fertilize_every_days":int (0 = not necessary),'
+    '"canopy_area_sqft":number,'
     '"note":"one short sentence"} '
     "Base temperature tolerance and water/fertilizer cadence on the species' typical "
-    "outdoor care in a hot arid climate. If unsure of the species, give your best "
-    "guess with a low confidence."
+    "outdoor care in a hot arid climate. Estimate canopy_area_sqft (the plant's "
+    "footprint in square feet) from the photo using visible context for scale. "
+    "If unsure of the species, give your best guess with a low confidence."
 )
 
 
@@ -1629,6 +1663,8 @@ async def _async_register_services(hass: HomeAssistant) -> None:
                 "map_x",
                 "map_y",
                 "species",
+                "emitter_count",
+                "emitter_gph",
             )
             if k in data
         }
@@ -1948,16 +1984,10 @@ async def _async_register_services(hass: HomeAssistant) -> None:
 
     # ── v1.37: species identification ───────────────────────────────
 
-    async def handle_identify_plant_species(call: ServiceCall) -> None:
-        if not await _require_admin(hass, call):  # outbound call + config write
-            return
-        data = _IDENTIFY_SPECIES_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None:
-            return
-        plant = coord.plants.get(data["plant_id"])
-        if plant is None:
-            raise vol.Invalid(f"no such plant {data['plant_id']}")
+    async def _run_identify(coord, plant):
+        """Photo -> bounded species suggestion (raises vol.Invalid with a
+        user-actionable message). Shared by identify_plant_species and
+        add_plant_from_photo. Stores the suggestion on the plant and returns it."""
         if not plant.photos:
             raise vol.Invalid("add a photo of the plant first")
         vision_url = str(coord.config.get("vision_url") or "").strip()
@@ -2062,6 +2092,157 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             suggestion["species"],
             suggestion["confidence"] * 100,
         )
+        return suggestion
+
+    async def handle_identify_plant_species(call: ServiceCall) -> None:
+        if not await _require_admin(hass, call):  # outbound call + config write
+            return
+        data = _IDENTIFY_SPECIES_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None:
+            return
+        plant = coord.plants.get(data["plant_id"])
+        if plant is None:
+            raise vol.Invalid(f"no such plant {data['plant_id']}")
+        await _run_identify(coord, plant)
+
+    async def handle_add_plant_from_photo(call: ServiceCall) -> None:
+        """v1.38 — the consumer-app flow: snap a photo, get a plant. Creates a
+        provisional plant on the chosen zone, attaches the photo (EXIF-GPS place),
+        then identifies + auto-applies the care sheet. Identification failure is
+        NON-fatal: the plant + photo stay, identify again later."""
+        if not await _require_admin(hass, call):
+            return
+        data = _ADD_PLANT_FROM_PHOTO_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None:
+            return
+        from homeassistant.util import dt as dt_util
+
+        name = data["name"].strip() or f"New plant {dt_util.now().strftime('%b %-d %H:%M')}"
+        plant = PlantRecord(
+            id=uuid.uuid4().hex[:12],
+            name=name,
+            wucols_category="moderate",  # editable default until identified
+            canopy_area_sqft=20.0,  # editable default
+            zone_entity_id=data["zone_entity_id"],
+        )
+        coord.plants.add(plant)
+        await coord.async_save_plants()
+
+        photo_payload = {"plant_id": plant.id, "image_base64": data["image_base64"]}
+        for k in ("latitude", "longitude"):
+            if k in data:
+                photo_payload[k] = data[k]
+        await hass.services.async_call(
+            DOMAIN, SERVICE_ADD_PLANT_PHOTO, photo_payload, blocking=True, context=call.context
+        )
+
+        fresh = coord.plants.get(plant.id)
+        try:
+            suggestion = await _run_identify(coord, fresh)
+        except vol.Invalid as err:
+            _LOGGER.warning("add_plant_from_photo: identify skipped: %s", err)
+            if coord.notifier is not None:
+                await coord.notifier.notify(
+                    f"{name} was added with its photo, but identification failed: {err}. "
+                    "Use Identify species on the plant to retry.",
+                    title="Plant added (not identified)",
+                    event_type="plant_added_unidentified",
+                )
+            return
+        # Auto-apply on a brand-new plant (nothing to clobber): name it from the
+        # suggestion, then apply species/lux/WUCOLS + seed the care plan.
+        common = str(suggestion.get("common_name") or "").strip()
+        if common and not data["name"].strip():
+            renamed = coord.plants.get(plant.id)
+            coord.plants.upsert(replace(renamed, name=common[:80]))
+            await coord.async_save_plants()
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_APPLY_SPECIES_SUGGESTION,
+            {"plant_id": plant.id, "seed_plan": True},
+            blocking=True,
+            context=call.context,
+        )
+        if coord.notifier is not None:
+            await coord.notifier.notify(
+                f"Added {common or suggestion['species']} ({suggestion['species']}) — "
+                f"{suggestion['confidence'] * 100:.0f}% confident. Species, light range, "
+                "and care plan applied; review canopy size and zone in the Yard tab.",
+                title="Plant added from photo",
+                event_type="plant_added_from_photo",
+            )
+
+    async def handle_add_plant_from_photo(call: ServiceCall) -> None:
+        """v1.38 — snap a photo, get a plant: provisional record on the chosen zone
+        (+ the user's emitter facts), photo attached (EXIF-GPS place), then identify
+        and AUTO-APPLY the care sheet incl. photo-estimated canopy. Identify failure
+        is non-fatal: plant + photo stay; retry from the plant later."""
+        if not await _require_admin(hass, call):
+            return
+        data = _ADD_PLANT_FROM_PHOTO_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None:
+            return
+        from homeassistant.util import dt as dt_util
+
+        name = data["name"].strip() or f"New plant {dt_util.now().strftime('%b %d %H:%M')}"
+        plant = PlantRecord(
+            id=uuid.uuid4().hex[:12],
+            name=name,
+            wucols_category="moderate",  # provisional; the suggestion replaces it
+            canopy_area_sqft=20.0,  # provisional; the photo estimate replaces it
+            zone_entity_id=data["zone_entity_id"],
+            emitter_count=data.get("emitter_count"),
+            emitter_gph=data.get("emitter_gph"),
+        )
+        coord.plants.add(plant)
+        await coord.async_save_plants()
+        photo_payload = {"plant_id": plant.id, "image_base64": data["image_base64"]}
+        for k in ("latitude", "longitude"):
+            if k in data:
+                photo_payload[k] = data[k]
+        await hass.services.async_call(
+            DOMAIN, SERVICE_ADD_PLANT_PHOTO, photo_payload, blocking=True, context=call.context
+        )
+        fresh = coord.plants.get(plant.id)
+        try:
+            suggestion = await _run_identify(coord, fresh)
+        except vol.Invalid as err:
+            _LOGGER.warning("add_plant_from_photo: identify skipped: %s", err)
+            if coord.notifier is not None:
+                await coord.notifier.notify(
+                    f"{name} was added with its photo, but identification failed: {err}. "
+                    "Use Identify species on the plant to retry.",
+                    title="Plant added (not identified)",
+                    event_type="plant_added_unidentified",
+                )
+            return
+        common = str(suggestion.get("common_name") or "").strip()
+        if common and not data["name"].strip():
+            coord.plants.upsert(replace(coord.plants.get(plant.id), name=common[:80]))
+            await coord.async_save_plants()
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_APPLY_SPECIES_SUGGESTION,
+            {"plant_id": plant.id, "seed_plan": True, "apply_canopy": True},
+            blocking=True,
+            context=call.context,
+        )
+        if coord.notifier is not None:
+            await coord.notifier.notify(
+                f"Added {common or suggestion['species']} ({suggestion['species']}) — "
+                f"{suggestion['confidence'] * 100:.0f}% confident. Species, canopy, light "
+                "range, water-use category, and care plan applied."
+                + (
+                    ""
+                    if data.get("emitter_count")
+                    else " Add its drip emitters (count x GPH) for delivered-water math."
+                ),
+                title="Plant added from photo",
+                event_type="plant_added_from_photo",
+            )
 
     async def handle_apply_species_suggestion(call: ServiceCall) -> None:
         if not await _require_admin(hass, call):
@@ -2085,6 +2266,8 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             overrides["lux_low"], overrides["lux_high"] = rng
         if sug.get("wucols_category"):
             overrides["wucols_category"] = sug["wucols_category"]
+        if data["apply_canopy"] and sug.get("canopy_area_sqft"):
+            overrides["canopy_area_sqft"] = float(sug["canopy_area_sqft"])
         coord.plants.upsert(replace(plant, **overrides))
         await coord.async_save_plants()
 
@@ -2354,6 +2537,18 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         SERVICE_IDENTIFY_PLANT_SPECIES,
         handle_identify_plant_species,
         schema=_IDENTIFY_SPECIES_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_ADD_PLANT_FROM_PHOTO,
+        handle_add_plant_from_photo,
+        schema=_ADD_PLANT_FROM_PHOTO_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_ADD_PLANT_FROM_PHOTO,
+        handle_add_plant_from_photo,
+        schema=_ADD_PLANT_FROM_PHOTO_SCHEMA,
     )
     hass.services.async_register(
         DOMAIN,
@@ -2638,6 +2833,7 @@ def _async_unregister_services(hass: HomeAssistant) -> None:
         SERVICE_COMPLETE_CARE_TASK,
         SERVICE_SEED_CARE_PLAN,
         SERVICE_IDENTIFY_PLANT_SPECIES,
+        SERVICE_ADD_PLANT_FROM_PHOTO,
         SERVICE_APPLY_SPECIES_SUGGESTION,
         SERVICE_DISMISS_SPECIES_SUGGESTION,
     ):

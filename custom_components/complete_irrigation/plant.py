@@ -72,6 +72,10 @@ class PlantRecord:
     # before storage; re-cleaned on load). None = no pending suggestion. Advisory:
     # nothing applies until the user accepts it.
     species_suggestion: dict[str, Any] | None = None
+    # v1.38 — INSTALLED drip emitters on this plant (count x GPH), the physical
+    # fact only the user knows. Feeds delivered-water math. Both-or-neither.
+    emitter_count: int | None = None
+    emitter_gph: float | None = None
 
     def __post_init__(self) -> None:
         if not self.id:
@@ -125,6 +129,13 @@ class PlantRecord:
             raise ValueError("light_surveys must be a tuple")
         if self.species_suggestion is not None and not isinstance(self.species_suggestion, dict):
             raise ValueError("species_suggestion must be a dict or None")
+        if (self.emitter_count is None) != (self.emitter_gph is None):
+            raise ValueError("emitter_count and emitter_gph must be set together")
+        if self.emitter_count is not None:
+            if not isinstance(self.emitter_count, int) or not (1 <= self.emitter_count <= 100):
+                raise ValueError("emitter_count must be an int in [1, 100]")
+            if not math.isfinite(self.emitter_gph) or not (0.1 <= self.emitter_gph <= 50):
+                raise ValueError("emitter_gph must be finite in [0.1, 50]")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -144,6 +155,8 @@ class PlantRecord:
             "species_suggestion": (
                 dict(self.species_suggestion) if isinstance(self.species_suggestion, dict) else None
             ),
+            "emitter_count": self.emitter_count,
+            "emitter_gph": self.emitter_gph,
         }
 
     @classmethod
@@ -180,6 +193,17 @@ class PlantRecord:
         except ValueError:
             lux_low = lux_high = None
 
+        # v1.38 — installed emitters: both-or-neither; malformed degrades to None.
+        _emitters: tuple[int | None, float | None] = (None, None)
+        try:
+            ec, eg = data.get("emitter_count"), data.get("emitter_gph")
+            if ec is not None and eg is not None:
+                ec_i, eg_f = int(ec), float(eg)
+                if 1 <= ec_i <= 100 and math.isfinite(eg_f) and 0.1 <= eg_f <= 50:
+                    _emitters = (ec_i, eg_f)
+        except (TypeError, ValueError):
+            _emitters = (None, None)
+
         return cls(
             id=str(data["id"]),
             name=str(data["name"]),
@@ -195,6 +219,8 @@ class PlantRecord:
             lux_high=lux_high,
             light_surveys=clean_stored_surveys(data.get("light_surveys")),
             species_suggestion=clean_stored_suggestion(data.get("species_suggestion")),
+            emitter_count=_emitters[0],
+            emitter_gph=_emitters[1],
         )
 
     def to_calc_plant(self) -> Plant:
