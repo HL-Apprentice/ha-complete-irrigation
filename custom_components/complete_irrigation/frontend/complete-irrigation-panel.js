@@ -793,6 +793,7 @@
               lux_low: p.lux_low != null ? String(p.lux_low) : "",
               lux_high: p.lux_high != null ? String(p.lux_high) : "",
               _hadLightRange: p.lux_low != null && p.lux_high != null,
+              _hadEmitters: p.emitter_count != null && p.emitter_gph != null,
               // v1.38 — installed drips (draft strings; empty = unset)
               emitter_count: p.emitter_count != null ? String(p.emitter_count) : "",
               emitter_gph: p.emitter_gph != null ? String(p.emitter_gph) : "",
@@ -2322,6 +2323,7 @@
             plant_id: e.id,
             ...payload,
             ...(emBoth ? { emitter_count: emCount, emitter_gph: emGph } : {}),
+            ...(emNeither && e._hadEmitters ? { clear_emitters: true } : {}),
           });
           if (bothSet) {
             await this._hass.callService(
@@ -5693,7 +5695,7 @@
           .join("") +
         `</select></div>` +
         `<div><label>Name (optional)</label>` +
-        `<input name="pa_name" data-action="photo-add-field" type="text" maxlength="120" value="${escapeAttr(
+        `<input name="pa_name" data-action="photo-add-field" type="text" maxlength="80" value="${escapeAttr(
           d.pa_name || ""
         )}" placeholder="auto from photo"${dis} /></div>` +
         `<div><label>Drips (optional)</label>` +
