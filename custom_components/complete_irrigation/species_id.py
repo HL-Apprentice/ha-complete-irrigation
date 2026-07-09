@@ -38,7 +38,9 @@ _MAX_NOTE_CHARS = 240
 _TEMP_F_MIN, _TEMP_F_MAX = -60.0, 140.0
 _DEFAULT_CONFIDENCE = 0.5
 
-_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+_CONTROL_RE = re.compile(
+    "[\\x00-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u200e\\u200f\\u202a-\\u202e\\u2066-\\u2069]"
+)
 
 
 def _clean_text(v: Any, limit: int) -> str:
@@ -79,7 +81,7 @@ def validate_suggestion(raw: Any, *, model: str, now_iso: str) -> dict[str, Any]
         "species": species,
         "common_name": _clean_text(raw.get("common_name"), _MAX_NAME_CHARS),
         "confidence": _clean_float(raw.get("confidence"), 0.0, 1.0),
-        "identified_at": str(now_iso)[:40],
+        "identified_at": _clean_text(str(now_iso), 40),
         "model": _clean_text(model, 80),
         "note": _clean_text(raw.get("note"), _MAX_NOTE_CHARS),
     }
@@ -87,7 +89,9 @@ def validate_suggestion(raw: Any, *, model: str, now_iso: str) -> dict[str, Any]
         out["confidence"] = _DEFAULT_CONFIDENCE
 
     sunlight = raw.get("sunlight_class")
-    out["sunlight_class"] = sunlight if sunlight in SUNLIGHT_LUX else None
+    out["sunlight_class"] = (
+        sunlight if isinstance(sunlight, str) and sunlight in SUNLIGHT_LUX else None
+    )
 
     # Temperature tolerance (°F), both-or-neither with sane ordering.
     t_lo = _clean_float(raw.get("temp_low_f"), _TEMP_F_MIN, _TEMP_F_MAX)
@@ -98,10 +102,14 @@ def validate_suggestion(raw: Any, *, model: str, now_iso: str) -> dict[str, Any]
         out["temp_low_f"] = out["temp_high_f"] = None
 
     wucols = raw.get("wucols_category")
-    out["wucols_category"] = wucols if wucols in WUCOLS_FACTORS else None
+    out["wucols_category"] = (
+        wucols if isinstance(wucols, str) and wucols in WUCOLS_FACTORS else None
+    )
 
     preset = raw.get("care_plan_preset")
-    out["care_plan_preset"] = preset if preset in CARE_PLAN_PRESETS else None
+    out["care_plan_preset"] = (
+        preset if isinstance(preset, str) and preset in CARE_PLAN_PRESETS else None
+    )
 
     # Cadences: watering (days between waterings, seasonal ballpark) and
     # fertilizing (days; 0 = not necessary).
@@ -115,11 +123,16 @@ def clean_stored_suggestion(raw: Any) -> dict[str, Any] | None:
     holds (hand-tampered files degrade to None, never to a crash)."""
     if not isinstance(raw, dict):
         return None
-    return validate_suggestion(
-        raw,
-        model=str(raw.get("model") or ""),
-        now_iso=str(raw.get("identified_at") or ""),
-    )
+    try:
+        return validate_suggestion(
+            raw,
+            model=str(raw.get("model") or ""),
+            now_iso=str(raw.get("identified_at") or ""),
+        )
+    except (TypeError, ValueError):
+        # Documented contract: tampered files degrade to None, never to a crash
+        # (a crash here would drop the WHOLE plant record on load — rail violation).
+        return None
 
 
 def suggested_lux_range(suggestion: dict[str, Any]) -> tuple[int, int] | None:
