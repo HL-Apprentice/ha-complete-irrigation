@@ -1096,3 +1096,71 @@ dismiss_species_suggestion:
       required: true
       selector:
         text:
+
+add_plant_from_photo:
+  name: Add plant from photo
+  description: >
+    Photo-first plant creation: give the zone it's on (plus optionally its drip
+    emitters), attach a photo, and the vision model fills the rest — name,
+    species, water-use category, canopy estimate, light range — and seeds the
+    starter care plan. Everything stays editable afterwards.
+  fields:
+    zone_entity_id:
+      name: Zone
+      description: The irrigation zone/loop this plant is watered by.
+      required: true
+      selector:
+        entity:
+          domain: switch
+    image_base64:
+      name: Photo (base64)
+      description: The plant photo, base64-encoded JPEG.
+      required: true
+      selector:
+        text:
+    latitude:
+      name: Latitude
+      description: Optional EXIF GPS latitude (auto-places the map marker).
+      required: false
+      selector:
+        number:
+          min: -90
+          max: 90
+          step: any
+          mode: box
+    longitude:
+      name: Longitude
+      description: Optional EXIF GPS longitude.
+      required: false
+      selector:
+        number:
+          min: -180
+          max: 180
+          step: any
+          mode: box
+    name:
+      name: Name
+      description: Optional name override (defaults to the identified common name).
+      required: false
+      selector:
+        text:
+    emitter_count:
+      name: Drip count
+      description: Number of drip emitters on this plant (set with GPH).
+      required: false
+      selector:
+        number:
+          min: 1
+          max: 100
+          step: 1
+          mode: box
+    emitter_gph:
+      name: Drip size (GPH)
+      description: Gallons per hour of each emitter (set with count).
+      required: false
+      selector:
+        number:
+          min: 0.1
+          max: 50
+          step: any
+          mode: box

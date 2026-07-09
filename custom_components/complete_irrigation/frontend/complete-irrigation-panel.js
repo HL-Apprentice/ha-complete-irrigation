@@ -161,6 +161,8 @@
       lux_high: "",
       light_survey_sensor: "", // v1.35 — survey controls draft (edit form only)
       light_survey_minutes: "10",
+      emitter_count: "", // v1.38 — installed drips (strings; empty = unset)
+      emitter_gph: "",
     };
   }
 
@@ -170,6 +172,23 @@
     const when = d ? d.toLocaleDateString() : "";
     const note = (p && p.note) || "";
     return note ? `${when} — ${note}` : when;
+  }
+
+  // v1.38 — shared client-side photo-upload pipeline (factored out of
+  // _addPlantPhoto so the photo-first add flow uses the EXACT same steps):
+  // EXIF GPS from the ORIGINAL bytes first (canvas re-encoding strips it),
+  // then the downsized-JPEG base64 the backend expects. Throws on an
+  // unreadable image; a missing/malformed EXIF block just means gps: null.
+  async function fileToUploadPayload(file) {
+    let gps = null;
+    try {
+      gps = exifGps(await file.arrayBuffer());
+    } catch (_) {
+      /* no or malformed EXIF — fine, just no auto-placement */
+    }
+    const b64 = await downscaleToJpegB64(file, 1280, 0.82);
+    if (!b64 || b64.length < 64) throw new Error("could not read the image");
+    return { gps, b64 };
   }
 
   // v1.32 — minimal EXIF GPS reader: scan a JPEG ArrayBuffer for the APP1/TIFF
@@ -400,6 +419,9 @@
       // v1.37 — species identification (vision) state.
       this._identifyBusy = false; // identify_plant_species call in flight
       this._visionDraft = null; // {vision_url, vision_model} edit draft; null = mirror config
+      // v1.38 — photo-first add-plant flow. null = card closed; object =
+      // draft {pa_zone, pa_name, pa_emitter_count, pa_gph_sel, pa_gph_custom, busy}.
+      this._photoAdd = null;
 
       // Sensor (moisture) modal state
       this._sensorModalOpen = false;
@@ -735,6 +757,24 @@
         // v2 — Yard tab plant CRUD + ETo.
         if (action === "add-plant") {
           this._plantEditor = emptyPlantEditor();
+          this._photoAdd = null; // one add flow open at a time
+          return this._renderNow();
+        }
+        // v1.38 — photo-first add flow.
+        if (action === "photo-add-open") {
+          this._photoAdd = {
+            pa_zone: "",
+            pa_name: "",
+            pa_emitter_count: "",
+            pa_gph_sel: "",
+            pa_gph_custom: "",
+            busy: false,
+          };
+          this._plantEditor = null; // one add flow open at a time
+          return this._renderNow();
+        }
+        if (action === "photo-add-cancel") {
+          this._photoAdd = null;
           return this._renderNow();
         }
         if (action === "edit-plant") {
@@ -753,6 +793,9 @@
               lux_low: p.lux_low != null ? String(p.lux_low) : "",
               lux_high: p.lux_high != null ? String(p.lux_high) : "",
               _hadLightRange: p.lux_low != null && p.lux_high != null,
+              // v1.38 — installed drips (draft strings; empty = unset)
+              emitter_count: p.emitter_count != null ? String(p.emitter_count) : "",
+              emitter_gph: p.emitter_gph != null ? String(p.emitter_gph) : "",
               // Survey controls: default the sensor from the most recent survey.
               light_survey_sensor:
                 (Array.isArray(p.light_surveys) && p.light_surveys[0]?.sensor) || "",
@@ -1038,6 +1081,22 @@
         t.value = ""; // allow re-selecting the same file
         return;
       }
+      if (action === "photo-add-field") {
+        // v1.38 — photo-first add draft (survives background re-renders).
+        if (this._photoAdd && t.name in this._photoAdd) {
+          this._photoAdd[t.name] = t.value;
+          // Choosing "Custom…" GPH shows/hides the custom number input.
+          if (t.name === "pa_gph_sel") return this._renderNow();
+        }
+        return;
+      }
+      if (action === "photo-add-file") {
+        // v1.38 — picking the photo IS the submit for the photo-first flow.
+        const file = t.files && t.files[0];
+        if (file) this._addPlantFromPhoto(file);
+        t.value = ""; // allow re-selecting the same file
+        return;
+      }
       if (action === "notify-target-change") {
         const idx = parseInt(t.dataset.idx, 10);
         if (!Array.isArray(this._notifyDraft)) this._hydrateNotifyDraft();
@@ -1195,6 +1254,13 @@
       // v1.37 — vision-endpoint inputs: same keep-typing-alive treatment.
       if (t.dataset?.action === "vision-field") {
         this._syncVisionField(t);
+        return;
+      }
+      // v1.38 — photo-first add form: same keep-typing-alive treatment.
+      if (t.dataset?.action === "photo-add-field") {
+        if (this._photoAdd && t.name in this._photoAdd) {
+          this._photoAdd[t.name] = t.value;
+        }
         return;
       }
       // v1.19.0 — live filter the sensor checkbox list as the user
@@ -2228,9 +2294,34 @@
             alert("Lux low must be less than lux high.");
             return;
           }
+          // v1.38 — installed drips ride along on an edit: both-or-neither,
+          // backend ranges 1-100 count / 0.1-50 GPH. Sent only when set.
+          const emCountRaw = String(e.emitter_count == null ? "" : e.emitter_count).trim();
+          const emGphRaw = String(e.emitter_gph == null ? "" : e.emitter_gph).trim();
+          const emCount = parseInt(emCountRaw, 10);
+          const emGph = parseFloat(emGphRaw);
+          const emBoth =
+            emCountRaw !== "" &&
+            emGphRaw !== "" &&
+            Number.isFinite(emCount) &&
+            Number.isFinite(emGph);
+          const emNeither = emCountRaw === "" && emGphRaw === "";
+          if (!emBoth && !emNeither) {
+            alert("Set both drip count and GPH, or leave both empty.");
+            return;
+          }
+          if (emBoth && (emCount < 1 || emCount > 100)) {
+            alert("Drip count must be between 1 and 100.");
+            return;
+          }
+          if (emBoth && (emGph < 0.1 || emGph > 50)) {
+            alert("Drip GPH must be between 0.1 and 50.");
+            return;
+          }
           await this._hass.callService("complete_irrigation", "update_plant", {
             plant_id: e.id,
             ...payload,
+            ...(emBoth ? { emitter_count: emCount, emitter_gph: emGph } : {}),
           });
           if (bothSet) {
             await this._hass.callService(
@@ -5493,10 +5584,16 @@
         `${autoOn ? "Used whenever the forecast can't be read." : "Raise it in summer, lower in winter."}</span>` +
         `</div>` +
         `</div>` +
-        // Add-plant button or the inline editor form
+        // v1.38 — photo-first add is the prominent path; the manual form
+        // stays as the secondary option. Editor > photo card > buttons.
         (this._plantEditor
           ? this._renderPlantForm()
-          : `<button class="btn btn-primary yard-add" data-action="add-plant">+ Add plant</button>`) +
+          : this._photoAdd
+          ? this._renderPhotoAddCard()
+          : `<div class="yard-add-row">` +
+            `<button class="btn btn-primary" data-action="photo-add-open">📷 Add from photo</button>` +
+            `<button class="btn" data-action="add-plant">+ Add plant manually</button>` +
+            `</div>`) +
         // Plant list
         this._renderPlantList() +
         // v1.35 — recurring care reminders (fertilize/prune/mulch/inspect)
@@ -5556,6 +5653,79 @@
         (chips
           ? `<div class="yard-map-unplaced"><span class="muted">Tap to place:</span> ${chips}</div>`
           : `<p class="muted yard-map-hint">Drag a marker to reposition it.</p>`) +
+        `</div>`
+      );
+    }
+
+    _renderPhotoAddCard() {
+      // v1.38 — compact inline card for the photo-first add flow. Zone is
+      // required; drips + name optional. Picking the photo submits.
+      const d = this._photoAdd || {};
+      const busy = !!d.busy;
+      const zones = this._switchOptions();
+      const gphOptions = [
+        ["", "— GPH —"],
+        ["0.5", "0.5"],
+        ["1", "1"],
+        ["2", "2"],
+        ["4", "4"],
+        ["6", "6"],
+        ["10", "10"],
+        ["custom", "Custom…"],
+      ];
+      const dis = busy ? " disabled" : "";
+      return (
+        `<div class="card photo-add-card">` +
+        `<h3>📷 Add plant from photo</h3>` +
+        `<p class="photo-add-hint">Snap the plant and the vision endpoint names it, then fills ` +
+        `species, water needs, and a starter care plan automatically.</p>` +
+        `<div class="photo-add-row">` +
+        `<div><label>Zone / loop</label>` +
+        `<select name="pa_zone" data-action="photo-add-field"${dis}>` +
+        `<option value="">— pick a zone —</option>` +
+        zones
+          .map(
+            (z) =>
+              `<option value="${escapeAttr(z.id)}"${
+                d.pa_zone === z.id ? " selected" : ""
+              }>${escapeHtml(z.name)}</option>`
+          )
+          .join("") +
+        `</select></div>` +
+        `<div><label>Name (optional)</label>` +
+        `<input name="pa_name" data-action="photo-add-field" type="text" maxlength="120" value="${escapeAttr(
+          d.pa_name || ""
+        )}" placeholder="auto from photo"${dis} /></div>` +
+        `<div><label>Drips (optional)</label>` +
+        `<div class="photo-add-emitters">` +
+        `<input name="pa_emitter_count" data-action="photo-add-field" type="number" min="1" max="100" step="1" value="${escapeAttr(
+          String(d.pa_emitter_count || "")
+        )}" placeholder="count"${dis} />` +
+        `<span class="photo-add-x">×</span>` +
+        `<select name="pa_gph_sel" data-action="photo-add-field"${dis}>` +
+        gphOptions
+          .map(
+            ([v, l]) =>
+              `<option value="${v}"${d.pa_gph_sel === v ? " selected" : ""}>${l}</option>`
+          )
+          .join("") +
+        `</select>` +
+        (d.pa_gph_sel === "custom"
+          ? `<input name="pa_gph_custom" data-action="photo-add-field" type="number" min="0.1" max="50" step="0.1" value="${escapeAttr(
+              String(d.pa_gph_custom || "")
+            )}" placeholder="GPH"${dis} />`
+          : "") +
+        `</div></div>` +
+        `</div>` +
+        `<div class="yard-form-actions">` +
+        (busy
+          ? `<span class="photo-add-busy">Adding + identifying… this can take ` +
+            `30–60 seconds on the first model load.</span>`
+          : `<label class="btn btn-primary photo-add-take">📷 Take / choose photo` +
+            `<input type="file" accept="image/*" capture="environment" data-action="photo-add-file" hidden />` +
+            `</label>` +
+            `<button class="btn btn-small" type="button" data-action="photo-add-cancel">Cancel</button>`) +
+        `</div>` +
         `</div>`
       );
     }
@@ -5634,6 +5804,17 @@
             )}" placeholder="e.g. 10000" /></div>`
           : `<div><label>Light range</label>` +
             `<span class="light-add-hint">Save the plant first, then set its light range.</span></div>`) +
+        // v1.38 — installed drips (emitters). Both-or-neither; drives the
+        // delivered-water math in the loop report.
+        `<div><label>Drip count</label>` +
+        `<input name="emitter_count" data-action="plant-field" type="number" min="1" max="100" step="1" value="${escapeAttr(
+          String(e.emitter_count == null ? "" : e.emitter_count)
+        )}" placeholder="e.g. 2" /></div>` +
+        `<div><label>Drip GPH</label>` +
+        `<input name="emitter_gph" data-action="plant-field" type="number" min="0.1" max="50" step="0.1" value="${escapeAttr(
+          String(e.emitter_gph == null ? "" : e.emitter_gph)
+        )}" placeholder="e.g. 1" />` +
+        `<span class="emitter-hint">Set both drip fields or neither.</span></div>` +
         `</div>` +
         // v1.32 — photo history (only on a saved plant; you attach photos to an id).
         (e.id ? this._renderPhotoSection(e) : "") +
@@ -5643,6 +5824,8 @@
         (e.id ? this._renderSpeciesSuggestion(e) : "") +
         // v1.35 — light range + illuminance surveys (saved plants only).
         (e.id ? this._renderLightSection(e) : "") +
+        // v1.38 — installed-drips status line (saved plants only).
+        (e.id ? this._renderDripsLine(e) : "") +
         `<div class="yard-form-actions">` +
         `<button class="btn btn-primary" type="submit">${e.id ? "Save" : "Add plant"}</button>` +
         `<button class="btn btn-small" type="button" data-action="cancel-plant">Cancel</button>` +
@@ -5880,15 +6063,8 @@
       this._photoBusy = true;
       this._renderNow();
       try {
-        // Pull EXIF GPS from the ORIGINAL bytes first (canvas re-encoding strips it).
-        let gps = null;
-        try {
-          gps = exifGps(await file.arrayBuffer());
-        } catch (_) {
-          /* no or malformed EXIF — fine, just no auto-placement */
-        }
-        const b64 = await downscaleToJpegB64(file, 1280, 0.82);
-        if (!b64 || b64.length < 64) throw new Error("could not read the image");
+        // v1.38 — shared pipeline (EXIF GPS from original bytes + downsized JPEG).
+        const { gps, b64 } = await fileToUploadPayload(file);
         const payload = { plant_id: plantId, image_base64: b64 };
         // Auto-place ONLY when the plant is still unplaced (the locked workflow:
         // GPS places once; selection owns identity; manual drag owns position).
@@ -5909,6 +6085,70 @@
         alert("Failed to add photo: " + (err?.message || err));
       } finally {
         this._photoBusy = false;
+        this._renderNow();
+      }
+    }
+
+    async _addPlantFromPhoto(file) {
+      // v1.38 — photo-first plant creation: one service call creates the
+      // plant, attaches the photo, identifies the species, and auto-applies
+      // everything. Picking the file IS the submit; the identify round-trip
+      // can take ~30-60 s on first model load, hence the busy card state.
+      const d = this._photoAdd;
+      if (!file || !d || d.busy) return;
+      const zone = (d.pa_zone || "").trim();
+      if (!zone) {
+        alert("Pick a zone for the new plant first.");
+        return;
+      }
+      // Optional drips: both-or-neither, backend ranges 1-100 / 0.1-50.
+      const countRaw = String(d.pa_emitter_count || "").trim();
+      const gphRaw =
+        d.pa_gph_sel === "custom"
+          ? String(d.pa_gph_custom || "").trim()
+          : String(d.pa_gph_sel || "").trim();
+      const count = parseInt(countRaw, 10);
+      const gph = parseFloat(gphRaw);
+      const haveCount = countRaw !== "" && Number.isFinite(count);
+      const haveGph = gphRaw !== "" && Number.isFinite(gph);
+      if (haveCount !== haveGph) {
+        alert("Set both the drip count and the GPH, or leave both empty.");
+        return;
+      }
+      if (haveCount && (count < 1 || count > 100)) {
+        alert("Drip count must be between 1 and 100.");
+        return;
+      }
+      if (haveGph && (gph < 0.1 || gph > 50)) {
+        alert("Drip GPH must be between 0.1 and 50.");
+        return;
+      }
+      d.busy = true;
+      this._renderNow();
+      try {
+        const { gps, b64 } = await fileToUploadPayload(file);
+        const payload = { zone_entity_id: zone, image_base64: b64 };
+        if (gps) {
+          payload.latitude = gps.lat;
+          payload.longitude = gps.lon;
+        }
+        const name = (d.pa_name || "").trim();
+        if (name) payload.name = name;
+        if (haveCount) {
+          payload.emitter_count = count;
+          payload.emitter_gph = gph;
+        }
+        await this._hass.callService(
+          "complete_irrigation",
+          "add_plant_from_photo",
+          payload
+        );
+        this._photoAdd = null; // success — close the card
+        await this._fetchYard(); // refetches plants + care tasks together
+      } catch (err) {
+        alert("Failed to add the plant from photo: " + (err?.message || err));
+      } finally {
+        if (this._photoAdd) this._photoAdd.busy = false; // kept open on error
         this._renderNow();
       }
     }
@@ -5940,6 +6180,21 @@
         `<div class="yard-table-wrap"><table class="yard-table">` +
         `<thead><tr><th>Name</th><th>Category</th><th>Area</th><th>Zone</th><th></th></tr></thead>` +
         `<tbody>${rows}</tbody></table></div>`
+      );
+    }
+
+    _renderDripsLine(e) {
+      // v1.38 — installed-drips status in the plant detail. Reads the FRESH
+      // plant record (the draft holds the editable strings above).
+      const p = (this._plants || []).find((x) => x.id === e.id) || {};
+      return (
+        `<div class="plant-drips">` +
+        (p.emitter_count != null && p.emitter_gph != null
+          ? `<span class="plant-drips-line">Drips: ${escapeHtml(
+              String(p.emitter_count)
+            )} × ${escapeHtml(String(p.emitter_gph))} GPH</span>`
+          : `<span class="plant-drips-hint">Add drips for delivered-water math.</span>`) +
+        `</div>`
       );
     }
 
@@ -6701,6 +6956,22 @@
         `.health-block{margin:6px 0}` +
         `.health-sub{display:block;font-size:11px;color:var(--ci-text-2);text-transform:uppercase;letter-spacing:0.03em}` +
         `.health-block ul{margin:2px 0 0;padding-left:18px;font-size:13px}` +
+        // v1.38 — photo-first add flow + installed drips
+        `.yard-add-row{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}` +
+        `.photo-add-card h3{margin:0 0 6px;font-size:15px}` +
+        `.photo-add-hint{margin:0 0 12px;font-size:13px;color:var(--ci-text-2)}` +
+        `.photo-add-row{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap}` +
+        `.photo-add-card label{display:block;font-size:13px;color:var(--ci-text-2);margin-bottom:4px}` +
+        `.photo-add-card input,.photo-add-card select{padding:8px 10px;border:1px solid var(--ci-border);border-radius:6px;background:var(--ci-input-bg);color:inherit;font:inherit;box-sizing:border-box}` +
+        `.photo-add-emitters{display:flex;gap:6px;align-items:center}` +
+        `.photo-add-emitters input{width:80px}` +
+        `.photo-add-x{font-size:13px;color:var(--ci-text-2)}` +
+        `.photo-add-take{cursor:pointer}` +
+        `.photo-add-busy{font-size:13px;font-weight:600;color:var(--ci-accent)}` +
+        `.emitter-hint{display:block;margin-top:4px;font-size:13px;color:var(--ci-text-2)}` +
+        `.plant-drips{margin-top:10px;font-size:13px}` +
+        `.plant-drips-line{font-weight:600;color:var(--ci-text)}` +
+        `.plant-drips-hint{color:var(--ci-text-2)}` +
         // v1.37 — species identification (vision)
         `.identify-hint{font-size:13px;color:var(--ci-text-2);margin-left:6px}` +
         `.species-suggest{margin-top:14px;border:1px solid var(--ci-accent);border-radius:10px;padding:12px 14px;background:rgba(3,169,244,0.06)}` +
