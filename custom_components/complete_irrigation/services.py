@@ -492,6 +492,8 @@ _UPDATE_PLANT_SCHEMA = vol.Schema(
         # v1.38 — installed drip emitters (count x GPH), set together.
         vol.Optional("emitter_count"): vol.All(vol.Coerce(int), vol.Range(min=1, max=100)),
         vol.Optional("emitter_gph"): vol.All(vol.Coerce(float), vol.Range(min=0.1, max=50)),
+        # v1.38 — remove installed emitters (both-None pair), mirroring lux clear.
+        vol.Optional("clear_emitters", default=False): cv.boolean,
     }
 )
 
@@ -1658,6 +1660,9 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         }
         # v1.38 — a one-sided emitter pair is a user error, not an unknown_error:
         # check against the MERGED values (either field may already be set).
+        if data.get("clear_emitters"):
+            overrides["emitter_count"] = None
+            overrides["emitter_gph"] = None
         m_count = overrides.get("emitter_count", existing.emitter_count)
         m_gph = overrides.get("emitter_gph", existing.emitter_gph)
         if (m_count is None) != (m_gph is None):
@@ -2141,6 +2146,13 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             await coord.async_save_plants()
             raise
         fresh = coord.plants.get(plant.id)
+        if fresh is None or not fresh.photos:
+            # add_plant_photo fails SILENTLY (logs + returns) — detect it here so
+            # we never strand a photo-less guess-record or claim false success.
+            if fresh is not None:
+                coord.plants.delete(plant.id)
+                await coord.async_save_plants()
+            raise vol.Invalid("the photo could not be stored — plant not created")
         try:
             suggestion = await _run_identify(coord, fresh)
         except vol.Invalid as err:
