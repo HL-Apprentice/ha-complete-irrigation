@@ -50,6 +50,13 @@
     too_high: "Too high",
     no_range: "No range",
   };
+  // v1.37 — species-suggestion sunlight_class → human label.
+  const SUNLIGHT_CLASS_LABELS = {
+    full_sun: "Full sun",
+    partial_sun: "Partial sun",
+    bright_shade: "Bright shade",
+    deep_shade: "Deep shade",
+  };
   const ELEMENT_NAME = "complete-irrigation-panel";
   // v1.19.0 — scroll containers whose positions must survive an
   // innerHTML rebuild. `main` is the page scroller; the rest scroll
@@ -390,6 +397,9 @@
         seed_preset: "tree",
       };
       this._zoneDiagnosis = {}; // zone entity_id -> diagnosis result (expanded row)
+      // v1.37 — species identification (vision) state.
+      this._identifyBusy = false; // identify_plant_species call in flight
+      this._visionDraft = null; // {vision_url, vision_model} edit draft; null = mirror config
 
       // Sensor (moisture) modal state
       this._sensorModalOpen = false;
@@ -786,6 +796,14 @@
         if (action === "care-plan-seed") return this._seedCarePlan();
         if (action === "zone-diagnose")
           return this._diagnoseZone(node.dataset.entityId);
+        // v1.37 — species identification (vision).
+        if (action === "identify-species")
+          return this._identifySpecies(node.dataset.plantId);
+        if (action === "species-apply")
+          return this._applySpeciesSuggestion(node.dataset.plantId);
+        if (action === "species-dismiss")
+          return this._dismissSpeciesSuggestion(node.dataset.plantId);
+        if (action === "save-vision-endpoint") return this._saveVisionEndpoint();
         if (action === "zone-move-up") return this._reorderZone(node.dataset.entityId, -1);
         if (action === "zone-move-down") return this._reorderZone(node.dataset.entityId, 1);
         if (action === "day-cal-prev") {
@@ -1008,6 +1026,12 @@
         }
         return; // value already shown by the control; no re-render
       }
+      if (action === "vision-field") {
+        // v1.37 — vision-endpoint draft. Lazily seeded from config on first
+        // edit so a background re-render can't wipe unsaved typing.
+        this._syncVisionField(t);
+        return;
+      }
       if (action === "photo-file") {
         const file = t.files && t.files[0];
         if (file) this._addPlantPhoto(file, t.dataset.plantId);
@@ -1166,6 +1190,11 @@
         if (this._careDraft && t.name in this._careDraft) {
           this._careDraft[t.name] = t.value;
         }
+        return;
+      }
+      // v1.37 — vision-endpoint inputs: same keep-typing-alive treatment.
+      if (t.dataset?.action === "vision-field") {
+        this._syncVisionField(t);
         return;
       }
       // v1.19.0 — live filter the sensor checkbox list as the user
@@ -2367,6 +2396,69 @@
       }
     }
 
+    // ── v1.37 species identification (vision) ──────────────────────
+    async _identifySpecies(plantId) {
+      // Ask the configured vision endpoint to identify the plant from its
+      // newest photo. Busy-flagged like _addPlantPhoto; backend errors are
+      // user-actionable (e.g. "set a vision endpoint first") → alert them.
+      if (!plantId || this._identifyBusy) return;
+      this._identifyBusy = true;
+      this._renderNow();
+      try {
+        await this._hass.callService("complete_irrigation", "identify_plant_species", {
+          plant_id: plantId,
+        });
+        await this._fetchYard(); // pulls the fresh species_suggestion
+      } catch (err) {
+        alert("Could not identify the species: " + (err?.message || err));
+      } finally {
+        this._identifyBusy = false;
+        this._renderNow();
+      }
+    }
+
+    async _applySpeciesSuggestion(plantId) {
+      if (!plantId) return;
+      try {
+        await this._hass.callService("complete_irrigation", "apply_species_suggestion", {
+          plant_id: plantId,
+          seed_plan: true,
+        });
+        await this._fetchYard();
+        await this._fetchCareTasks(); // seed_plan may have added tasks
+        // Re-sync the open editor from the applied plant so a later Save
+        // can't clobber the applied values with the stale draft (same
+        // convention as the photo re-sync in _addPlantPhoto).
+        if (this._plantEditor && this._plantEditor.id === plantId) {
+          const fresh = (this._plants || []).find((p) => p.id === plantId);
+          if (fresh) {
+            this._plantEditor.species = fresh.species || "";
+            this._plantEditor.wucols_category = fresh.wucols_category;
+            this._plantEditor.lux_low = fresh.lux_low != null ? String(fresh.lux_low) : "";
+            this._plantEditor.lux_high =
+              fresh.lux_high != null ? String(fresh.lux_high) : "";
+            this._plantEditor._hadLightRange =
+              fresh.lux_low != null && fresh.lux_high != null;
+            this._renderNow();
+          }
+        }
+      } catch (err) {
+        alert("Failed to apply the suggestion: " + (err?.message || err));
+      }
+    }
+
+    async _dismissSpeciesSuggestion(plantId) {
+      if (!plantId) return;
+      try {
+        await this._hass.callService("complete_irrigation", "dismiss_species_suggestion", {
+          plant_id: plantId,
+        });
+        await this._fetchYard();
+      } catch (err) {
+        alert("Failed to dismiss the suggestion: " + (err?.message || err));
+      }
+    }
+
     // ── v1.35 watering diagnosis ───────────────────────────────────
     async _diagnoseZone(entityId) {
       // Toggle: a second click on 🩺 collapses the open panel.
@@ -3003,6 +3095,22 @@
         `<div class="modal-actions"><button type="submit" class="btn btn-primary">Save default</button></div>` +
         `</form>` +
         `</section>` +
+        // v1.37 — LAN vision endpoint for plant identification
+        `<section class="settings-card">` +
+        `<h3 class="section-title">Vision endpoint</h3>` +
+        `<p class="section-hint">OpenAI-compatible /v1/chat/completions endpoint on your LAN (e.g. Ollama). Used for plant identification.</p>` +
+        `<div class="weather-form" style="background:transparent;border:none;padding:0;max-width:none">` +
+        `<label>Endpoint URL</label>` +
+        `<input name="vision_url" data-action="vision-field" type="text" value="${escapeAttr(
+          (this._visionDraft || c).vision_url || ""
+        )}" placeholder="http://192.168.1.10:11434/v1/chat/completions" />` +
+        `<label style="margin-top:8px">Model name</label>` +
+        `<input name="vision_model" data-action="vision-field" type="text" value="${escapeAttr(
+          (this._visionDraft || c).vision_model || ""
+        )}" placeholder="e.g. qwen2.5-vl" />` +
+        `<div class="modal-actions"><button type="button" class="btn btn-primary" data-action="save-vision-endpoint">Save vision endpoint</button></div>` +
+        `</div>` +
+        `</section>` +
         `<section class="settings-card">` +
         `<h3 class="section-title">Calendar feed</h3>` +
         `<p class="section-hint">Subscribe from your phone's calendar app to see the next 30 days of planned runs.</p>` +
@@ -3019,6 +3127,38 @@
         `<p class="section-hint" style="margin-top:12px">All configuration is also reachable via Developer Tools → Services — useful for advanced automations.</p>` +
         `</section>`
       );
+    }
+
+    _syncVisionField(t) {
+      // v1.37 — mirror a vision-endpoint input into the draft; seed the
+      // draft from the saved config on first edit.
+      if (!this._visionDraft) {
+        const c = this._config || {};
+        this._visionDraft = {
+          vision_url: c.vision_url || "",
+          vision_model: c.vision_model || "",
+        };
+      }
+      if (t.name in this._visionDraft) this._visionDraft[t.name] = t.value;
+    }
+
+    async _saveVisionEndpoint() {
+      // v1.37 — persist the vision endpoint (URL + model) used for plant
+      // identification. Reads the rendered inputs; the draft only keeps
+      // typing alive across re-renders.
+      const root = this.shadowRoot;
+      const url = (root?.querySelector('input[name="vision_url"]')?.value || "").trim();
+      const model = (root?.querySelector('input[name="vision_model"]')?.value || "").trim();
+      try {
+        await this._hass.callService("complete_irrigation", "set_general_config", {
+          vision_url: url,
+          vision_model: model,
+        });
+        this._visionDraft = null; // re-hydrate from the saved config
+        await this._fetchConfig();
+      } catch (err) {
+        alert("Failed to save the vision endpoint: " + (err?.message || err));
+      }
     }
 
     async _saveConflictPolicy(form) {
@@ -5492,6 +5632,8 @@
         (e.id ? this._renderPhotoSection(e) : "") +
         // v1.33 — last vision-health verdict (if any).
         (e.id ? this._renderHealthSection(e) : "") +
+        // v1.37 — vision species suggestion (if any) — above the Light section.
+        (e.id ? this._renderSpeciesSuggestion(e) : "") +
         // v1.35 — light range + illuminance surveys (saved plants only).
         (e.id ? this._renderLightSection(e) : "") +
         `<div class="yard-form-actions">` +
@@ -5528,6 +5670,16 @@
           e.id
         )}"${busy ? " disabled" : ""} hidden />` +
         `</label>` +
+        // v1.37 — identify the species from the newest photo via the
+        // configured vision endpoint (Settings → Vision endpoint).
+        ` <button class="btn btn-small" type="button" data-action="identify-species" data-plant-id="${escapeAttr(
+          e.id
+        )}"${photos.length && !this._identifyBusy ? "" : " disabled"}>` +
+        (this._identifyBusy ? "Identifying…" : "🔍 Identify species") +
+        `</button>` +
+        (photos.length
+          ? ""
+          : `<span class="identify-hint"> Add a photo first to identify the species.</span>`) +
         `<span class="muted plant-photo-hint">A photo with location data places this plant ` +
         `on the map automatically (first photo only); after that, drag the marker to adjust.</span>` +
         `</div>`
@@ -5568,6 +5720,68 @@
           : "") +
         `<span class="muted plant-photo-hint">Biannual vision check — advisory; ` +
         `it never changes watering.</span>` +
+        `</div>`
+      );
+    }
+
+    _renderSpeciesSuggestion(e) {
+      // v1.37 — pending vision species suggestion. Highlighted card with
+      // Apply/Dismiss; reads the FRESH plant record (the editor draft may
+      // predate the identify call).
+      const p = (this._plants || []).find((x) => x.id === e.id) || {};
+      const s = p.species_suggestion;
+      if (!s || typeof s !== "object") return "";
+      const common = String(s.common_name || "").trim();
+      const species = String(s.species || "").trim();
+      const conf =
+        typeof s.confidence === "number" ? Math.round(s.confidence * 100) : null;
+      const name = common || species || "Unknown plant";
+      const head =
+        `Suggested: ${escapeHtml(name)}` +
+        (common && species ? ` (${escapeHtml(species)})` : "") +
+        (conf != null ? ` — ${conf}%` : "");
+      // Compact traits line — only the non-null ones.
+      const traits = [];
+      if (s.sunlight_class) {
+        traits.push(SUNLIGHT_CLASS_LABELS[s.sunlight_class] || String(s.sunlight_class));
+      }
+      if (s.temp_low_f != null && s.temp_high_f != null) {
+        traits.push(`${s.temp_low_f}–${s.temp_high_f}°F`);
+      }
+      if (s.wucols_category) traits.push(`WUCOLS ${s.wucols_category}`);
+      if (s.water_every_days != null) traits.push(`Water every ${s.water_every_days} days`);
+      if (s.fertilize_every_days != null) {
+        traits.push(
+          s.fertilize_every_days === 0
+            ? "Fertilizing not necessary"
+            : `Fertilize every ${s.fertilize_every_days} days`
+        );
+      }
+      const traitsHtml = traits.map((x) => escapeHtml(String(x))).join(" · ");
+      let when = "";
+      if (s.identified_at) {
+        const d = new Date(s.identified_at);
+        if (!isNaN(d)) when = d.toLocaleDateString();
+      }
+      const meta = [s.model ? String(s.model) : "", when].filter(Boolean);
+      return (
+        `<div class="species-suggest">` +
+        `<div class="species-suggest-head">${head}</div>` +
+        (traitsHtml ? `<p class="species-suggest-traits">${traitsHtml}</p>` : "") +
+        (s.note
+          ? `<p class="species-suggest-note">${escapeHtml(String(s.note))}</p>`
+          : "") +
+        `<div class="species-suggest-actions">` +
+        `<button class="btn btn-small btn-primary" type="button" data-action="species-apply" data-plant-id="${escapeAttr(
+          e.id
+        )}">✓ Apply</button>` +
+        `<button class="btn btn-small" type="button" data-action="species-dismiss" data-plant-id="${escapeAttr(
+          e.id
+        )}">Dismiss</button>` +
+        `</div>` +
+        (meta.length
+          ? `<span class="species-suggest-meta">${escapeHtml(meta.join(" · "))}</span>`
+          : "") +
         `</div>`
       );
     }
@@ -6480,6 +6694,14 @@
         `.health-block{margin:6px 0}` +
         `.health-sub{display:block;font-size:11px;color:var(--ci-text-2);text-transform:uppercase;letter-spacing:0.03em}` +
         `.health-block ul{margin:2px 0 0;padding-left:18px;font-size:13px}` +
+        // v1.37 — species identification (vision)
+        `.identify-hint{font-size:13px;color:var(--ci-text-2);margin-left:6px}` +
+        `.species-suggest{margin-top:14px;border:1px solid var(--ci-accent);border-radius:10px;padding:12px 14px;background:rgba(3,169,244,0.06)}` +
+        `.species-suggest-head{font-size:14px;font-weight:600;color:var(--ci-text);margin-bottom:6px}` +
+        `.species-suggest-traits{margin:0 0 6px;font-size:13px;color:var(--ci-text-2)}` +
+        `.species-suggest-note{margin:0 0 8px;font-size:13px;color:var(--ci-text-2);font-style:italic}` +
+        `.species-suggest-actions{display:flex;gap:8px;margin-top:4px}` +
+        `.species-suggest-meta{display:block;margin-top:8px;font-size:13px;color:var(--ci-text-2)}` +
         // v1.35 — plant light range + illuminance survey section
         `.light-add-hint{display:block;font-size:13px;color:var(--ci-text-2);padding:8px 0}` +
         `.plant-light{margin-top:14px;border-top:1px solid var(--ci-border);padding-top:12px}` +
