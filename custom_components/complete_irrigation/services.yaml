@@ -1050,3 +1050,49 @@ seed_care_plan:
             - flower
             - cactus_succulent
             - grass
+
+identify_plant_species:
+  name: Identify plant species (photo)
+  description: >
+    Send the plant's newest photo to your configured local vision endpoint
+    (set_general_config vision_url/vision_model) and store a bounded species +
+    care-sheet SUGGESTION on the plant. Nothing is applied until you accept it.
+  fields:
+    plant_id:
+      name: Plant ID
+      description: The plant to identify (must have at least one photo).
+      required: true
+      selector:
+        text:
+
+apply_species_suggestion:
+  name: Apply species suggestion
+  description: >
+    Accept a pending species suggestion — sets the plant's species, maps the
+    sunlight class to its optimal-lux range, applies a suggested WUCOLS category,
+    and (optionally) seeds the starter care plan.
+  fields:
+    plant_id:
+      name: Plant ID
+      description: The plant with a pending suggestion.
+      required: true
+      selector:
+        text:
+    seed_plan:
+      name: Seed care plan
+      description: Also create the suggested starter care tasks (default on).
+      required: false
+      default: true
+      selector:
+        boolean:
+
+dismiss_species_suggestion:
+  name: Dismiss species suggestion
+  description: Discard a pending species suggestion without applying anything.
+  fields:
+    plant_id:
+      name: Plant ID
+      description: The plant whose suggestion to discard.
+      required: true
+      selector:
+        text:

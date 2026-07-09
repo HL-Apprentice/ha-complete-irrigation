@@ -68,6 +68,10 @@ class PlantRecord:
     # v1.35 — newest-first bounded light-survey history (entries produced by
     # light_survey.make_survey_entry, re-cleaned on load by clean_stored_surveys).
     light_surveys: tuple[dict[str, Any], ...] = ()
+    # v1.37 — pending species-ID suggestion (bounded by species_id.validate_suggestion
+    # before storage; re-cleaned on load). None = no pending suggestion. Advisory:
+    # nothing applies until the user accepts it.
+    species_suggestion: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if not self.id:
@@ -119,6 +123,8 @@ class PlantRecord:
             validate_lux_range(self.lux_low, self.lux_high)
         if not isinstance(self.light_surveys, tuple):
             raise ValueError("light_surveys must be a tuple")
+        if self.species_suggestion is not None and not isinstance(self.species_suggestion, dict):
+            raise ValueError("species_suggestion must be a dict or None")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -135,6 +141,9 @@ class PlantRecord:
             "lux_low": self.lux_low,
             "lux_high": self.lux_high,
             "light_surveys": [dict(s) for s in self.light_surveys],
+            "species_suggestion": (
+                dict(self.species_suggestion) if isinstance(self.species_suggestion, dict) else None
+            ),
         }
 
     @classmethod
@@ -161,6 +170,7 @@ class PlantRecord:
         # v1.35 — lux range: both-or-neither; a malformed pair degrades to None
         # (no range) rather than dropping the whole record on load.
         from .light_survey import clean_stored_surveys, validate_lux_range
+        from .species_id import clean_stored_suggestion
 
         lux_low: int | None = None
         lux_high: int | None = None
@@ -184,6 +194,7 @@ class PlantRecord:
             lux_low=lux_low,
             lux_high=lux_high,
             light_surveys=clean_stored_surveys(data.get("light_surveys")),
+            species_suggestion=clean_stored_suggestion(data.get("species_suggestion")),
         )
 
     def to_calc_plant(self) -> Plant:
