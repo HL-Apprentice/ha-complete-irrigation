@@ -115,6 +115,9 @@ def validate_suggestion(raw: Any, *, model: str, now_iso: str) -> dict[str, Any]
     # fertilizing (days; 0 = not necessary).
     out["water_every_days"] = _clean_int(raw.get("water_every_days"), 1, 60)
     out["fertilize_every_days"] = _clean_int(raw.get("fertilize_every_days"), 0, 3650)
+    # v1.38 — canopy-footprint estimate from the photo (sq ft, rough; editable).
+    canopy = _clean_float(raw.get("canopy_area_sqft"), 0.5, 10000)
+    out["canopy_area_sqft"] = round(canopy, 1) if canopy is not None else None
     return out
 
 
