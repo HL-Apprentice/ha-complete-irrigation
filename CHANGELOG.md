@@ -4,6 +4,18 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.38.1 — 2026-07-10 — patch — IMPORTANT watering fix
+
+**Chunked-run blocks 2..n never fired on modern HA (2024.5+).** The block timer
+callback ran in a worker thread; HA's thread-safety guard raised RuntimeError
+before the block could dispatch — so a long run delivered only its FIRST 58-min
+block of water, and run history only ever showed "(block 1/N)" (the symptom
+that surfaced this). Confirmed in the live HA log. The same defect silently
+disabled the restart-resume path and the post-install reminder. All four call
+sites are now proper event-loop callbacks; every block dispatches, waters, and
+records its own "(block i/n)" history row, closed by its own auto-stop.
++3 regression tests incl. a job-type lock (572 total).
+
 ## v1.38.0 — 2026-07-09 — minor
 
 **Photo-first plants: take a picture, get a plant.** (Also ships the unreleased
