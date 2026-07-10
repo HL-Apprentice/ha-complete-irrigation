@@ -230,6 +230,8 @@ class PlantRecord:
             wucols_category=self.wucols_category,
             canopy_area_sqft=self.canopy_area_sqft,
             loop_id=self.zone_entity_id,
+            installed_count=self.emitter_count,
+            installed_gph=self.emitter_gph,
         )
 
 

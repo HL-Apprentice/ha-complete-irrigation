@@ -544,3 +544,29 @@ def test_species_suggestion_strips_bidi_and_c1_controls():
     assert "‮" not in _clean_text("evil‮gnp", 120)
     assert "\x85" not in _clean_text("a\x85b", 120)
     assert "\x1b" not in _clean_text("2026\x1b]0;x\x07", 40)
+
+
+def test_installed_emitters_delivered_math():
+    """v1.39 — installed drips (count x GPH) produce real delivered-vs-need."""
+    from custom_components.complete_irrigation.hydraulics import (
+        Loop,
+        Plant,
+        evaluate_plant,
+    )
+
+    loop = Loop("switch.citrus", runtime_minutes=60, runs_per_week=3)
+    # 3 gal/week-ish need; installed 2 x 2 GPH = 4 GPH -> 60min x 3/wk = 12 gal
+    p = Plant("Citrus", "moderate", 50.0, "switch.citrus", installed_count=2, installed_gph=2.0)
+    r = evaluate_plant(p, loop, 1.5, 0.9)
+    assert r.installed_delivered_gal_week is not None and r.installed_delivered_gal_week > 0
+    from custom_components.complete_irrigation.hydraulics import (
+        STATUS_OK,
+        STATUS_OVER,
+        STATUS_UNDER,
+    )
+
+    assert r.installed_status in (STATUS_OK, STATUS_UNDER, STATUS_OVER)
+    # Without installed data -> None triple.
+    p2 = Plant("Bare", "moderate", 50.0, "switch.citrus")
+    r2 = evaluate_plant(p2, loop, 1.5, 0.9)
+    assert r2.installed_delivered_gal_week is None and r2.installed_status is None
