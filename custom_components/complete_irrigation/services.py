@@ -911,6 +911,8 @@ def _record_active_session(
     meta: dict[str, Any] | None,
     source: str,
     extra_seconds: int = 0,
+    blocks: list[int] | None = None,
+    block_gap_seconds: int | None = None,
 ) -> None:
     """v1.30 restart fail-over — persist the LOGICAL run (its full duration +
     planned end) so an HA restart can resume it. Stored in coordinator config,
@@ -919,7 +921,14 @@ def _record_active_session(
 
     `total_minutes` is the WATER time (the resume cap, so a re-chunk re-adds gaps);
     `extra_seconds` is the inter-block gap wall-clock added to the DEADLINE only, so
-    a chunked run's planned end reflects its real (gap-inclusive) completion time."""
+    a chunked run's planned end reflects its real (gap-inclusive) completion time.
+
+    v1.39 — a CHUNKED run also records its exact block plan (`blocks` +
+    `block_gap_seconds`, the numbers _dispatch_run_blocks arms its timers with)
+    so gap_insertion.py can reconstruct the controller-idle inter-block gap
+    windows precisely and slot a short scheduled run inside one. A restart
+    resume re-enters run_zone and re-records the session with its fresh
+    re-chunked plan, so the stored plan always matches the armed timers."""
     if coord is None:
         return
     # deadline = gap-INCLUSIVE wall-clock end (for the Today card / countdown).
@@ -928,7 +937,7 @@ def _record_active_session(
     # water across repeated restarts (resume converges to the same water owed).
     deadline = started_at + timedelta(minutes=int(total_minutes), seconds=int(extra_seconds))
     water_deadline = started_at + timedelta(minutes=int(total_minutes))
-    coord.config.setdefault("active_run_sessions", {})[zone] = {
+    session: dict[str, Any] = {
         "total_minutes": int(total_minutes),
         "started_at": started_at.isoformat(),
         "deadline": deadline.isoformat(),
@@ -937,6 +946,10 @@ def _record_active_session(
         "schedule_name": (meta or {}).get("schedule_name", ""),
         "source": source,
     }
+    if blocks and len(blocks) > 1 and block_gap_seconds:
+        session["blocks"] = [int(b) for b in blocks]
+        session["block_gap_seconds"] = int(block_gap_seconds)
+    coord.config.setdefault("active_run_sessions", {})[zone] = session
     hass.async_create_task(coord.async_save_config())
 
 
@@ -1096,6 +1109,10 @@ async def _async_register_services(hass: HomeAssistant) -> None:
                 # The real completion is later than the water minutes by the gaps
                 # between the n blocks — fold them into the deadline.
                 extra_seconds=(len(blocks) - 1) * gap_s,
+                # v1.39 — the exact plan the block timers are armed with, so
+                # gap insertion can reconstruct the idle inter-block windows.
+                blocks=blocks,
+                block_gap_seconds=gap_s,
             )
             _LOGGER.info(
                 "%s (%s min) exceeds the %d-min controller cap — delivering as "
