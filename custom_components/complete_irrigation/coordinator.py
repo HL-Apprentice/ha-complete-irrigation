@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import math
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import datetime, time, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -51,6 +52,7 @@ from .coordinator_logic import (
     plan_session_resume,
 )
 from .et_calc import SANE_ETO_MAX, select_eto, weekly_eto_inches_from_forecast
+from .gap_insertion import REASON_GAP_INSERTED, insertion_key, plan_gap_insertions
 from .hydraulics import DEFAULT_ETO_IN_WEEK
 from .light_survey import (
     MAX_SURVEYS_KEPT as _MAX_SURVEYS_KEPT,
@@ -972,6 +974,43 @@ class ScheduleCoordinator:
                 for r in upcoming
                 if (r.schedule_id, r.zone_entity_id) not in fired or r.start_at > now
             ]
+        # v1.39 — gap-aware short-run insertion. A short scheduled run that fits
+        # ENTIRELY inside a live chunked run's inter-block gap (with a safety
+        # margin both sides — see gap_insertion.py) is pinned into that gap
+        # instead of deferring hours behind the whole gap-inclusive span. The
+        # pinned run is FIXED for the resolver (never moved; the long run's
+        # block cadence is timer-driven and untouched) and fires through the
+        # normal due path, so moisture/wind/hot-weather gates still evaluate at
+        # fire time. Runs that fit no gap resolve exactly as before. The fired
+        # ledger stops a completed insertion from being re-inserted into a
+        # later gap while the long run is still blocking its scheduled start.
+        gap_ledger = self._config.get("gap_insertions_fired") or {}
+        if gap_ledger:
+            # An occurrence that already fired via insertion is DONE — drop it
+            # from planning entirely. An ordinary fired run is protected by
+            # its past placement, but this occurrence's scheduled start stays
+            # blocked by the still-running long session, so the resolver
+            # would re-defer it to the session's end and water it TWICE.
+            upcoming = [r for r in upcoming if insertion_key(r) not in gap_ledger]
+        insertions = plan_gap_insertions(
+            upcoming,
+            self._config.get("active_run_sessions") or {},
+            now,
+            zone_buffer_seconds=int(zone_buffer) if zone_buffer is not None else None,
+            tick_seconds=TICK_SECONDS,
+            independent_zones=independent,
+            fired_keys=frozenset(gap_ledger),
+        )
+        if insertions:
+            upcoming = [
+                (
+                    replace(r, start_at=pin, reason=REASON_GAP_INSERTED)
+                    if (pin := insertions.get(insertion_key(r))) is not None
+                    else r
+                )
+                for r in upcoming
+            ]
+            _LOGGER.debug("Gap insertion plan this tick: %s", insertions)
         # v1.20 — NEVER-DROP. A run that can't be placed within the cascade cap is
         # deferred *late* and still fires, instead of being skipped. Compression
         # (shrinking adjustable runs) stays OFF (compress_floor_pct=100): we only
@@ -1024,7 +1063,43 @@ class ScheduleCoordinator:
                 # v1.17 — actionable "Run now" notification
                 await self._notify_missed_run(rec, run)
                 continue
+            if run.reason == REASON_GAP_INSERTED:
+                # Ledger BEFORE firing: whatever the gates decide (fire or
+                # skip), this occurrence is done — same one-shot semantics as
+                # an ordinary fired run, which is protected by its past
+                # placement instead. Without this the occurrence would be
+                # re-inserted into the NEXT gap (its scheduled start is still
+                # blocked by the ongoing long run) and watered twice.
+                self._record_gap_insertion_fired(run, now)
             await self._fire_run(run)
+
+    def _record_gap_insertion_fired(self, run, now: datetime) -> None:
+        """v1.39 — remember that this scheduled occurrence fired via gap
+        insertion (keyed by gap_insertion.insertion_key). An ordinary fired
+        run is protected from re-firing by its past placement — once its
+        blockers clear it snaps behind the due window and strands (by
+        design). An inserted run's occurrence would instead be RE-inserted
+        into the long run's next gap on a later tick (its scheduled start is
+        still blocked) and watered twice; the ledger makes it permanently
+        ineligible. Entries prune after 24h — far beyond the longest
+        possible blocking session (MAX_SCHEDULE_DURATION_MIN = 8h) — and the
+        ledger persists in config so a restart can't forget a firing."""
+        ledger = self._config.setdefault("gap_insertions_fired", {})
+        ledger[insertion_key(run)] = now.isoformat()
+        cutoff = now - timedelta(hours=24)
+        for key, fired_at in list(ledger.items()):
+            try:
+                if datetime.fromisoformat(fired_at) < cutoff:
+                    del ledger[key]
+            except (TypeError, ValueError):
+                del ledger[key]  # malformed — drop rather than keep forever
+        _LOGGER.info(
+            "Firing %s (%s) inside a chunked run's inter-block gap at %s",
+            run.zone_entity_id,
+            run.schedule_name,
+            run.start_at,
+        )
+        self._hass.async_create_task(self.async_save_config())
 
     async def _notify_missed_run(self, record, run) -> None:
         """v1.17 — actionable notification for a skipped/dropped run.
@@ -1145,6 +1220,18 @@ class ScheduleCoordinator:
                 boost_reasons.append(boost_note)
         elif ignore_hot:
             triggers["hot_weather"] = {"ignored_by_schedule": True}
+
+        # v1.39 — a gap-inserted run was sized to fit its inter-block gap with
+        # margin; a hot-weather boost could stretch it past the tail margin
+        # INTO the long run's next block (two valves open — the inviolable
+        # one-zone-at-a-time break). Clamp back to the planned duration:
+        # extension is dangerous, shortening (moisture gate) is always fine.
+        if run.reason == REASON_GAP_INSERTED:
+            gap_note: dict[str, Any] = {"fired_in_gap": True}
+            if adjusted_minutes > run.duration_minutes:
+                gap_note["boost_clamped_to_fit_gap"] = True
+                adjusted_minutes = run.duration_minutes
+            triggers["gap_insertion"] = gap_note
 
         # Resolve a friendly zone name (state attribute → entity_id fallback).
         zone_state = self._hass.states.get(zone_id)

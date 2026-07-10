@@ -29,6 +29,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 
 from .const import DEFAULT_BUFFER_MINUTES, DEFAULT_CASCADE_CAP_HOURS, DEFAULT_COMPRESS_FLOOR_PCT
+from .gap_insertion import REASON_GAP_INSERTED
 from .run_planner import PlannedRun
 
 _LOGGER = logging.getLogger(__name__)
@@ -51,6 +52,14 @@ REASON_DEFERRED_LATE = "deferred-late"  # past the cap — alert-worthy, still r
 # it as a fixed blocker — never moved, never compressed — so in-progress
 # long runs are respected without re-planning (and losing) deferred runs.
 REASON_COMMITTED = "committed"
+
+# v1.39 — reasons the resolver treats as FIXED intervals: kept exactly where
+# they are (never deferred/compressed) and routed around by adjustable runs.
+# REASON_GAP_INSERTED (gap_insertion.py) is a scheduled run pinned inside a
+# chunked run's inter-block gap; unlike REASON_COMMITTED it has NOT fired
+# yet, so the coordinator's fire loop keeps it fireable (its committed
+# filter checks for REASON_COMMITTED specifically).
+_FIXED_REASONS = (REASON_COMMITTED, REASON_GAP_INSERTED)
 
 # How many minutes PAST its end a finished committed run stays a one-zone blocker:
 # its inter-zone buffer PLUS this catch margin (>= one coordinator tick, TICK_SECONDS
@@ -179,7 +188,10 @@ def resolve_conflicts(
     A run whose `reason` is `REASON_COMMITTED` has already fired; it keeps
     its (actual) start and duration and acts only as a blocker — never
     moved, never compressed. The coordinator marks runs that way so an
-    in-progress multi-hour run is respected.
+    in-progress multi-hour run is respected. A `REASON_GAP_INSERTED` run
+    (v1.39, gap_insertion.py) is fixed the same way — pinned inside a
+    chunked run's inter-block gap — but has NOT fired yet: the coordinator
+    still fires it (its post-resolve filter drops only REASON_COMMITTED).
 
     A run whose zone is in `independent_zones` is on its OWN water supply (e.g. a
     birdbath fill that does not share the drip manifold's pressure). It does not share
@@ -207,8 +219,11 @@ def resolve_conflicts(
     # matter where they land in the sort order — a committed run that fired
     # late can sit later than an unfired run's scheduled time, so sorting
     # alone would mis-serialize and strand the unfired run (it would be
-    # pinned in the past and never fire). Intervals fix that.
-    committed_runs = [r for r in runs if r.reason == REASON_COMMITTED]
+    # pinned in the past and never fire). Intervals fix that. v1.39 —
+    # gap-inserted runs are fixed the same way: pinned inside a chunked
+    # run's inter-block gap, never moved/compressed, routed around (their
+    # interval sits inside the committed chunked span anyway).
+    committed_runs = [r for r in runs if r.reason in _FIXED_REASONS]
     committed_intervals = sorted(
         (r.start_at, r.start_at + timedelta(minutes=int(r.duration_minutes)) + buffer)
         for r in committed_runs
@@ -216,7 +231,7 @@ def resolve_conflicts(
 
     # Adjustable runs, ordered by scheduled start.
     state: list[dict] = []
-    for r in sorted((r for r in runs if r.reason != REASON_COMMITTED), key=lambda r: r.start_at):
+    for r in sorted((r for r in runs if r.reason not in _FIXED_REASONS), key=lambda r: r.start_at):
         full = int(r.duration_minutes)
         state.append(
             {

@@ -113,3 +113,28 @@ def test_new_sequence_supersedes_old(monkeypatch):
     # The first sequence's timer was cancelled when the second started.
     assert all(c.called for c in first_cancels)
     assert entry_data["block_seq"][ZONE] == 2  # generation advanced
+
+
+def test_stopping_another_zone_leaves_pending_blocks_intact(monkeypatch):
+    """v1.39 gap insertion — a short run inserted into the long run's
+    inter-block gap may be Stopped mid-run. That stop cancels timers for the
+    SHORT zone only; the long run's queued blocks must stay armed and fire."""
+    captured, cancels = _patch_timers(monkeypatch)
+    hass, calls = _make_hass()
+    entry_data: dict = {}
+    short_zone = "switch.garden"
+
+    services._dispatch_run_blocks(hass, ZONE, entry_data, [58, 58, 10], 1200, None)
+    long_cancels = list(cancels)
+
+    # The user stops the inserted short run (what handle_stop_zone calls).
+    services._cancel_block_timers(entry_data, short_zone)
+
+    assert not any(c.called for c in long_cancels)  # long run's timers untouched
+    assert len(entry_data["block_timers"][ZONE]) == 2  # blocks 2+3 still armed
+    assert entry_data["block_seq"][ZONE] == 1  # generation NOT advanced
+
+    # And the queued blocks still fire when their timers elapse.
+    for _delay, cb in captured:
+        cb()
+    assert [c["data"]["minutes"] for c in calls] == [58, 58, 10]
