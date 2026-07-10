@@ -4,6 +4,28 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.38.0 — 2026-07-09 — minor
+
+**Photo-first plants: take a picture, get a plant.** (Also ships the unreleased
+v1.37.1 ✓-Saved fix below.) "📷 Add from photo" is now the primary Yard action:
+pick the zone it's watered by (plus optionally its drip emitters — count × GPH),
+snap or choose a photo (phones open the camera), and the vision model fills the
+rest — name, species, water-use category, a canopy estimate from the photo,
+light range — and seeds the starter care plan, all auto-applied on the new
+plant and all editable afterwards. EXIF GPS still auto-places the map marker.
+
+- **Installed drip emitters on every plant** (count × GPH, both-or-neither,
+  clearable) — the ground truth for delivered-water math; shown on the plant
+  ("Drips: N × X GPH") and editable in the form.
+- Species suggestions now include a photo-based **canopy estimate**;
+  `apply_species_suggestion` gains `apply_canopy` (off by default — applying a
+  suggestion never clobbers a user-entered canopy; the photo-first flow opts in).
+- 4-model review (Grok/Gemini/Claude) — fixed pre-release: a duplicated
+  schema/registration that silently dropped the emitter fields (critical),
+  one-sided emitter input crashing instead of validating (high), photo-store
+  failure stranding a photo-less guess-record with a false success notice
+  (medium), no way to clear emitters, and a name-length mismatch.
+
 ## v1.37.1 — 2026-07-09 — patch
 
 - **Vision-endpoint save now confirms visibly** — the Save button flips to
