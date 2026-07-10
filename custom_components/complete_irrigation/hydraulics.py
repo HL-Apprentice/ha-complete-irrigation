@@ -77,6 +77,11 @@ class Plant:
     wucols_category: str
     canopy_area_sqft: float
     loop_id: str
+    # v1.39 — INSTALLED drip emitters (count x GPH) when the user recorded them;
+    # None = unknown. Lets the report compare what the hardware actually delivers
+    # against the need, alongside the recommended set.
+    installed_count: int | None = None
+    installed_gph: float | None = None
 
     def __post_init__(self) -> None:
         if self.wucols_category not in WUCOLS_FACTORS:
@@ -110,6 +115,10 @@ class PlantWaterResult:
     delivered_gal_week: float
     status: str  # STATUS_OK / STATUS_UNDER / STATUS_OVER
     pct_off: float
+    # v1.39 — what the INSTALLED emitters actually deliver (None when unknown).
+    installed_delivered_gal_week: float | None = None
+    installed_status: str | None = None
+    installed_pct_off: float | None = None
 
 
 @dataclass(frozen=True)
@@ -204,6 +213,11 @@ def evaluate_plant(plant: Plant, loop: Loop, eto: float, efficiency: float) -> P
     combo, total_gph = recommend_emitters(req_gph)
     delivered = delivered_gal_week(total_gph, loop)
     status, pct = classify(delivered, need)
+    inst_delivered = inst_status = inst_pct = None
+    if plant.installed_count is not None and plant.installed_gph is not None:
+        inst_total = plant.installed_count * plant.installed_gph
+        inst_delivered = delivered_gal_week(inst_total, loop)
+        inst_status, inst_pct = classify(inst_delivered, need)
     return PlantWaterResult(
         plant=plant,
         need_gal_week=need,
@@ -213,6 +227,9 @@ def evaluate_plant(plant: Plant, loop: Loop, eto: float, efficiency: float) -> P
         delivered_gal_week=delivered,
         status=status,
         pct_off=pct,
+        installed_delivered_gal_week=inst_delivered,
+        installed_status=inst_status,
+        installed_pct_off=inst_pct,
     )
 
 

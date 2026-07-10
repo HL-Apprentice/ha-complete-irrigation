@@ -141,6 +141,16 @@ def serialize_plant_result(r: PlantWaterResult) -> dict:
         "delivered_gal_week": round(r.delivered_gal_week, 1),
         "status": r.status,
         "pct_off": round(r.pct_off, 3),
+        # v1.39 — actual delivery from the plant's INSTALLED drips (None = unknown).
+        "installed_delivered_gal_week": (
+            round(r.installed_delivered_gal_week, 1)
+            if r.installed_delivered_gal_week is not None
+            else None
+        ),
+        "installed_status": r.installed_status,
+        "installed_pct_off": (
+            round(r.installed_pct_off, 3) if r.installed_pct_off is not None else None
+        ),
     }
 
 
