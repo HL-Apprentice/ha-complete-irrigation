@@ -181,3 +181,93 @@ def test_committed_run_is_never_moved_or_compressed():
     assert by["B"].start_at >= T + timedelta(minutes=300)  # waits for A
     assert by["B"].reason == REASON_DEFERRED_LATE
     assert len(out) == 2
+
+
+# ── stranded-run rescue (v1.39) ────────────────────────────────────
+#
+# The coordinator fires via the half-open (last_tick, now] window, so an
+# UNFIRED adjustable run whose placement lands at/before last_tick can never
+# fire — stranded. With rescue_stranded_* set, the resolver re-places such a
+# run no earlier than rescue_stranded_at (= now), routed past committed
+# intervals. The caller guarantees fired occurrences never reach the resolver
+# (the coordinator's fired-occurrence ledger), so rescue can't double-fire.
+
+
+def test_no_rescue_by_default_past_placement_is_preserved():
+    # Preview callers (calendar/ical/ws_api) pass no rescue kwargs: a run
+    # scheduled in the past with no blockers stays at its past time.
+    out = resolve_conflicts([_run(0, 20, "a")], POLICY_DEFER_NEW)
+    assert out[0].start_at == T  # untouched, even though "in the past"
+
+
+def test_stranded_run_is_rescued_to_now_and_routed_past_committed():
+    # `a` was scheduled at T and never fired; now = T+120 and a committed run
+    # occupies [T+115, T+145). Rescue must pull `a` to now and then past the
+    # committed interval's buffered end — never fire it into a live run.
+    now = T + timedelta(minutes=120)
+    last = now - timedelta(minutes=1)
+    committed = replace(_run(115, 30, "L"), reason=REASON_COMMITTED)
+    out = resolve_conflicts(
+        [committed, _run(0, 20, "a")],
+        POLICY_DEFER_NEW,
+        buffer_minutes=2,
+        rescue_stranded_before=last,
+        rescue_stranded_at=now,
+    )
+    by = _by_id(out)
+    assert by["a"].start_at == T + timedelta(minutes=145 + 2)  # committed end + buffer
+    assert by["a"].reason == REASON_DEFERRED_LATE  # hours late -> alert-worthy
+    assert by["a"].scheduled_start_at == T  # occurrence identity preserved
+
+
+def test_stranded_run_with_clear_controller_fires_at_now():
+    now = T + timedelta(minutes=90)
+    out = resolve_conflicts(
+        [_run(0, 20, "a")],
+        POLICY_DEFER_NEW,
+        rescue_stranded_before=now - timedelta(minutes=1),
+        rescue_stranded_at=now,
+    )
+    assert out[0].start_at == now  # lands exactly in (last, now] -> fires this tick
+
+
+def test_rescue_ineligible_run_stays_stranded():
+    # The coordinator gates rescue to occurrences it was actively deferring
+    # (never backfire lockout- or downtime-missed runs). Ineligible -> as-is.
+    now = T + timedelta(minutes=90)
+    out = resolve_conflicts(
+        [_run(0, 20, "a")],
+        POLICY_DEFER_NEW,
+        rescue_stranded_before=now - timedelta(minutes=1),
+        rescue_stranded_at=now,
+        rescue_eligible=lambda r: False,
+    )
+    assert out[0].start_at == T  # left stranded, exactly as before the fix
+
+
+def test_two_stranded_runs_rescue_serialized_one_zone_at_a_time():
+    now = T + timedelta(minutes=90)
+    out = resolve_conflicts(
+        [_run(0, 20, "a"), _run(5, 10, "b")],
+        POLICY_DEFER_NEW,
+        buffer_minutes=2,
+        rescue_stranded_before=now - timedelta(minutes=1),
+        rescue_stranded_at=now,
+    )
+    by = _by_id(out)
+    assert by["a"].start_at == now
+    assert by["b"].start_at == now + timedelta(minutes=20 + 2)  # after a + buffer
+
+
+def test_rescue_leaves_future_runs_untouched():
+    # A future-scheduled run must keep its exact placement and reason even
+    # when rescue is armed (rescue only touches placements <= last).
+    now = T - timedelta(minutes=30)
+    out = resolve_conflicts(
+        [_run(0, 20, "a")],
+        POLICY_DEFER_NEW,
+        rescue_stranded_before=now - timedelta(minutes=1),
+        rescue_stranded_at=now,
+    )
+    assert out[0].start_at == T
+    assert out[0].reason == "scheduled"
