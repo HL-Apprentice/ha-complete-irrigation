@@ -177,8 +177,9 @@ def test_simple_daily_runs_all_fire_once():
 # The simulator above models committed blockers with a bare overlay; the one
 # below mirrors the coordinator's ACTUAL _tick pipeline — active_run_sessions
 # records (with block plans, as services._record_active_session writes them),
-# committed_runs_from_sessions, the fired-occurrence dedupe, the gap-insertion
-# ledger + plan, resolve, due — plus a physical model of the controller: every
+# committed_runs_from_sessions, the fired-occurrence ledger (every scheduled
+# firing, dropped from later planning), the gap-insertion plan, resolve with
+# stranded-run rescue, due — plus a physical model of the controller: every
 # valve-open interval (per BLOCK for chunked runs, gaps idle) so one-zone-at-
 # a-time can be asserted against real open-valve time, not whole-run spans.
 
@@ -196,7 +197,8 @@ def simulate_sessions(
              stop-mid-insertion scenario.
     """
     sessions: dict[str, dict] = {}
-    ledger: dict[str, str] = {}  # coordinator's gap_insertions_fired
+    ledger: dict[str, str] = {}  # coordinator's fired_occurrences (every scheduled firing)
+    pending_seen: dict[str, datetime] = {}  # coordinator's _pending_seen (rescue gate)
     fires: list[dict] = []
     busy: list[tuple[str, datetime, datetime]] = []
     last = None
@@ -245,12 +247,24 @@ def simulate_sessions(
                     for r in upcoming
                 ]
 
-        resolved = resolve_conflicts(committed + upcoming, POLICY_DEFER_NEW, compress_floor_pct=100)
+        resolved = resolve_conflicts(
+            committed + upcoming,
+            POLICY_DEFER_NEW,
+            compress_floor_pct=100,
+            rescue_stranded_before=last,
+            rescue_stranded_at=now,
+            rescue_eligible=lambda r: insertion_key(r) in pending_seen,
+        )
+        for run in resolved:
+            if run.reason != REASON_COMMITTED and run.start_at > now:
+                pending_seen[insertion_key(run)] = run.scheduled_start_at
         for run in due_runs_since(resolved, last, now):
             if run.reason == REASON_COMMITTED:
                 continue
-            if run.reason == REASON_GAP_INSERTED:
-                ledger[insertion_key(run)] = now.isoformat()
+            # Fired-occurrence ledger: every scheduled firing, before the fire
+            # (coordinator._record_run_fired) — drops it from later planning.
+            ledger[insertion_key(run)] = now.isoformat()
+            pending_seen.pop(insertion_key(run), None)
             _fire_sim(run, now, sessions, busy, fires, cap_min, gap_seconds)
         last = now
         now += timedelta(minutes=1)
@@ -442,33 +456,95 @@ def test_two_shorts_take_two_different_gaps():
     _assert_never_two_valves_open(busy)
 
 
+def test_second_short_chained_behind_a_big_gap_chunked_run_still_fires():
+    """Regression (pre-existing at v1.38.1): TWO shorts chain-deferred behind
+    one chunked long run, with LARGE inter-block gaps (600s x 3 = 30 min of
+    gap wall-time on a 4-block 200-min run). Short A defers to the session's
+    end and fires there; short B is pinned after A by the sweep cursor chain.
+    Once the long session is pruned, its occurrence used to re-enter planning
+    as a past 'ghost' adjustable run carrying its WATER duration (200 min) —
+    30 min shorter than the gap-inclusive wall span — so B's placement
+    snapped back before 'now', fell out of the (last, now] due window, and B
+    was silently LOST. The fired-occurrence ledger + stranded-run rescue must
+    keep B alive: everything fires exactly once, one valve at a time."""
+    scheds = [
+        _sched("citrus", 6, 0, 200),  # blocks [58,58,58,26], 3x600s gaps -> 230 min wall
+        _sched("z0", 6, 0, 20),  # short A: defers to session end (~09:52)
+        _sched("z1", 7, 20, 20),  # short B: chained after A -> was LOST before the fix
+    ]
+    start, end = UDAY + timedelta(hours=5), UDAY + timedelta(hours=16)
+    fires, busy = simulate_sessions(scheds, start, end, gap_seconds=600)
+
+    fired = [f["key"] for f in fires]
+    assert set(fired) == _expected_firings(scheds, start, end), (
+        f"lost/extra runs: {sorted(_expected_firings(scheds, start, end) ^ set(fired))}"
+    )
+    assert len(fired) == len(set(fired)), "a run fired more than once"
+
+    # B fires after A completes (never before its own scheduled time).
+    z0 = next(f for f in fires if f["zone"] == "switch.z0")
+    z1 = next(f for f in fires if f["zone"] == "switch.z1")
+    assert z1["fire_time"] >= z0["fire_time"] + timedelta(minutes=20)
+    assert z1["fire_time"] >= z1["scheduled"]
+    _assert_never_two_valves_open(busy)
+
+
+def test_shorts_chained_behind_a_giant_survive_the_giant_being_stopped():
+    """The user stops the chunked giant mid-run: its session clears instantly,
+    so the shorts deferred behind it snap back to past bases. The stranded-run
+    rescue must pull them forward (they fire promptly after the stop) instead
+    of losing them — exactly once each, never two valves open."""
+    scheds = [
+        _sched("citrus", 6, 0, 200),
+        _sched("z0", 6, 0, 20),
+        _sched("z1", 7, 20, 20),
+    ]
+    start, end = UDAY + timedelta(hours=5), UDAY + timedelta(hours=16)
+    stop_at = UDAY + timedelta(hours=7)  # mid block 2 of [58,58,58,26]
+    fires, busy = simulate_sessions(
+        scheds, start, end, gap_seconds=600, stop=("switch.citrus", stop_at)
+    )
+
+    fired = [f["key"] for f in fires]
+    assert set(fired) == _expected_firings(scheds, start, end)
+    assert len(fired) == len(set(fired))
+
+    # z0 was deferred behind the giant's whole span; after the stop it must
+    # fire promptly (rescued), not at the giant's original ~09:52 slot.
+    z0 = next(f for f in fires if f["zone"] == "switch.z0")
+    assert stop_at <= z0["fire_time"] <= stop_at + timedelta(minutes=5)
+    _assert_never_two_valves_open(busy)
+
+
 def test_randomized_chunked_days_fire_exactly_once_and_never_overlap():
-    """Fuzz: one chunked giant + one random short, random gap sizes (including
+    """Fuzz: one chunked giant + 1-3 random shorts, random gap sizes (including
     the 30s default where nothing ever fits and everything defers as today).
     Invariants: every firing fires exactly once; no two valve-open intervals
     ever overlap.
 
-    Deliberately ONE short zone: with 2+ shorts chain-deferred behind a
-    chunked giant, HEAD (v1.38.1) already LOSES the second short whenever the
-    total inter-block gap time exceeds the blocker catch margin — the pruned
-    session's past 'ghost' occurrence carries its WATER duration, shorter
-    than the gap-inclusive wall span, so the chained run's placement snaps
-    into the past and strands. Pre-existing bug, reproduced without any gap
-    insertion, tracked separately; widen this fuzz when it is fixed."""
+    Multiple shorts are the point: with 2+ shorts chain-deferred behind a
+    chunked giant, v1.38.1 silently LOST the second short whenever the total
+    inter-block gap time exceeded the blocker catch margin — the pruned
+    session's past 'ghost' occurrence carried its WATER duration, shorter
+    than the gap-inclusive wall span, so the chained run's placement snapped
+    into the past and stranded. Fixed by the fired-occurrence ledger +
+    stranded-run rescue (see test_second_short_chained_behind_a_big_gap_
+    chunked_run_still_fires for the deterministic shape)."""
     import random
 
     for seed in range(40):
         rng = random.Random(seed)
         gap_s = rng.choice([30, 300, 600, 1080, 1200])
-        scheds = [
-            _sched("citrus", 6, 0, rng.choice([120, 200, 280, 300])),
-            _sched(
-                "z0",
-                rng.randint(6, 13),
-                rng.choice([0, 10, 20, 30, 40, 50]),
-                rng.choice([5, 8, 10, 15, 20]),
-            ),
-        ]
+        scheds = [_sched("citrus", 6, 0, rng.choice([120, 200, 280, 300]))]
+        for i in range(rng.randint(1, 3)):
+            scheds.append(
+                _sched(
+                    f"z{i}",
+                    rng.randint(6, 13),
+                    rng.choice([0, 10, 20, 30, 40, 50]),
+                    rng.choice([5, 8, 10, 15, 20]),
+                )
+            )
         start, end = UDAY + timedelta(hours=5), UDAY + timedelta(hours=22)
         fires, busy = simulate_sessions(scheds, start, end, gap_seconds=gap_s)
         shapes = [(s.id, str(s.start_time), s.duration_minutes) for s in scheds]
