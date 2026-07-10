@@ -570,3 +570,64 @@ def test_installed_emitters_delivered_math():
     p2 = Plant("Bare", "moderate", 50.0, "switch.citrus")
     r2 = evaluate_plant(p2, loop, 1.5, 0.9)
     assert r2.installed_delivered_gal_week is None and r2.installed_status is None
+
+
+def test_watering_advisor_rail_bounds_and_filters():
+    """v1.39 — advisor items are typed, capped, and hallucinated ids dropped."""
+    from custom_components.complete_irrigation.watering_advisor import validate_advice
+
+    raw = {
+        "summary": "shift two, resize one",
+        "items": [
+            {
+                "type": "shift_time",
+                "schedule_id": "sch1",
+                "proposed_start": "04:30",
+                "reason": "cooler",
+            },
+            {"type": "shift_time", "schedule_id": "ghost", "proposed_start": "05:00"},  # unknown id
+            {"type": "shift_time", "schedule_id": "sch1", "proposed_start": "25:99"},  # bad time
+            {
+                "type": "emitter_change",
+                "plant_id": "p1",
+                "proposed_count": 3,
+                "proposed_gph": 2.0,
+                "reason": "under",
+            },
+            {
+                "type": "emitter_change",
+                "plant_id": "p1",
+                "proposed_count": 999,
+                "proposed_gph": 2.0,
+            },  # bounds
+            {"type": "delete_everything"},  # unknown type
+            "junk",
+        ],
+    }
+    out = validate_advice(
+        raw,
+        model="qwen",
+        now_iso="t",
+        known_schedule_ids={"sch1"},
+        known_plant_ids={"p1"},
+    )
+    assert out is not None and len(out["items"]) == 2
+    kinds = {i["type"] for i in out["items"]}
+    assert kinds == {"shift_time", "emitter_change"}
+    # All-junk -> None (no empty advice stored).
+    assert (
+        validate_advice(
+            {"items": ["x"]},
+            model="m",
+            now_iso="t",
+            known_schedule_ids=set(),
+            known_plant_ids=set(),
+        )
+        is None
+    )
+    assert (
+        validate_advice(
+            None, model="m", now_iso="t", known_schedule_ids=set(), known_plant_ids=set()
+        )
+        is None
+    )
