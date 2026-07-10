@@ -993,7 +993,13 @@ def _dispatch_run_blocks(
     offset = 0
     for i, block_min in enumerate(blocks):
 
+        @callback
         def _fire(_now=None, bm=block_min, idx=i + 1, seq=gen):
+            # NOTE: @callback is LOAD-BEARING. A plain closure is classified
+            # HassJobType.Executor by async_call_later, so blocks 2..n ran in a
+            # worker THREAD where hass.async_create_task raises RuntimeError
+            # (HA thread-safety guard) — the run_zone sub-call never happened
+            # and blocks 2+ never reached run history (v1.38.1 fix).
             # Skip if this sequence was cancelled / superseded since the timer was
             # scheduled (Stop, delete_schedule, reload, or a newer run here).
             if entry_data.get("block_seq", {}).get(entity_id) != seq:

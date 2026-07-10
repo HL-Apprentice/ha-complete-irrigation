@@ -411,6 +411,11 @@ class ScheduleCoordinator:
         # PRD #78 — one-shot 7-day post-install reminder. Tracked in
         # coordinator config so it only fires once per integration setup,
         # not on every HA restart.
+        # NOTE (v1.38.1): the delayed actions below MUST be @callback — a plain
+        # lambda/def is dispatched to an executor THREAD by async_call_later,
+        # where hass.async_create_task raises RuntimeError (HA thread-safety
+        # guard) and the action silently never runs.
+        from homeassistant.core import callback
         from homeassistant.helpers.event import async_call_later
 
         first_run_at = self._config.get("first_run_at")
@@ -430,10 +435,13 @@ class ScheduleCoordinator:
                 # We're past the 7-day mark already — fire on next tick.
                 self._hass.async_create_task(self._fire_post_install_reminder())
             else:
+
+                @callback
+                def _fire_reminder(_now):
+                    self._hass.async_create_task(self._fire_post_install_reminder())
+
                 self._cancel_post_install = async_call_later(
-                    self._hass,
-                    delay_seconds,
-                    lambda _now: self._hass.async_create_task(self._fire_post_install_reminder()),
+                    self._hass, delay_seconds, _fire_reminder
                 )
 
         # v1.30 — restart fail-over. If HA restarted mid-run, the in-memory
@@ -441,11 +449,12 @@ class ScheduleCoordinator:
         # persisted. Resume (or close out) it after a short delay so switch
         # integrations are back online before we re-assert a valve.
         if self._config.get("active_run_sessions"):
-            self._cancel_resume = async_call_later(
-                self._hass,
-                _RESUME_DELAY_SECONDS,
-                lambda _now: self._hass.async_create_task(self._resume_interrupted_runs()),
-            )
+
+            @callback
+            def _fire_resume(_now):
+                self._hass.async_create_task(self._resume_interrupted_runs())
+
+            self._cancel_resume = async_call_later(self._hass, _RESUME_DELAY_SECONDS, _fire_resume)
 
         _LOGGER.info(
             "Schedule coordinator started for entry %s — %d schedule(s) loaded",
@@ -1852,6 +1861,7 @@ class ScheduleCoordinator:
         `zones` (set) scopes a RETRY to only the zones that were deferred last time
         (switch not yet available), so a retry never re-fires zones already resumed.
         """
+        from homeassistant.core import callback
         from homeassistant.helpers.event import async_call_later
         from homeassistant.util import dt as dt_util
 
@@ -1963,13 +1973,14 @@ class ScheduleCoordinator:
                 _RESUME_MAX_ATTEMPTS,
                 _RESUME_RETRY_SECONDS,
             )
-            self._cancel_resume = async_call_later(
-                self._hass,
-                _RESUME_RETRY_SECONDS,
-                lambda _now: self._hass.async_create_task(
-                    self._resume_interrupted_runs(zones=deferred_set)
-                ),
-            )
+
+            # @callback so the retry runs on the event loop, not an executor
+            # thread (where async_create_task raises and the retry is lost).
+            @callback
+            def _fire_retry(_now):
+                self._hass.async_create_task(self._resume_interrupted_runs(zones=deferred_set))
+
+            self._cancel_resume = async_call_later(self._hass, _RESUME_RETRY_SECONDS, _fire_retry)
         elif deferred:
             # Out of retries — DON'T leave a zombie session (it would show a false
             # "Running" on the card for hours). Drop it, force the valve off as a
