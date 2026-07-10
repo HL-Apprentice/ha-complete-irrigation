@@ -113,6 +113,8 @@ SERVICE_COMPLETE_CARE_TASK = "complete_care_task"
 SERVICE_SEED_CARE_PLAN = "seed_care_plan"  # v1.36 — one-tap plan from a preset
 SERVICE_IDENTIFY_PLANT_SPECIES = "identify_plant_species"  # v1.37 — photo -> suggestion
 SERVICE_ADD_PLANT_FROM_PHOTO = "add_plant_from_photo"  # v1.38 — photo-first creation
+SERVICE_PROPOSE_WATERING_ADVICE = "propose_watering_advice"  # v1.39 — LLM advisor
+SERVICE_DISMISS_WATERING_ADVICE = "dismiss_watering_advice"
 SERVICE_APPLY_SPECIES_SUGGESTION = "apply_species_suggestion"
 SERVICE_DISMISS_SPECIES_SUGGESTION = "dismiss_species_suggestion"
 
@@ -616,6 +618,15 @@ _APPLY_SUGGESTION_SCHEMA = vol.Schema(
     }
 )
 _DISMISS_SUGGESTION_SCHEMA = vol.Schema({vol.Required("plant_id"): cv.string})
+
+# v1.39 — the external advisor posts raw advice; the watering_advisor rail bounds it.
+_PROPOSE_ADVICE_SCHEMA = vol.Schema(
+    {
+        vol.Required("advice"): dict,
+        vol.Optional("model", default=""): vol.All(cv.string, vol.Length(max=80)),
+    }
+)
+_DISMISS_ADVICE_SCHEMA = vol.Schema({})
 
 _SPECIES_PROMPT = (
     "You are a botanist identifying the plant in the photo. Reply with ONLY minified "
@@ -2111,6 +2122,51 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             raise vol.Invalid(f"no such plant {data['plant_id']}")
         await _run_identify(coord, plant)
 
+    async def handle_propose_watering_advice(call: ServiceCall) -> None:
+        """v1.39 — store the external LLM advisor's proposals (rail-bounded).
+        ADVISORY ONLY: each item is applied later by the USER via the existing
+        validated services; nothing here changes watering."""
+        if not await _require_admin(hass, call):
+            return
+        data = _PROPOSE_ADVICE_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None:
+            return
+        from homeassistant.util import dt as dt_util
+
+        from .watering_advisor import validate_advice
+
+        advice = validate_advice(
+            data["advice"],
+            model=data.get("model", ""),
+            now_iso=dt_util.utcnow().isoformat(),
+            known_schedule_ids={sch.id for sch in coord.schedule_store.all()},
+            known_plant_ids={p.id for p in coord.plants.all()},
+        )
+        if advice is None:
+            raise vol.Invalid("no usable advice items after validation")
+        coord.config["watering_advice"] = advice
+        await coord.async_save_config()
+        _LOGGER.info("Watering advice stored: %d item(s)", len(advice["items"]))
+        if coord.notifier is not None:
+            await coord.notifier.notify(
+                f"The watering advisor has {len(advice['items'])} suggestion(s) — review "
+                "them in the panel (Today tab). Nothing changes until you apply an item.",
+                title="Watering advice ready",
+                event_type="watering_advice",
+            )
+
+    async def handle_dismiss_watering_advice(call: ServiceCall) -> None:
+        if not await _require_admin(hass, call):
+            return
+        _DISMISS_ADVICE_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None:
+            return
+        if coord.config.pop("watering_advice", None) is not None:
+            await coord.async_save_config()
+            _LOGGER.info("Watering advice dismissed")
+
     async def handle_add_plant_from_photo(call: ServiceCall) -> None:
         """v1.38 — snap a photo, get a plant: provisional record on the chosen zone
         (+ the user's emitter facts), photo attached (EXIF-GPS place), then identify
@@ -2498,6 +2554,18 @@ async def _async_register_services(hass: HomeAssistant) -> None:
     )
     hass.services.async_register(
         DOMAIN,
+        SERVICE_PROPOSE_WATERING_ADVICE,
+        handle_propose_watering_advice,
+        schema=_PROPOSE_ADVICE_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_DISMISS_WATERING_ADVICE,
+        handle_dismiss_watering_advice,
+        schema=_DISMISS_ADVICE_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
         SERVICE_APPLY_SPECIES_SUGGESTION,
         handle_apply_species_suggestion,
         schema=_APPLY_SUGGESTION_SCHEMA,
@@ -2780,6 +2848,8 @@ def _async_unregister_services(hass: HomeAssistant) -> None:
         SERVICE_SEED_CARE_PLAN,
         SERVICE_IDENTIFY_PLANT_SPECIES,
         SERVICE_ADD_PLANT_FROM_PHOTO,
+        SERVICE_PROPOSE_WATERING_ADVICE,
+        SERVICE_DISMISS_WATERING_ADVICE,
         SERVICE_APPLY_SPECIES_SUGGESTION,
         SERVICE_DISMISS_SPECIES_SUGGESTION,
     ):
