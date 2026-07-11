@@ -167,6 +167,34 @@ add_schedule:
       example: "[{zone_entity_id: switch.front_lawn, duration_minutes: 15}, {zone_entity_id: switch.back_lawn, duration_minutes: 10}]"
       selector:
         object:
+    sun_event:
+      name: Sun event
+      description: Anchor the start to sunrise or sunset (empty = fixed time).
+      required: false
+      selector:
+        select:
+          options:
+            - sunrise
+            - sunset
+    sun_offset_minutes:
+      name: Sun offset (minutes)
+      description: Offset from the sun event (negative = before).
+      required: false
+      selector:
+        number:
+          min: -240
+          max: 240
+          step: 1
+          mode: box
+    anchor:
+      name: Anchor
+      description: start = begin at the resolved time; finish = COMPLETE at it.
+      required: false
+      selector:
+        select:
+          options:
+            - start
+            - finish
 
 update_schedule:
   name: Update schedule
@@ -249,6 +277,34 @@ update_schedule:
       required: false
       selector:
         object:
+    sun_event:
+      name: Sun event
+      description: Anchor the start to sunrise or sunset (empty = fixed time).
+      required: false
+      selector:
+        select:
+          options:
+            - sunrise
+            - sunset
+    sun_offset_minutes:
+      name: Sun offset (minutes)
+      description: Offset from the sun event (negative = before).
+      required: false
+      selector:
+        number:
+          min: -240
+          max: 240
+          step: 1
+          mode: box
+    anchor:
+      name: Anchor
+      description: start = begin at the resolved time; finish = COMPLETE at it.
+      required: false
+      selector:
+        select:
+          options:
+            - start
+            - finish
 
 delete_schedule:
   name: Delete schedule
