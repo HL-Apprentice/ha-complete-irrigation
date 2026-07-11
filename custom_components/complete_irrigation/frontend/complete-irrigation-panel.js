@@ -72,7 +72,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.39.0";
+  const PANEL_VERSION = "v1.39.1";
   const DEFAULT_MANUAL_MINUTES = 10;
   const MAX_MANUAL_MINUTES = 480; // 8 h — matches the backend schedule cap; long
   // runs are delivered in controller-cap blocks (v1.25). Was 60, which blocked
@@ -419,6 +419,9 @@
       // v1.37 — species identification (vision) state.
       this._identifyBusy = false; // identify_plant_species call in flight
       this._visionDraft = null; // {vision_url, vision_model} edit draft; null = mirror config
+      // v1.40 — vision-endpoint connection test state.
+      this._visionTestBusy = false; // test_vision_endpoint call in flight
+      this._visionTestResult = null; // {ok, detail} | null; cleared on field edit
       // v1.38 — photo-first add-plant flow. null = card closed; object =
       // draft {pa_zone, pa_name, pa_emitter_count, pa_gph_sel, pa_gph_custom, busy}.
       this._photoAdd = null;
@@ -852,6 +855,7 @@
         if (action === "species-dismiss")
           return this._dismissSpeciesSuggestion(node.dataset.plantId);
         if (action === "save-vision-endpoint") return this._saveVisionEndpoint();
+        if (action === "test-vision") return this._testVisionEndpoint();
         // v1.39 — watering advisor.
         if (action === "advice-apply")
           return this._applyAdviceItem(parseInt(node.dataset.idx, 10));
@@ -3326,7 +3330,21 @@
         `<input name="vision_model" data-action="vision-field" type="text" value="${escapeAttr(
           (this._visionDraft || c).vision_model || ""
         )}" placeholder="e.g. qwen2.5-vl" />` +
-        `<div class="modal-actions"><button type="button" class="btn btn-primary" data-action="save-vision-endpoint">${this._visionSaved ? "✓ Saved" : "Save vision endpoint"}</button></div>` +
+        `<div class="modal-actions">` +
+        `<button type="button" class="btn btn-primary" data-action="save-vision-endpoint">${this._visionSaved ? "✓ Saved" : "Save vision endpoint"}</button>` +
+        // v1.40 — probe the configured endpoint without leaving the panel.
+        `<button type="button" class="btn" data-action="test-vision"${
+          this._visionTestBusy ? " disabled" : ""
+        }>${this._visionTestBusy ? "Testing…" : "Test connection"}</button>` +
+        `</div>` +
+        (this._visionTestResult
+          ? `<span class="vision-test-result vision-test-${
+              this._visionTestResult.ok ? "ok" : "fail"
+            }">` +
+            (this._visionTestResult.ok ? "✓ Connected — " : "✗ ") +
+            escapeHtml(String(this._visionTestResult.detail || "")) +
+            `</span>`
+          : "") +
         `</div>` +
         `</section>` +
         `<section class="settings-card">` +
@@ -3358,6 +3376,14 @@
         };
       }
       if (t.name in this._visionDraft) this._visionDraft[t.name] = t.value;
+      // v1.40 — editing either field invalidates the last connection-test
+      // result. Remove the status line surgically (no full re-render, so
+      // typing focus/cursor stay put — same pattern as the category hint).
+      if (this._visionTestResult) {
+        this._visionTestResult = null;
+        const line = this.shadowRoot?.querySelector(".vision-test-result");
+        if (line) line.remove();
+      }
     }
 
     async _saveVisionEndpoint() {
@@ -3383,6 +3409,41 @@
         }, 2500);
       } catch (err) {
         alert("Failed to save the vision endpoint: " + (err?.message || err));
+      }
+    }
+
+    async _testVisionEndpoint() {
+      // v1.40 — probe the configured vision endpoint. The service is
+      // registered with supports_response=ONLY, so it must be called via
+      // the WS call_service command with return_response (plain
+      // callService discards the response payload).
+      if (this._visionTestBusy || !this._hass?.callWS) return;
+      this._visionTestBusy = true;
+      this._visionTestResult = null;
+      this._renderNow();
+      try {
+        const res = await this._hass.callWS({
+          type: "call_service",
+          domain: "complete_irrigation",
+          service: "test_vision_endpoint",
+          service_data: {},
+          return_response: true,
+        });
+        const out = res?.response;
+        this._visionTestResult = {
+          ok: !!(out && out.ok),
+          detail: String(
+            (out && out.detail) ||
+              (out && out.ok ? "endpoint responded" : "no response payload")
+          ),
+        };
+      } catch (err) {
+        // WS errors (endpoint unreachable, service raise, …) render as a
+        // failed probe — same amber line, actionable message.
+        this._visionTestResult = { ok: false, detail: String(err?.message || err) };
+      } finally {
+        this._visionTestBusy = false;
+        this._renderNow();
       }
     }
 
@@ -7123,6 +7184,10 @@
         `.plant-drips{margin-top:10px;font-size:13px}` +
         `.plant-drips-line{font-weight:600;color:var(--ci-text)}` +
         `.plant-drips-hint{color:var(--ci-text-2)}` +
+        // v1.40 — vision-endpoint connection test (Settings)
+        `.vision-test-result{display:block;margin-top:8px;font-size:13px;font-weight:600}` +
+        `.vision-test-ok{color:#2e7d32}` +
+        `.vision-test-fail{color:#b26a00}` +
         // v1.37 — species identification (vision)
         `.identify-hint{font-size:13px;color:var(--ci-text-2);margin-left:6px}` +
         `.species-suggest{margin-top:14px;border:1px solid var(--ci-accent);border-radius:10px;padding:12px 14px;background:rgba(3,169,244,0.06)}` +

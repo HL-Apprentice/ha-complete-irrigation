@@ -1164,3 +1164,10 @@ add_plant_from_photo:
           max: 50
           step: any
           mode: box
+
+test_vision_endpoint:
+  name: Test vision endpoint
+  description: >
+    Probe the configured vision endpoint (Settings → Vision endpoint) with a tiny
+    text request and report reachability and the model's reply. Returns a response
+    ({ok, detail}); no fields.
