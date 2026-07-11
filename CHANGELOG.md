@@ -4,6 +4,33 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.39.0 — 2026-07-10 — minor — the "app complete" release
+
+**The full smart-watering loop, closed.** Gap-aware scheduling, real delivered-
+water math, and the approval-gated LLM watering advisor — plus a chained-run
+loss fix. 4-model reviewed (Grok + Gemini clean; Claude's adversarial gate
+found 4 watering-critical defects in the new restart/insertion interplay, all
+fixed pre-release with regression tests proven to fail against the old code).
+
+- **Gap-aware short-run insertion** — a short scheduled run now slots into a
+  long chunked run's idle inter-block gap instead of deferring for hours.
+  One-valve-at-a-time is enforced with margins on both sides, proven
+  minute-by-minute in simulation; restart-ghost plans, over-cap runs, rain
+  lockout, and concurrent resumes are all explicitly guarded (the 4 gate fixes).
+- **Chained-run loss fix** — the second of two short runs deferred behind a
+  big-gap chunked run is no longer silently lost (rescue via displaced-
+  occurrence ledger; skip-don't-backfire preserved through rain lockout).
+- **Delivered-water math** — installed drips (count × GPH × runtime) now show
+  what each plant actually receives vs its need (OK/UNDER/OVER) in the yard
+  report, alongside the recommended set.
+- **LLM watering advisor** — an external job (your LLM host; Qwen on the mini)
+  reads health.json and proposes at most 6 items in exactly two shapes: move a
+  schedule's start time, or resize a plant's drip set toward its real need. A
+  server-side rail bounds everything (unknown ids dropped, HH:MM enforced,
+  values clamped); the panel's 🤖 advisor card applies each item ONLY when you
+  tap it, through the same validated services you use manually.
+- 58 new tests since v1.38.1 (624 total).
+
 ## v1.38.1 — 2026-07-10 — patch — IMPORTANT watering fix
 
 **Chunked-run blocks 2..n never fired on modern HA (2024.5+).** The block timer
