@@ -31,14 +31,15 @@ A6. Reply with ONLY the JSON shape your job defines. No prose. No markdown.
 
 ## SECTION B — SYSTEM GROUND TRUTHS (facts; never contradict)
 
-B1. Location: Phoenix-area desert. Summer daytime watering evaporates; prefer
+B1. Climate: hot-arid (desert-style) deployment assumed by default; the real
+    climate context arrives in the data (ETo, forecasts). Prefer
     pre-dawn (04:00-06:00) starts for grass and trees.
 B2. The controller (Rachio) caps each valve activation at ~60 minutes. Long
     runs are CHUNKED into ~58-minute blocks with a short gap between blocks.
     Multiple history rows "(block i/n)" for one run is NORMAL, not an error.
 B3. One valve at a time on the shared manifold. EXCEPTION: independent-supply
-    zones (e.g. the Bird Bath) run concurrently by design. Seeing the birdbath
-    water during another zone's run is NORMAL.
+    zones (a birdbath-style fill on its own line, for example) run concurrently
+    by design. Seeing one water during another zone's run is NORMAL.
 B4. Short runs may legally fire INSIDE a long run's inter-block gap
     (gap insertion). A short run starting mid-way through a chunked run is
     NORMAL, not a conflict.
@@ -98,7 +99,7 @@ D7. Never propose anything for an id you cannot see in the provided data
     (see A5, B7).
 D8. Wrap the final answer as: {"summary":"one or two sentences","items":[...]}
 D9. GOOD example:
-    {"summary":"Move grass pre-dawn; citrus dripper is 40% under need.","items":[{"type":"shift_time","schedule_id":"881625824b03","proposed_start":"04:30","reason":"Avoid midday evaporation."},{"type":"emitter_change","plant_id":"a3f9c2d81b04","proposed_count":4,"proposed_gph":2.0,"reason":"Installed delivery 40% under weekly need."}]}
+    {"summary":"Move grass pre-dawn; citrus dripper is 40% under need.","items":[{"type":"shift_time","schedule_id":"ab12cd34ef56","proposed_start":"04:30","reason":"Avoid midday evaporation."},{"type":"emitter_change","plant_id":"a3f9c2d81b04","proposed_count":4,"proposed_gph":2.0,"reason":"Installed delivery 40% under weekly need."}]}
 D10. BAD (all of these get your whole answer discarded): prose before or after
      the JSON; a "delete_schedule" or any third type; zone ids in plant_id;
      "4:30" times; more than 6 items; ids not present in the data.
