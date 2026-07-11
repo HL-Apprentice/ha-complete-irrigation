@@ -4,6 +4,15 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.39.1 — 2026-07-11 — patch
+
+- **"Test connection" for the vision endpoint** (Settings) — probes the
+  configured endpoint with a tiny request and shows ✓ Connected / ✗ error
+  inline, so a bad URL or model name surfaces before your first Identify.
+  New response-returning service `test_vision_endpoint`.
+- **README: "Local AI setup"** — accurate walkthroughs for all three local-AI
+  surfaces (species-ID endpoint, vision-health job, watering-advisor job).
+
 ## v1.39.0 — 2026-07-10 — minor — the "app complete" release
 
 **The full smart-watering loop, closed.** Gap-aware scheduling, real delivered-

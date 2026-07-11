@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Any
 
 import voluptuous as vol
 from homeassistant.const import SERVICE_TURN_OFF, SERVICE_TURN_ON
-from homeassistant.core import callback
+from homeassistant.core import ServiceResponse, SupportsResponse, callback
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.event import async_call_later, async_track_state_change_event
 from homeassistant.util import dt as dt_util
@@ -115,6 +115,7 @@ SERVICE_IDENTIFY_PLANT_SPECIES = "identify_plant_species"  # v1.37 — photo -> 
 SERVICE_ADD_PLANT_FROM_PHOTO = "add_plant_from_photo"  # v1.38 — photo-first creation
 SERVICE_PROPOSE_WATERING_ADVICE = "propose_watering_advice"  # v1.39 — LLM advisor
 SERVICE_DISMISS_WATERING_ADVICE = "dismiss_watering_advice"
+SERVICE_TEST_VISION_ENDPOINT = "test_vision_endpoint"  # v1.39.1 — connectivity probe
 SERVICE_APPLY_SPECIES_SUGGESTION = "apply_species_suggestion"
 SERVICE_DISMISS_SPECIES_SUGGESTION = "dismiss_species_suggestion"
 
@@ -627,6 +628,7 @@ _PROPOSE_ADVICE_SCHEMA = vol.Schema(
     }
 )
 _DISMISS_ADVICE_SCHEMA = vol.Schema({})
+_TEST_VISION_SCHEMA = vol.Schema({})
 
 _SPECIES_PROMPT = (
     "You are a botanist identifying the plant in the photo. Reply with ONLY minified "
@@ -2139,6 +2141,52 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             raise vol.Invalid(f"no such plant {data['plant_id']}")
         await _run_identify(coord, plant)
 
+    async def handle_test_vision_endpoint(call: ServiceCall) -> ServiceResponse:
+        """v1.39.1 — probe the configured vision endpoint with a tiny text-only
+        request and report reachability + model reply, so a bad URL/model shows
+        up in Settings instead of at the first failed Identify."""
+        if not await _require_admin(hass, call):
+            return {"ok": False, "detail": "admin required"}
+        _TEST_VISION_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None:
+            return {"ok": False, "detail": "no coordinator"}
+        vision_url = str(coord.config.get("vision_url") or "").strip()
+        if not vision_url.startswith(("http://", "https://")):
+            return {"ok": False, "detail": "no vision endpoint configured"}
+        model = str(coord.config.get("vision_model") or "").strip() or "default"
+
+        import json as _json
+
+        import aiohttp
+        from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
+        body = _json.dumps(
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": "Reply with exactly: OK"}],
+                "max_tokens": 5,
+            }
+        )
+        session = async_get_clientsession(hass)
+        try:
+            async with session.post(
+                vision_url,
+                data=body,
+                headers={"Content-Type": "application/json"},
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as resp:
+                if resp.status != 200:
+                    return {"ok": False, "detail": f"HTTP {resp.status} from endpoint"}
+                raw = await resp.content.read(100_000)
+        except Exception as err:
+            return {"ok": False, "detail": f"unreachable: {str(err)[:120]}"}
+        try:
+            reply = _json.loads(raw)["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, ValueError, TypeError):
+            return {"ok": False, "detail": "endpoint reachable but reply not OpenAI-shaped"}
+        return {"ok": True, "detail": f"model {model} replied ({str(reply)[:40].strip()})"}
+
     async def handle_propose_watering_advice(call: ServiceCall) -> None:
         """v1.39 — store the external LLM advisor's proposals (rail-bounded).
         ADVISORY ONLY: each item is applied later by the USER via the existing
@@ -2578,8 +2626,16 @@ async def _async_register_services(hass: HomeAssistant) -> None:
     hass.services.async_register(
         DOMAIN,
         SERVICE_DISMISS_WATERING_ADVICE,
+        SERVICE_TEST_VISION_ENDPOINT,
         handle_dismiss_watering_advice,
         schema=_DISMISS_ADVICE_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_TEST_VISION_ENDPOINT,
+        handle_test_vision_endpoint,
+        schema=_TEST_VISION_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
     )
     hass.services.async_register(
         DOMAIN,
