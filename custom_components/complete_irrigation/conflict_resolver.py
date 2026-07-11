@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import math
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime, timedelta
 
@@ -69,6 +70,10 @@ _FIXED_REASONS = (REASON_COMMITTED, REASON_GAP_INSERTED)
 # (last, now] window would never fire it (stranded). Holding the blocker a tick longer
 # guarantees a tick fires the deferred run while it is still pinned in place — without
 # clamping placements to `now` (which would re-fire every already-fired run each tick).
+# v1.39 — the margin remains the FIRST line of defense (it fires deferred runs on time,
+# at their slot); the stranded-run rescue in resolve_conflicts is the backstop for
+# placements that still snap into the past (e.g. runs chain-deferred behind a pruned
+# chunked session), made safe by the coordinator's fired-occurrence ledger.
 _BLOCKER_CATCH_MARGIN_MINUTES = 2
 
 
@@ -180,10 +185,34 @@ def resolve_conflicts(
     cascade_cap_minutes: int = DEFAULT_CASCADE_CAP_MINUTES,
     compress_floor_pct: int = DEFAULT_COMPRESS_FLOOR_PCT,
     independent_zones: frozenset[str] = frozenset(),
+    rescue_stranded_before: datetime | None = None,
+    rescue_stranded_at: datetime | None = None,
+    rescue_eligible: Callable[[PlannedRun], bool] | None = None,
 ) -> list[PlannedRun]:
     """Serialize `runs` one-zone-at-a-time, ordered by start time.
 
     Never drops a run. See the module docstring for the strategy.
+
+    v1.39 — STRANDED-RUN RESCUE (opt-in; the tick loop's never-drop backstop).
+    The coordinator fires via the half-open due window ``(last_tick, now]``, so
+    an UNFIRED adjustable run whose resolved placement lands at/before
+    ``rescue_stranded_before`` (= the previous tick) can never fire again — it
+    is stranded. That happens when the blocker that had been deferring it
+    vanishes and its placement snaps back to a past base: the v1.38.x chain-
+    deferral loss (a pruned chunked session's 'ghost' occurrence carried its
+    WATER duration, gap-total short of the real wall span, mis-placing the run
+    chained behind it into the past). When both ``rescue_stranded_*`` kwargs
+    are set, such a run is re-placed no earlier than ``rescue_stranded_at``
+    (= now, so the current tick catches it), still routed past committed
+    intervals and serialized against the other adjustable runs. The CALLER
+    must guarantee every run it passes is genuinely unfired (the coordinator's
+    fired-occurrence ledger does this) — rescuing an already-fired run would
+    double-water. ``rescue_eligible`` narrows rescue further (the coordinator
+    only rescues occurrences it has previously planned in the future during
+    this uptime, preserving the deliberate skip-don't-backfire behavior for
+    runs missed during rain lockout or HA downtime). Default None/None/None =
+    no rescue — identical behavior for preview callers (calendar, ical,
+    ws_api).
 
     A run whose `reason` is `REASON_COMMITTED` has already fired; it keeps
     its (actual) start and duration and acts only as a blocker — never
@@ -243,16 +272,20 @@ def resolve_conflicts(
                 "floor": max(1, math.ceil(full * floor_frac)),
                 "committed_bound": False,  # delay forced by an in-progress run
                 "late_ok": False,  # loop-control: stop retrying this run
+                "rescued": False,  # stranded-run rescue applied (see below)
             }
         )
 
     def sweep() -> None:
         """Place each adjustable run at the earliest free slot at/after its
         scheduled time: past the previous run's end (buffered) and past any
-        committed (in-progress) interval it would overlap."""
+        committed (in-progress) interval it would overlap. A rescued run's
+        floor is `rescue_stranded_at` instead of its (past) scheduled time."""
         cursor = None
         for s in state:
             base = s["sched"] if cursor is None else max(s["sched"], cursor)
+            if s["rescued"] and rescue_stranded_at is not None and rescue_stranded_at > base:
+                base = rescue_stranded_at
             placed = _push_past_committed(base, s["dur"], committed_intervals, buffer)
             s["committed_bound"] = placed > base
             s["start"] = placed
@@ -294,6 +327,35 @@ def resolve_conflicts(
         # else: loop re-sweeps with the shortened predecessors.
 
     sweep()
+
+    # Stranded-run rescue (see docstring). Runs after compression settles so a
+    # rescue never triggers compression of runs ahead of it (a rescued run is
+    # late by construction; compressing others can't un-strand it). Rescuing a
+    # run only pushes later placements LATER, never earlier, so each pass can
+    # only UN-strand other runs — but a pass can also newly reveal none; loop
+    # until no new stranded run remains (bounded: each pass rescues >= 1 run).
+    if rescue_stranded_before is not None and rescue_stranded_at is not None:
+        for _ in range(len(state)):
+            newly_stranded = [
+                s
+                for s in state
+                if not s["rescued"]
+                and s["start"] <= rescue_stranded_before
+                and (rescue_eligible is None or rescue_eligible(s["run"]))
+            ]
+            if not newly_stranded:
+                break
+            for s in newly_stranded:
+                s["rescued"] = True
+                _LOGGER.warning(
+                    "Rescuing stranded run for %s (%s): resolved to %s which the "
+                    "(last, now] due window can no longer catch; re-placing at/after %s",
+                    s["run"].zone_entity_id,
+                    s["run"].schedule_name,
+                    s["start"],
+                    rescue_stranded_at,
+                )
+            sweep()
 
     resolved = [
         replace(
