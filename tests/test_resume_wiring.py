@@ -179,3 +179,207 @@ async def test_gives_up_cleanly_after_max_retries(monkeypatch):
     calls = coord._hass.services.async_call.call_args_list
     assert any(c.args[0] == "switch" and c.args[1] == "turn_off" for c in calls)  # valve off
     coord._run_history.abort_run.assert_called_once()
+
+
+# ── v1.39.1 watering-critical fixes ──────────────────────────────────────────
+
+
+async def test_overlapping_shared_line_sessions_resume_one_per_pass(monkeypatch):
+    # Restart during a LIVE gap-inserted run leaves TWO overlapping shared-line
+    # sessions. Resuming both concurrently opens two valves on the shared
+    # manifold — only ONE may dispatch per pass; the other defers to the retry.
+    now = dt_util.now()
+    dl = (now + timedelta(minutes=40, seconds=30)).isoformat()
+    st_at = (now - timedelta(minutes=10)).isoformat()
+    coord = _coord_with_sessions(
+        {
+            "switch.citrus": {"deadline": dl, "started_at": st_at, "total_minutes": 50},
+            "switch.garden": {"deadline": dl, "started_at": st_at, "total_minutes": 50},
+        }
+    )
+    on = MagicMock()
+    on.state = "on"
+    coord._hass.states.get.return_value = on
+    scheduled = []
+    monkeypatch.setattr(
+        "homeassistant.helpers.event.async_call_later",
+        lambda *a, **k: scheduled.append(a) or MagicMock(),
+    )
+    await coord._resume_interrupted_runs()
+    run_zones = [
+        c.args[2]["entity_id"]
+        for c in coord._hass.services.async_call.call_args_list
+        if c.args[1] == "run_zone"
+    ]
+    assert len(run_zones) == 1, f"expected ONE shared-line resume per pass, got {run_zones}"
+    deferred_zone = ({"switch.citrus", "switch.garden"} - set(run_zones)).pop()
+    sess = coord._config["active_run_sessions"][deferred_zone]
+    assert sess.get("resuming_gated") is True  # deferred (kept + gated), not lost
+    assert scheduled and coord._resume_attempts == 1  # retry armed for the deferred zone
+
+
+async def test_retry_defers_while_the_first_resumed_zone_still_runs(monkeypatch):
+    # RETRY pass for the deferred zone: the zone resumed on the first pass now
+    # has a FRESH (genuinely live) session outside the retry's ghost set — it
+    # must gate the retried zone until it finishes (or retries give up).
+    now = dt_util.now()
+    coord = _coord_with_sessions(
+        {
+            "switch.citrus": {  # resumed on the first pass — fresh, live
+                "deadline": (now + timedelta(minutes=40)).isoformat(),
+                "started_at": now.isoformat(),
+                "total_minutes": 50,
+            },
+            "switch.garden": {  # the deferred ghost being retried
+                "deadline": (now + timedelta(minutes=30)).isoformat(),
+                "started_at": (now - timedelta(minutes=10)).isoformat(),
+                "resuming_gated": True,
+                "total_minutes": 40,
+            },
+        }
+    )
+    on = MagicMock()
+    on.state = "on"
+    coord._hass.states.get.return_value = on
+    monkeypatch.setattr("homeassistant.helpers.event.async_call_later", lambda *a, **k: MagicMock())
+    await coord._resume_interrupted_runs(zones={"switch.garden"})
+    run_zones = [
+        c for c in coord._hass.services.async_call.call_args_list if c.args[1] == "run_zone"
+    ]
+    assert run_zones == []  # citrus is genuinely running -> garden stays deferred
+    assert coord._config["active_run_sessions"]["switch.garden"].get("resuming_gated") is True
+
+
+async def test_independent_zone_resumes_are_not_serialized():
+    # Independent-supply zones never contend for the shared manifold — both
+    # resume in the same pass (the serialization must not over-block them).
+    now = dt_util.now()
+    dl = (now + timedelta(minutes=40, seconds=30)).isoformat()
+    st_at = (now - timedelta(minutes=10)).isoformat()
+    coord = _coord_with_sessions(
+        {
+            "switch.bird_bath": {"deadline": dl, "started_at": st_at, "total_minutes": 50},
+            "switch.fountain": {"deadline": dl, "started_at": st_at, "total_minutes": 50},
+        }
+    )
+    coord._config["independent_zones"] = ["switch.bird_bath", "switch.fountain"]
+    on = MagicMock()
+    on.state = "on"
+    coord._hass.states.get.return_value = on
+    await coord._resume_interrupted_runs()
+    run_zones = [
+        c.args[2]["entity_id"]
+        for c in coord._hass.services.async_call.call_args_list
+        if c.args[1] == "run_zone"
+    ]
+    assert sorted(run_zones) == ["switch.bird_bath", "switch.fountain"]
+
+
+# ── v1.39.1: pre-restart ghost block plans are untrusted for gap insertion ──
+
+
+def test_gap_trusted_sessions_strips_ghost_and_gated_block_plans():
+    from custom_components.complete_irrigation.coordinator import ScheduleCoordinator
+
+    coord = ScheduleCoordinator(MagicMock(), "e1")
+    now = dt_util.now()
+    coord._uptime_started_at = now - timedelta(seconds=90)  # HA started 90s ago
+    pre_restart = {  # dispatched by the PREVIOUS process — timers are dead
+        "started_at": (now - timedelta(hours=1)).isoformat(),
+        "deadline": (now + timedelta(hours=2)).isoformat(),
+        "blocks": [58, 58, 58],
+        "block_gap_seconds": 1200,
+    }
+    gated = {  # resume deferred — plan not re-armed yet
+        "started_at": (now - timedelta(seconds=30)).isoformat(),
+        "deadline": (now + timedelta(hours=2)).isoformat(),
+        "blocks": [58, 58],
+        "block_gap_seconds": 1200,
+        "resuming_gated": True,
+    }
+    fresh = {  # dispatched THIS uptime — timers armed, plan trusted
+        "started_at": (now - timedelta(seconds=30)).isoformat(),
+        "deadline": (now + timedelta(hours=2)).isoformat(),
+        "blocks": [58, 58],
+        "block_gap_seconds": 1200,
+    }
+    out = coord._gap_trusted_sessions(
+        {"switch.a": pre_restart, "switch.b": gated, "switch.c": fresh}
+    )
+    assert "blocks" not in out["switch.a"] and "block_gap_seconds" not in out["switch.a"]
+    assert "blocks" not in out["switch.b"] and "block_gap_seconds" not in out["switch.b"]
+    assert out["switch.c"]["blocks"] == [58, 58]  # this-uptime plan kept
+    # The ghost still counts as a BUSY span — only its gaps are untrusted.
+    assert out["switch.a"]["started_at"] == pre_restart["started_at"]
+    assert out["switch.a"]["deadline"] == pre_restart["deadline"]
+    # The stored session is never mutated (the filter returns copies).
+    assert "blocks" in pre_restart and "blocks" in gated
+
+
+def test_stale_prerestart_plan_yields_no_insertion_but_still_blocks():
+    # The finding's exact scenario: HA restarted mid-chunked-run, resume is
+    # gated (switch not back yet), and the stale plan exposes a pin inside the
+    # first tick's due window. The pin must NOT be produced from the filtered
+    # sessions — but the session must still act as a committed busy span.
+    from custom_components.complete_irrigation.conflict_resolver import (
+        committed_runs_from_sessions,
+    )
+    from custom_components.complete_irrigation.coordinator import ScheduleCoordinator
+    from custom_components.complete_irrigation.gap_insertion import plan_gap_insertions
+    from custom_components.complete_irrigation.run_planner import PlannedRun
+
+    coord = ScheduleCoordinator(MagicMock(), "e1")
+    now = dt_util.now()
+    coord._uptime_started_at = now - timedelta(seconds=60)
+    started = now - timedelta(minutes=60)
+    session = {  # 58-min blocks, 20-min gaps; restart landed inside gap 1
+        "started_at": started.isoformat(),
+        "deadline": (started + timedelta(minutes=174, seconds=2400)).isoformat(),
+        "water_deadline": (started + timedelta(minutes=174)).isoformat(),
+        "blocks": [58, 58, 58],
+        "block_gap_seconds": 1200,
+        "resuming_gated": True,
+    }
+    sessions = {"switch.citrus": session}
+    short = PlannedRun(
+        zone_entity_id="switch.garden",
+        start_at=now - timedelta(minutes=30),  # blocked by the citrus span
+        duration_minutes=5,
+        schedule_id="garden",
+        schedule_name="GARDEN",
+    )
+    # Pre-fix reachability: fed the RAW session, the planner pins the short
+    # into the ghost gap, inside the first tick's catchable window.
+    raw_plan = plan_gap_insertions([short], sessions, now)
+    assert raw_plan, "scenario must be reachable against the unfiltered session"
+    # The fix: the filtered copy exposes no gaps -> no insertion...
+    filtered = coord._gap_trusted_sessions(sessions)
+    assert plan_gap_insertions([short], filtered, now) == {}
+    # ...while the session still blocks the manifold as a committed span.
+    assert committed_runs_from_sessions(filtered, now)
+
+
+# ── v1.39.1: _fire_run belt — a would-chunk gap-inserted run is never fired ──
+
+
+async def test_fire_run_skips_gap_inserted_run_over_controller_cap():
+    from custom_components.complete_irrigation.gap_insertion import REASON_GAP_INSERTED
+    from custom_components.complete_irrigation.run_planner import PlannedRun
+
+    coord = _coord_with_sessions({})
+    coord._config["controller_max_run_minutes"] = 5  # lowered after planning
+    coord._run_history.record_skipped = MagicMock(return_value=MagicMock())
+    run = PlannedRun(
+        zone_entity_id="switch.garden",
+        start_at=dt_util.now(),
+        duration_minutes=6,  # > cap -> run_zone would chunk it past its gap
+        schedule_id="s1",
+        schedule_name="Garden",
+        reason=REASON_GAP_INSERTED,
+    )
+    await coord._fire_run(run)
+    calls = coord._hass.services.async_call.call_args_list
+    assert not any(c.args[1] == "run_zone" for c in calls)  # never dispatched
+    coord._run_history.record_skipped.assert_called_once()
+    reason = coord._run_history.record_skipped.call_args.kwargs["reason"]
+    assert "controller cap" in reason

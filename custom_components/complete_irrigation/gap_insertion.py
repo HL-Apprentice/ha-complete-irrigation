@@ -180,6 +180,7 @@ def plan_gap_insertions(
     tick_seconds: int = DEFAULT_FIRE_LATENCY_SECONDS,
     independent_zones: frozenset[str] = frozenset(),
     fired_keys: Collection[str] = frozenset(),
+    controller_cap_minutes: int | None = None,
 ) -> dict[str, datetime]:
     """Select which scheduled runs to pin into which inter-block gaps.
 
@@ -195,6 +196,12 @@ def plan_gap_insertions(
         ledger; without it the occurrence would be re-inserted into the NEXT
         gap after firing, because its scheduled start stays blocked by the
         still-running long session, and watered twice);
+      * the run is not longer than ``controller_cap_minutes`` (when given):
+        the fit math below models ONE continuous activation, but dispatch
+        funnels through run_zone, which CHUNKS anything over the controller
+        cap into blocks separated by block_gap_seconds — wall time that
+        bursts out of the host gap into the long run's next block. A
+        would-chunk run is never pinned; it defers exactly as before;
       * the run's own zone has no live session (its occurrence IS that
         session), and its scheduled interval actually collides with a live
         shared-line session — an unblocked run is left to fire on time;
@@ -252,6 +259,10 @@ def plan_gap_insertions(
             continue
         if int(run.duration_minutes) <= 0 or _mismatched(run.start_at):
             continue
+        if controller_cap_minutes is not None and int(run.duration_minutes) > int(
+            controller_cap_minutes
+        ):
+            continue  # would be CHUNKED at dispatch — bursts the host gap (see docstring)
         key = insertion_key(run)
         if key in fired_keys or key in out:
             continue

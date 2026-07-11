@@ -191,6 +191,25 @@ def test_run_too_long_for_gap_defers_as_today():
     assert plan_gap_insertions([run], sessions, NOW) == {}
 
 
+def test_run_longer_than_controller_cap_is_never_inserted():
+    # Watering-critical regression (schema-legal cap=5 / gap=600): a 6-min run
+    # FITS the 600s gap as one continuous activation (360 + 2*90 = 540 <= 600),
+    # but dispatch funnels through run_zone, which CHUNKS it into [5, 1] with a
+    # 600s inter-block gap — ~16 min of wall time bursting out of the 10-min
+    # host gap (two valves on the shared manifold). A would-chunk run must
+    # never be pinned; it defers exactly as before.
+    started = NOW - timedelta(minutes=3)
+    sessions = {CITRUS: _session(started, 12, cap=5, gap_s=600)}  # blocks [5, 5, 2]
+    run = _run(GARDEN, NOW, 6, "garden")
+    # Without the cap the fit math accepts it — the exact pre-fix hazard.
+    assert plan_gap_insertions([run], sessions, NOW)
+    # With the controller cap the coordinator passes, it is rejected.
+    assert plan_gap_insertions([run], sessions, NOW, controller_cap_minutes=5) == {}
+    # A run of exactly cap minutes is a SINGLE activation — still insertable.
+    exact = _run(GARDEN, NOW, 5, "garden")
+    assert plan_gap_insertions([exact], sessions, NOW, controller_cap_minutes=5)
+
+
 def test_gap_exactly_fits_and_one_second_over_end_to_end():
     # 15-min run: required = 900 + 2*90 = 1080s.
     _, sessions_fit = _citrus_state(gap_s=1080)

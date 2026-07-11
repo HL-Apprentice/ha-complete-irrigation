@@ -21,6 +21,7 @@ from datetime import datetime, time, timedelta
 from typing import TYPE_CHECKING, Any
 
 from .care_tasks import CareTaskStore
+from .chunked_run import DEFAULT_CONTROLLER_MAX_RUN_MIN
 from .conflict_resolver import (
     DEFAULT_CASCADE_CAP_MINUTES,
     POLICY_DEFER_NEW,
@@ -274,6 +275,14 @@ class ScheduleCoordinator:
         # interrupted by an HA restart (see _resume_interrupted_runs).
         self._cancel_resume = None
         self._resume_attempts = 0
+        # v1.39.1 — when THIS process started (set in async_setup, before the
+        # first tick). A persisted session whose started_at predates it was
+        # dispatched by a PREVIOUS process: its block timers died with HA, so
+        # its recorded block plan describes gaps nothing is enforcing. Gap
+        # insertion must not trust such a plan until a successful resume
+        # re-records the session with fresh, armed timers — see
+        # _gap_trusted_sessions.
+        self._uptime_started_at: datetime | None = None
         # v1.39 — occurrence keys (gap_insertion.insertion_key) the resolver
         # has placed in the FUTURE at least once this uptime, with their
         # scheduled starts. This is the stranded-run rescue's eligibility
@@ -375,6 +384,10 @@ class ScheduleCoordinator:
         # hours of missed runs after, say, a half-day outage.
         saved_last_tick = self._config.get("_last_tick")
         now = dt_util.now()
+        # v1.39.1 — mark this uptime's start BEFORE the tick timer arms, so the
+        # very first tick can already tell a this-uptime session (armed block
+        # timers) from a pre-restart ghost (dead timers, untrusted block plan).
+        self._uptime_started_at = now
         if saved_last_tick:
             try:
                 saved_dt = datetime.fromisoformat(saved_last_tick)
@@ -1010,12 +1023,21 @@ class ScheduleCoordinator:
             upcoming = [r for r in upcoming if insertion_key(r) not in fired_ledger]
         insertions = plan_gap_insertions(
             upcoming,
-            self._config.get("active_run_sessions") or {},
+            # v1.39.1 — only trust block plans whose timers are armed in THIS
+            # uptime; a pre-restart ghost plan (or a resume-gated session)
+            # stays a busy span but exposes no gaps (see _gap_trusted_sessions).
+            self._gap_trusted_sessions(self._config.get("active_run_sessions") or {}),
             now,
             zone_buffer_seconds=int(zone_buffer) if zone_buffer is not None else None,
             tick_seconds=TICK_SECONDS,
             independent_zones=independent,
             fired_keys=frozenset(fired_ledger),
+            # v1.39.1 — a run over the controller cap would be CHUNKED at
+            # dispatch (blocks + inter-block gaps) and burst out of its host
+            # gap; the planner must never pin one (see gap_insertion.py).
+            controller_cap_minutes=int(
+                self._config.get("controller_max_run_minutes", DEFAULT_CONTROLLER_MAX_RUN_MIN)
+            ),
         )
         if insertions:
             upcoming = [
@@ -1046,11 +1068,27 @@ class ScheduleCoordinator:
             rescue_stranded_at=now,
             rescue_eligible=lambda r: insertion_key(r) in self._pending_seen,
         )
-        # Remember every occurrence currently planned in the FUTURE — the
-        # rescue-eligibility gate above. In-memory; pruned by scheduled age
-        # once it grows (entries clear on firing via _record_run_fired).
+        # Remember every occurrence currently planned in the future that was
+        # genuinely DISPLACED past its scheduled start — deferred behind a
+        # blocker, or pinned into a gap — the rescue-eligibility gate above.
+        # v1.39.1: recording EVERY future-planned occurrence made slots that
+        # later fell inside a rain lockout rescue-eligible (each pre-lockout
+        # tick had already enumerated them), so the first post-lockout tick
+        # backfired them all at once — the exact v1.17.3 flood the design
+        # forbids. A never-displaced run needs no rescue eligibility: if its
+        # slot arrives while HA is up and unlocked it fires via the
+        # (last, now] due window; if the slot passes during lockout/downtime
+        # it stays ineligible — skip, don't backfire. In-memory; pruned by
+        # scheduled age once it grows (entries clear via _record_run_fired).
         for r in resolved:
-            if r.reason != REASON_COMMITTED and r.start_at > now:
+            if (
+                r.reason != REASON_COMMITTED
+                and r.start_at > now
+                and (
+                    r.reason == REASON_GAP_INSERTED
+                    or (r.scheduled_start_at is not None and r.start_at > r.scheduled_start_at)
+                )
+            ):
                 self._pending_seen[insertion_key(r)] = r.scheduled_start_at
         if len(self._pending_seen) > 512:
             cutoff = now - timedelta(hours=48)
@@ -1267,6 +1305,24 @@ class ScheduleCoordinator:
             if adjusted_minutes > run.duration_minutes:
                 gap_note["boost_clamped_to_fit_gap"] = True
                 adjusted_minutes = run.duration_minutes
+            # v1.39.1 belt — run_zone CHUNKS anything over the controller cap
+            # into blocks separated by block_gap_seconds; the chunked wall time
+            # bursts out of the host gap into the long run's next block (two
+            # valves on the shared manifold). plan_gap_insertions never pins a
+            # would-chunk run, so this only trips if the cap was lowered between
+            # planning and firing — skip instead of dispatching. The skip path
+            # records history + sends the actionable "Run now" notification,
+            # and the ledger already consumed the occurrence, so it is never
+            # re-inserted into a later gap.
+            cap = int(
+                self._config.get("controller_max_run_minutes", DEFAULT_CONTROLLER_MAX_RUN_MIN)
+            )
+            if adjusted_minutes > cap:
+                gap_note["exceeds_controller_cap"] = cap
+                skip_reasons.append(
+                    f"gap-inserted run of {adjusted_minutes} min exceeds the {cap}-min "
+                    "controller cap (chunked delivery would burst its host gap)"
+                )
             triggers["gap_insertion"] = gap_note
 
         # Resolve a friendly zone name (state attribute → entity_id fallback).
@@ -1382,6 +1438,46 @@ class ScheduleCoordinator:
             sessions.pop(zone, None)
         _LOGGER.info("Pruned %d finished run session(s) from the store: %s", len(stale), stale)
         self._hass.async_create_task(self.async_save_config())
+
+    def _gap_trusted_sessions(self, sessions: dict) -> dict:
+        """v1.39.1 — filter ``active_run_sessions`` for gap insertion: strip the
+        recorded block plan (``blocks`` + ``block_gap_seconds``) from any session
+        whose timers are NOT armed in this uptime — one whose ``started_at``
+        predates ``_uptime_started_at`` (a pre-restart ghost: its block/auto-stop
+        timers died with HA, so the plan's "gaps" may not be idle at all — the
+        interrupted block's valve can still be physically open) or one marked
+        ``resuming_gated`` (resume deferred; the valve is off waiting to retry,
+        and the plan will be re-recorded fresh when the resume succeeds).
+
+        The session itself is KEPT — it must still count as a busy span so a
+        blocked short run stays deferred — only its gap windows become
+        untrusted (no ``blocks`` -> ``session_gap_windows`` yields none: no
+        insertion, fail safe). A successful resume re-enters run_zone, which
+        re-records the session with a fresh ``started_at`` and re-armed
+        timers, so insertion resumes automatically. Unparseable ``started_at``
+        or tz mismatch -> untrusted (fail safe)."""
+        if not isinstance(sessions, dict) or not sessions:
+            return {}
+        out: dict = {}
+        for zone, s in sessions.items():
+            if not isinstance(s, dict) or "blocks" not in s:
+                out[zone] = s  # nothing to strip (plan-less sessions expose no gaps)
+                continue
+            trusted = not s.get("resuming_gated")
+            if trusted:
+                trusted = False  # prove this-uptime freshness or stay untrusted
+                up = self._uptime_started_at
+                try:
+                    started = datetime.fromisoformat(str(s.get("started_at")))
+                    if up is not None and (started.tzinfo is None) == (up.tzinfo is None):
+                        trusted = started >= up
+                except (TypeError, ValueError):
+                    trusted = False
+            if trusted:
+                out[zone] = s
+            else:
+                out[zone] = {k: v for k, v in s.items() if k not in ("blocks", "block_gap_seconds")}
+        return out
 
     # ── Auto-soak recovery (v1.19) ────────────────────────────────
 
@@ -1974,6 +2070,32 @@ class ScheduleCoordinator:
 
     # ── Restart fail-over (v1.30) ─────────────────────────────────
 
+    def _resume_blocked_by_live_zone(self, zone_id: str, ghost_zones: set[str]) -> bool:
+        """v1.39.1 — resume-time busy check: True when a DIFFERENT zone has a
+        genuinely LIVE session — one that is NOT among this pass's own
+        pre-restart ghosts (``ghost_zones``, whose timers died with HA and are
+        not actually watering). On the initial resume pass every overlapping
+        session is a ghost -> not busy (the one-per-pass flag serializes them
+        instead); on a RETRY pass the snapshot is scoped to the deferred zones
+        only, so a zone resumed earlier carries a fresh session OUTSIDE the
+        ghost set and gates the retried zone for real, until it finishes (or
+        the bounded retries give up and close the deferred zone out cleanly).
+        Same committed-blocker definition as the resolver, independent-supply
+        exemption included."""
+        from homeassistant.util import dt as dt_util
+
+        sessions = {
+            z: s
+            for z, s in (self._config.get("active_run_sessions") or {}).items()
+            if z not in ghost_zones
+        }
+        if not sessions:
+            return False
+        blockers = committed_runs_from_sessions(
+            sessions, dt_util.now(), independent_zones=self.independent_zones
+        )
+        return any(r.zone_entity_id != zone_id for r in blockers)
+
     async def _resume_interrupted_runs(self, _now=None, zones=None) -> None:
         """Resume (or close out) runs interrupted by an HA restart. For each
         persisted session: still within its planned window -> re-fire run_zone
@@ -1983,6 +2105,16 @@ class ScheduleCoordinator:
 
         `zones` (set) scopes a RETRY to only the zones that were deferred last time
         (switch not yet available), so a retry never re-fires zones already resumed.
+
+        v1.39.1 — one-zone-at-a-time applies to RESUMES too. Gap insertion makes
+        two overlapping shared-line sessions a normal system-created state (the
+        inserted run's session sits inside the chunked owner's span by design);
+        a restart during a live inserted run must NOT resume both concurrently.
+        Only ONE shared-line session is dispatched per pass; the rest are
+        deferred through the existing retry mechanism, where the first one's
+        fresh (genuinely live) session then gates them until it finishes or the
+        bounded retries give up and close them out cleanly (valve off + abort
+        record) — the inviolable invariant beats completeness.
         """
         from homeassistant.core import callback
         from homeassistant.helpers.event import async_call_later
@@ -1997,7 +2129,19 @@ class ScheduleCoordinator:
             return
         entry_data = self._hass.data.get(DOMAIN, {}).get(self._entry_id)
         deferred: list[str] = []  # resumable zones whose switch isn't ready yet
-        for item in plan_session_resume(sessions, dt_util.now()):
+        independent = self.independent_zones
+        plan = plan_session_resume(sessions, dt_util.now())
+        # The sessions THIS pass plans to resume are pre-restart ghosts (their
+        # timers died with HA — nothing is actually watering), so they must not
+        # count as "busy" when gating each other; serialization below is what
+        # keeps them one-at-a-time. Any live session OUTSIDE this set (a zone
+        # already resumed on an earlier pass, or a fresh run that started since)
+        # is genuinely running and must gate a resume for real.
+        ghost_zones = {
+            it["zone"] for it in plan if it["action"] == "resume" and it["zone"] not in independent
+        }
+        shared_line_resumed = False
+        for item in plan:
             zone = item["zone"]
             live = self._config.get("active_run_sessions") or {}
             # Honor any intervening change: if the session was cleared while we
@@ -2016,6 +2160,21 @@ class ScheduleCoordinator:
                     # "Running" while the valve is actually off waiting to retry.
                     live[zone]["resuming_gated"] = True
                     deferred.append(zone)
+                    continue
+                # v1.39.1 — serialize shared-line resumes: one per pass, and
+                # never into a controller genuinely busy elsewhere (see the
+                # docstring + ghost_zones above). Deferral keeps the session
+                # and retries — same treatment as an unavailable switch.
+                if zone not in independent and (
+                    shared_line_resumed or self._resume_blocked_by_live_zone(zone, ghost_zones)
+                ):
+                    live[zone]["resuming_gated"] = True
+                    deferred.append(zone)
+                    _LOGGER.info(
+                        "Restart fail-over: deferring %s — the one-zone-at-a-time "
+                        "controller is (or is about to be) busy on another zone",
+                        zone,
+                    )
                     continue
                 remaining = item["remaining_minutes"]
                 meta = item.get("session") or {}
@@ -2055,6 +2214,10 @@ class ScheduleCoordinator:
                     after["resuming_gated"] = True
                     deferred.append(zone)
                     continue
+                if zone not in independent:
+                    # v1.39.1 — a shared-line valve is now genuinely open; every
+                    # later shared-line session this pass defers to the retry.
+                    shared_line_resumed = True
                 _LOGGER.info(
                     "Restart fail-over: resuming %s for %d more min (to its planned end)",
                     zone,
