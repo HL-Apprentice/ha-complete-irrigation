@@ -422,6 +422,10 @@
       // v1.38 — photo-first add-plant flow. null = card closed; object =
       // draft {pa_zone, pa_name, pa_emitter_count, pa_gph_sel, pa_gph_custom, busy}.
       this._photoAdd = null;
+      // v1.39 — watering-advisor local state: idx -> true once that item
+      // was applied this session; reset when a NEW advice blob arrives.
+      this._advisorApplied = {};
+      this._advisorAppliedAt = null; // proposed_at the marks belong to
 
       // Sensor (moisture) modal state
       this._sensorModalOpen = false;
@@ -848,6 +852,10 @@
         if (action === "species-dismiss")
           return this._dismissSpeciesSuggestion(node.dataset.plantId);
         if (action === "save-vision-endpoint") return this._saveVisionEndpoint();
+        // v1.39 — watering advisor.
+        if (action === "advice-apply")
+          return this._applyAdviceItem(parseInt(node.dataset.idx, 10));
+        if (action === "advice-dismiss") return this._dismissAdvice();
         if (action === "zone-move-up") return this._reorderZone(node.dataset.entityId, -1);
         if (action === "zone-move-down") return this._reorderZone(node.dataset.entityId, 1);
         if (action === "day-cal-prev") {
@@ -1873,6 +1881,123 @@
         `<ul class="plan-list">${rows}</ul>` +
         `</section>`
       );
+    }
+
+    _renderAdviceCard() {
+      // v1.39 — LLM watering-advisor proposals (from get_config →
+      // config.watering_advice). Advisory: each Apply routes through the
+      // SAME validated services used manually (update_schedule /
+      // update_plant), never a privileged path.
+      const adv = this._config?.watering_advice;
+      if (!adv || !Array.isArray(adv.items) || adv.items.length === 0) return "";
+      // A NEW advice blob invalidates this session's applied marks.
+      if (this._advisorAppliedAt !== adv.proposed_at) {
+        this._advisorAppliedAt = adv.proposed_at;
+        this._advisorApplied = {};
+      }
+      const rows = adv.items
+        .map((it, idx) => {
+          let text;
+          if (it.type === "shift_time") {
+            const sched = (this._schedules || []).find((s) => s.id === it.schedule_id);
+            const sname = sched ? sched.name : it.schedule_id;
+            text =
+              `Move ${escapeHtml(String(sname == null ? "" : sname))} to ` +
+              `${escapeHtml(String(it.proposed_start || ""))} — ` +
+              escapeHtml(String(it.reason || ""));
+          } else if (it.type === "emitter_change") {
+            const plant = (this._plants || []).find((p) => p.id === it.plant_id);
+            const pname = plant ? plant.name : it.plant_id;
+            text =
+              `Change ${escapeHtml(String(pname == null ? "" : pname))} drips to ` +
+              `${escapeHtml(String(it.proposed_count))} × ` +
+              `${escapeHtml(String(it.proposed_gph))} GPH — ` +
+              escapeHtml(String(it.reason || ""));
+          } else {
+            return ""; // unknown item type — skip rather than guess
+          }
+          const applied = !!this._advisorApplied[idx];
+          return (
+            `<li class="advice-item${applied ? " advice-applied" : ""}">` +
+            `<span class="advice-text">${text}</span>` +
+            (applied
+              ? `<span class="advice-done">✓ Applied</span>`
+              : `<button class="btn btn-small" type="button" data-action="advice-apply" data-idx="${idx}">✓ Apply</button>`) +
+            `</li>`
+          );
+        })
+        .join("");
+      let when = "";
+      if (adv.proposed_at) {
+        const d = new Date(adv.proposed_at);
+        if (!isNaN(d)) when = d.toLocaleDateString();
+      }
+      const meta = [adv.model ? String(adv.model) : "", when].filter(Boolean);
+      return (
+        `<section class="advice-card">` +
+        `<div class="section-title-row">` +
+        `<h3 class="section-title">🤖 Watering advisor</h3>` +
+        `<button class="btn btn-small" type="button" data-action="advice-dismiss">Dismiss all</button>` +
+        `</div>` +
+        (adv.summary
+          ? `<p class="advice-summary">${escapeHtml(String(adv.summary))}</p>`
+          : "") +
+        `<ul class="advice-list">${rows}</ul>` +
+        (meta.length
+          ? `<span class="advice-meta">${escapeHtml(meta.join(" · "))}</span>`
+          : "") +
+        `<span class="advice-foot">Advisory — each item applies through the same ` +
+        `validated services you use manually.</span>` +
+        `</section>`
+      );
+    }
+
+    async _applyAdviceItem(idx) {
+      // v1.39 — apply ONE advisor item via the mapped existing service,
+      // sending ONLY the contract fields. No success alert; the item is
+      // marked applied locally and the affected data re-fetched.
+      const adv = this._config?.watering_advice;
+      const it = adv && Array.isArray(adv.items) ? adv.items[idx] : null;
+      if (!it || !Number.isFinite(idx) || this._advisorApplied[idx]) return;
+      try {
+        if (it.type === "shift_time") {
+          await this._hass.callService("complete_irrigation", "update_schedule", {
+            schedule_id: it.schedule_id,
+            start_time: it.proposed_start,
+          });
+          this._advisorApplied[idx] = true;
+          await this._fetchSchedules();
+        } else if (it.type === "emitter_change") {
+          await this._hass.callService("complete_irrigation", "update_plant", {
+            plant_id: it.plant_id,
+            emitter_count: it.proposed_count,
+            emitter_gph: it.proposed_gph,
+          });
+          this._advisorApplied[idx] = true;
+          await this._fetchYard();
+        } else {
+          return;
+        }
+        await this._fetchConfig();
+      } catch (err) {
+        alert("Failed to apply the advice: " + (err?.message || err));
+      }
+      this._renderNow();
+    }
+
+    async _dismissAdvice() {
+      if (!confirm("Dismiss all watering-advisor suggestions?")) return;
+      try {
+        await this._hass.callService(
+          "complete_irrigation",
+          "dismiss_watering_advice",
+          {}
+        );
+        this._advisorApplied = {};
+        await this._fetchConfig();
+      } catch (err) {
+        alert("Failed to dismiss the advice: " + (err?.message || err));
+      }
     }
 
     async _fetchPlannedRuns() {
@@ -3405,6 +3530,8 @@
         this._renderMissedRunsBanner() +
         this._renderWeatherBanner() +
         this._renderDailyPlanCard() +
+        // v1.39 — LLM watering-advisor proposals (render only when present).
+        this._renderAdviceCard() +
         `<section>` +
         `<div class="section-title-row">` +
         `<h3 class="section-title">Zones (${visibleZones.length})</h3>` +
@@ -6364,6 +6491,27 @@
             p.pct_off != null
               ? ` ${p.pct_off >= 0 ? "+" : ""}${Math.round(p.pct_off * 100)}%`
               : "";
+          // v1.39 — installed-drips delivery vs need (only when the plant
+          // has emitter_count/gph set; backend sends UPPERCASE status).
+          let installedRow = "";
+          if (p.installed_status != null) {
+            const iStatus = String(p.installed_status);
+            const iPct =
+              p.installed_pct_off != null
+                ? ` ${p.installed_pct_off >= 0 ? "+" : ""}${Math.round(
+                    p.installed_pct_off * 100
+                  )}%`
+                : "";
+            installedRow =
+              `<tr class="yard-installed-row"><td colspan="5">` +
+              `Installed drips deliver ${escapeHtml(
+                String(p.installed_delivered_gal_week == null ? "—" : p.installed_delivered_gal_week)
+              )} gal/wk ` +
+              `<span class="yard-badge ${escapeAttr(iStatus.toLowerCase())}">${escapeHtml(
+                iStatus
+              )}${escapeHtml(iPct)}</span>` +
+              `</td></tr>`;
+          }
           return (
             `<tr>` +
             `<td>${escapeHtml(p.name)}</td>` +
@@ -6373,7 +6521,8 @@
             `<td><span class="yard-badge ${escapeAttr(status)}">${escapeHtml(
               p.status
             )}${escapeHtml(pct)}</span></td>` +
-            `</tr>`
+            `</tr>` +
+            installedRow
           );
         })
         .join("");
@@ -7031,6 +7180,17 @@
         `.plan-zone{font-weight:600;color:var(--ci-text)}` +
         `.plan-reason{color:var(--ci-text-2);font-size:12px}` +
         `.plan-skip .plan-zone{color:var(--ci-text-2);text-decoration:line-through}` +
+        // v1.39 — watering-advisor card (Today) + installed-drips report row
+        `.advice-card{margin-bottom:18px;padding:14px 16px;border:1px solid var(--ci-accent);border-radius:10px;background:rgba(3,169,244,0.06)}` +
+        `.advice-summary{margin:4px 0 10px;font-size:13px;color:var(--ci-text)}` +
+        `.advice-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}` +
+        `.advice-item{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:13px}` +
+        `.advice-item.advice-applied{opacity:0.6}` +
+        `.advice-text{flex:1;min-width:200px;color:var(--ci-text)}` +
+        `.advice-done{font-size:13px;font-weight:600;color:#2e7d32}` +
+        `.advice-meta{display:block;margin-top:8px;font-size:13px;color:var(--ci-text-2)}` +
+        `.advice-foot{display:block;margin-top:4px;font-size:13px;color:var(--ci-text-2)}` +
+        `.yard-installed-row td{font-size:13px;color:var(--ci-text-2)}` +
         `.yard-h3{margin:18px 0 8px;font-size:14px}` +
         `.yard-table-wrap{overflow-x:auto}` +
         `.yard-table{width:100%;border-collapse:collapse;font-size:13px}` +
