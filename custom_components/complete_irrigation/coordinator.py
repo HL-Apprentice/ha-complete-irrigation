@@ -274,6 +274,16 @@ class ScheduleCoordinator:
         # interrupted by an HA restart (see _resume_interrupted_runs).
         self._cancel_resume = None
         self._resume_attempts = 0
+        # v1.39 — occurrence keys (gap_insertion.insertion_key) the resolver
+        # has placed in the FUTURE at least once this uptime, with their
+        # scheduled starts. This is the stranded-run rescue's eligibility
+        # gate: only an occurrence we were actively deferring may be pulled
+        # forward to `now` if its placement ever snaps into the past (blocker
+        # vanished). Occurrences never planned during uptime — missed during
+        # rain lockout or while HA was off — stay ineligible, preserving the
+        # deliberate skip-don't-backfire behavior. In-memory BY DESIGN:
+        # persisting it would re-enable backfire floods after a restart.
+        self._pending_seen: dict[str, datetime] = {}
         # v1.35 — care-task reminders (fertilize/prune/mulch/inspect). Loaded in
         # async_setup; mutated via the care-task services. Due-check runs on the
         # tick, throttled to ~hourly.
@@ -981,17 +991,23 @@ class ScheduleCoordinator:
         # pinned run is FIXED for the resolver (never moved; the long run's
         # block cadence is timer-driven and untouched) and fires through the
         # normal due path, so moisture/wind/hot-weather gates still evaluate at
-        # fire time. Runs that fit no gap resolve exactly as before. The fired
-        # ledger stops a completed insertion from being re-inserted into a
-        # later gap while the long run is still blocking its scheduled start.
-        gap_ledger = self._config.get("gap_insertions_fired") or {}
-        if gap_ledger:
-            # An occurrence that already fired via insertion is DONE — drop it
-            # from planning entirely. An ordinary fired run is protected by
-            # its past placement, but this occurrence's scheduled start stays
-            # blocked by the still-running long session, so the resolver
-            # would re-defer it to the session's end and water it TWICE.
-            upcoming = [r for r in upcoming if insertion_key(r) not in gap_ledger]
+        # fire time. Runs that fit no gap resolve exactly as before.
+        #
+        # v1.39 — fired-occurrence ledger: EVERY scheduled firing is recorded
+        # (_record_run_fired) and its occurrence DROPPED from planning here.
+        # A fired occurrence must never be re-planned: a gap-inserted one would
+        # be re-inserted into the long run's NEXT gap (its scheduled start is
+        # still blocked) and watered twice, and a finished chunked session's
+        # occurrence used to re-enter planning as a past 'ghost' adjustable run
+        # whose sweep cursor carried its WATER duration — gap-total SHORTER
+        # than the real wall span — snapping runs chain-deferred behind it into
+        # the past, out of the (last, now] due window, silently LOST (the
+        # v1.38.x chain-deferral loss). With fired occurrences provably out of
+        # planning, the resolver's stranded-run rescue below is safe: it can
+        # only ever pull forward a run that truly never fired.
+        fired_ledger = self._config.get("fired_occurrences") or {}
+        if fired_ledger:
+            upcoming = [r for r in upcoming if insertion_key(r) not in fired_ledger]
         insertions = plan_gap_insertions(
             upcoming,
             self._config.get("active_run_sessions") or {},
@@ -999,7 +1015,7 @@ class ScheduleCoordinator:
             zone_buffer_seconds=int(zone_buffer) if zone_buffer is not None else None,
             tick_seconds=TICK_SECONDS,
             independent_zones=independent,
-            fired_keys=frozenset(gap_ledger),
+            fired_keys=frozenset(fired_ledger),
         )
         if insertions:
             upcoming = [
@@ -1020,7 +1036,25 @@ class ScheduleCoordinator:
             policy,
             compress_floor_pct=100,  # 100 = no compression (defer-late only)
             independent_zones=independent,
+            # v1.39 — never-drop backstop: an unfired occurrence whose
+            # placement snapped into the past (its blocker vanished, e.g. a
+            # pruned chunked session) is re-placed at `now` so this tick's
+            # due window catches it — but ONLY if we were actively deferring
+            # it this uptime (_pending_seen), so runs deliberately skipped
+            # during rain lockout or HA downtime are never backfired.
+            rescue_stranded_before=last,
+            rescue_stranded_at=now,
+            rescue_eligible=lambda r: insertion_key(r) in self._pending_seen,
         )
+        # Remember every occurrence currently planned in the FUTURE — the
+        # rescue-eligibility gate above. In-memory; pruned by scheduled age
+        # once it grows (entries clear on firing via _record_run_fired).
+        for r in resolved:
+            if r.reason != REASON_COMMITTED and r.start_at > now:
+                self._pending_seen[insertion_key(r)] = r.scheduled_start_at
+        if len(self._pending_seen) > 512:
+            cutoff = now - timedelta(hours=48)
+            self._pending_seen = {k: v for k, v in self._pending_seen.items() if v >= cutoff}
         due = due_runs_since(resolved, last, now)
         # Committed runs are blockers ONLY — never (re)fire one even if its actual
         # start_at falls inside this tick's (last, now] window (e.g. a manual run
@@ -1063,29 +1097,30 @@ class ScheduleCoordinator:
                 # v1.17 — actionable "Run now" notification
                 await self._notify_missed_run(rec, run)
                 continue
-            if run.reason == REASON_GAP_INSERTED:
-                # Ledger BEFORE firing: whatever the gates decide (fire or
-                # skip), this occurrence is done — same one-shot semantics as
-                # an ordinary fired run, which is protected by its past
-                # placement instead. Without this the occurrence would be
-                # re-inserted into the NEXT gap (its scheduled start is still
-                # blocked by the ongoing long run) and watered twice.
-                self._record_gap_insertion_fired(run, now)
+            # Ledger BEFORE firing: whatever the gates decide (fire or skip),
+            # this occurrence is DONE — dropped from every later tick's
+            # planning (see the fired-occurrence ledger comment above).
+            self._record_run_fired(run, now)
             await self._fire_run(run)
 
-    def _record_gap_insertion_fired(self, run, now: datetime) -> None:
-        """v1.39 — remember that this scheduled occurrence fired via gap
-        insertion (keyed by gap_insertion.insertion_key). An ordinary fired
-        run is protected from re-firing by its past placement — once its
-        blockers clear it snaps behind the due window and strands (by
-        design). An inserted run's occurrence would instead be RE-inserted
-        into the long run's next gap on a later tick (its scheduled start is
-        still blocked) and watered twice; the ledger makes it permanently
-        ineligible. Entries prune after 24h — far beyond the longest
-        possible blocking session (MAX_SCHEDULE_DURATION_MIN = 8h) — and the
-        ledger persists in config so a restart can't forget a firing."""
-        ledger = self._config.setdefault("gap_insertions_fired", {})
+    def _record_run_fired(self, run, now: datetime) -> None:
+        """v1.39 — the fired-occurrence ledger: remember that this scheduled
+        occurrence has been consumed (fired, or gate-skipped at fire time),
+        keyed by gap_insertion.insertion_key. The tick loop drops ledgered
+        occurrences from planning entirely, replacing the old implicit
+        protection (a fired run stranding behind the due window once its
+        blockers cleared) — which broke down for chunked runs, whose 'ghost'
+        occurrence carried water time instead of wall time and mis-placed the
+        runs chained behind it (the v1.38.x chain-deferral loss). It also
+        keeps a gap-inserted occurrence from being re-inserted into the long
+        run's next gap and watered twice, and makes the resolver's stranded-
+        run rescue safe (it can never pull forward an already-fired run).
+        Entries prune after 24h — far beyond the longest possible blocking
+        session (MAX_SCHEDULE_DURATION_MIN = 8h) — and the ledger persists in
+        config so a restart can't forget a firing."""
+        ledger = self._config.setdefault("fired_occurrences", {})
         ledger[insertion_key(run)] = now.isoformat()
+        self._pending_seen.pop(insertion_key(run), None)
         cutoff = now - timedelta(hours=24)
         for key, fired_at in list(ledger.items()):
             try:
@@ -1093,12 +1128,13 @@ class ScheduleCoordinator:
                     del ledger[key]
             except (TypeError, ValueError):
                 del ledger[key]  # malformed — drop rather than keep forever
-        _LOGGER.info(
-            "Firing %s (%s) inside a chunked run's inter-block gap at %s",
-            run.zone_entity_id,
-            run.schedule_name,
-            run.start_at,
-        )
+        if run.reason == REASON_GAP_INSERTED:
+            _LOGGER.info(
+                "Firing %s (%s) inside a chunked run's inter-block gap at %s",
+                run.zone_entity_id,
+                run.schedule_name,
+                run.start_at,
+            )
         self._hass.async_create_task(self.async_save_config())
 
     async def _notify_missed_run(self, record, run) -> None:
