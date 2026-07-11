@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Watering-advisor job (v1.39) — the external LLM half of the smart scheduler.
 
-Runs OFF the Home Assistant box, on the LLM host (designed for the Mac mini,
-where the Qwen text model listens on localhost — deliberately not LAN-exposed).
+Runs OFF the Home Assistant box, on your LLM host (any machine serving a local
+OpenAI-compatible text model on localhost — deliberately not LAN-exposed).
 Every run it:
 
   1. GETs the integration's health.json (schedules, per-plant need-vs-delivered
@@ -58,7 +58,7 @@ CFG = {
 }
 
 _SYSTEM = (
-    "You are an irrigation scheduling advisor for a desert (Phoenix-area) yard. "
+    "You are an irrigation scheduling advisor for a hot-arid (desert) yard. "
     "You may ONLY propose items of these two exact shapes, and only when the data "
     "supports them:\n"
     '  {"type":"shift_time","schedule_id":"<id from the data>","proposed_start":"HH:MM",'
