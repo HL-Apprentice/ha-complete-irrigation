@@ -221,6 +221,7 @@ async def list_planned_runs(hass, connection, msg):
         from_dt=from_dt,
         until_dt=until_dt,
         zone_buffer_seconds=coord.config.get("zone_buffer_seconds"),
+        sun_times=coord.sun_times,
     )
     resolved = resolve_conflicts(raw, POLICY_DEFER_NEW, independent_zones=coord.independent_zones)
 

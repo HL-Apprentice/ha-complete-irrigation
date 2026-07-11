@@ -18,6 +18,12 @@ _LOGGER = logging.getLogger(__name__)
 
 _VALID_WEEKDAYS = frozenset(range(7))  # 0=Mon .. 6=Sun (ISO)
 
+SUN_EVENTS = ("sunrise", "sunset")
+ANCHOR_START = "start"
+ANCHOR_FINISH = "finish"
+_VALID_ANCHORS = (ANCHOR_START, ANCHOR_FINISH)
+MAX_SUN_OFFSET_MIN = 240
+
 MODE_WEEKDAYS = "weekdays"
 MODE_INTERVAL = "interval"
 MODE_INTERVAL_HOURS = "interval_hours"
@@ -142,6 +148,15 @@ class Schedule:
     # None = no color (UI falls back to the default accent). Surfaces:
     # schedule-row left stripe, day-calendar pill tint.
     color: str | None = None
+    # v1.40 — sun-anchored start (Irrigation Unlimited-inspired). When sun_event
+    # is set, the occurrence's start is resolved per-day from that sun event ±
+    # sun_offset_minutes; anchor="finish" back-computes the start so the WHOLE
+    # schedule (all zone steps + buffers) COMPLETES at that moment ("finish at
+    # sunrise"). start_time remains required and is the fallback whenever sun
+    # times are unavailable (e.g. polar edge cases or provider failure).
+    sun_event: str | None = None
+    sun_offset_minutes: int = 0
+    anchor: str = ANCHOR_START
 
     def __post_init__(self) -> None:
         # Validation split into small focused helpers — keeps each rule
@@ -156,6 +171,33 @@ class Schedule:
         self._validate_interval_end_time_only_in_hours_mode()
         self._validate_active_window()
         self._validate_zone_steps()
+        self._validate_sun()
+
+    def _validate_sun(self) -> None:
+        if self.sun_event is not None and self.sun_event not in SUN_EVENTS:
+            raise ValueError(
+                f"sun_event must be one of {SUN_EVENTS} or None, got {self.sun_event!r}"
+            )
+        if not isinstance(self.sun_offset_minutes, int) or not (
+            -MAX_SUN_OFFSET_MIN <= self.sun_offset_minutes <= MAX_SUN_OFFSET_MIN
+        ):
+            raise ValueError(
+                f"sun_offset_minutes must be an int in [-{MAX_SUN_OFFSET_MIN}, "
+                f"{MAX_SUN_OFFSET_MIN}], got {self.sun_offset_minutes!r}"
+            )
+        if self.anchor not in _VALID_ANCHORS:
+            raise ValueError(f"anchor must be one of {_VALID_ANCHORS}, got {self.anchor!r}")
+        if self.sun_event is not None and self.mode == MODE_INTERVAL_HOURS:
+            raise ValueError("sun_event is not supported in interval_hours mode")
+
+    def total_span_minutes(self, zone_buffer_seconds: int | None = None) -> float:
+        """Total wall-clock span of one firing: all zone steps + inter-zone
+        buffers (single-zone = duration_minutes). Used by the finish anchor."""
+        buf = DEFAULT_ZONE_BUFFER_SECONDS if zone_buffer_seconds is None else zone_buffer_seconds
+        if not self.zone_steps:
+            return float(self.duration_minutes)
+        total = sum(st.duration_minutes for st in self.zone_steps)
+        return total + (len(self.zone_steps) - 1) * buf / 60.0
 
     def _validate_basics(self) -> None:
         if not self.name or not self.name.strip():
@@ -277,6 +319,9 @@ class Schedule:
             "ignore_hot_weather": self.ignore_hot_weather,
             "ignore_rain_lockout": self.ignore_rain_lockout,
             "color": self.color,
+            "sun_event": self.sun_event,
+            "sun_offset_minutes": self.sun_offset_minutes,
+            "anchor": self.anchor,
         }
 
     @classmethod
@@ -317,6 +362,10 @@ class Schedule:
             ignore_hot_weather=bool(data.get("ignore_hot_weather", False)),
             ignore_rain_lockout=bool(data.get("ignore_rain_lockout", False)),
             color=data.get("color") or None,
+            # v1.40 — tolerant read: pre-v1.40 records have none of these.
+            sun_event=(data.get("sun_event") if data.get("sun_event") in SUN_EVENTS else None),
+            sun_offset_minutes=int(data.get("sun_offset_minutes") or 0),
+            anchor=(data.get("anchor") if data.get("anchor") in _VALID_ANCHORS else ANCHOR_START),
         )
 
 

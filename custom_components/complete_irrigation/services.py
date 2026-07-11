@@ -232,6 +232,11 @@ _ADD_SCHEDULE_SCHEMA = vol.Schema(
         vol.Optional("interval_hours"): vol.All(vol.Coerce(int), vol.Range(min=1, max=72)),
         vol.Optional("interval_anchor"): cv.date,
         vol.Optional("interval_end_time"): vol.Any(None, cv.time),
+        # v1.40 — sun-anchored starts: sunrise/sunset ± offset; anchor=finish
+        # back-computes the start so the firing COMPLETES at the sun moment.
+        vol.Optional("sun_event"): vol.Any(None, vol.In(("sunrise", "sunset"))),
+        vol.Optional("sun_offset_minutes"): vol.All(vol.Coerce(int), vol.Range(min=-240, max=240)),
+        vol.Optional("anchor"): vol.In(("start", "finish")),
         # Active period (v1.12). end_date already accepted (no field here —
         # historically Schedule.end_date wasn't a service field; we add it
         # below alongside start_date + repeat_annually).
@@ -268,6 +273,11 @@ _UPDATE_SCHEDULE_SCHEMA = vol.Schema(
         vol.Optional("interval_hours"): vol.All(vol.Coerce(int), vol.Range(min=1, max=72)),
         vol.Optional("interval_anchor"): cv.date,
         vol.Optional("interval_end_time"): vol.Any(None, cv.time),
+        # v1.40 — sun-anchored starts: sunrise/sunset ± offset; anchor=finish
+        # back-computes the start so the firing COMPLETES at the sun moment.
+        vol.Optional("sun_event"): vol.Any(None, vol.In(("sunrise", "sunset"))),
+        vol.Optional("sun_offset_minutes"): vol.All(vol.Coerce(int), vol.Range(min=-240, max=240)),
+        vol.Optional("anchor"): vol.In(("start", "finish")),
         vol.Optional("start_date"): vol.Any(None, cv.date),
         vol.Optional("end_date"): vol.Any(None, cv.date),
         vol.Optional("repeat_annually"): cv.boolean,
@@ -1484,6 +1494,10 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             ignore_hot_weather=data.get("ignore_hot_weather", False),
             ignore_rain_lockout=data.get("ignore_rain_lockout", False),
             color=data.get("color"),
+            # v1.40 — sun anchoring
+            sun_event=data.get("sun_event"),
+            sun_offset_minutes=data.get("sun_offset_minutes", 0),
+            anchor=data.get("anchor", "start"),
             # PRD #60 — provenance marker so calendar.py / establishment
             # can identify their own entries when #59 two-way calendar
             # edit lands. Anything coming through the service (panel,
@@ -1527,6 +1541,9 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             "ignore_hot_weather",
             "ignore_rain_lockout",
             "color",
+            "sun_event",
+            "sun_offset_minutes",
+            "anchor",
         ):
             if key in data:
                 overrides[key] = data[key]

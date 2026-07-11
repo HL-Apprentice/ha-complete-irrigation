@@ -134,6 +134,7 @@ class IrrigationHealthView(HomeAssistantView):
             coord.schedule_store.enabled_schedules(),
             from_dt=now,
             until_dt=now + timedelta(days=_NEXT_RUN_LOOKAHEAD_DAYS),
+            sun_times=coord.sun_times,
         )
         next_by_sched: dict[str, str] = {}
         for r in planned:

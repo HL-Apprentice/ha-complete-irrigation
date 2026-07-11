@@ -116,6 +116,9 @@ def test_schedule_to_dict_has_expected_shape():
         "ignore_hot_weather": False,
         "ignore_rain_lockout": False,
         "color": None,
+        "sun_event": None,
+        "sun_offset_minutes": 0,
+        "anchor": "start",
     }
 
 
