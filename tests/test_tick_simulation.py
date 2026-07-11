@@ -185,7 +185,7 @@ def test_simple_daily_runs_all_fire_once():
 
 
 def simulate_sessions(
-    scheds, start, end, *, cap_min=58, gap_seconds=1200, insertion=True, stop=None
+    scheds, start, end, *, cap_min=58, gap_seconds=1200, insertion=True, stop=None, lockout=None
 ):
     """Coordinator-faithful tick loop. Returns (fires, busy):
     fires  — one dict per logical firing (key, zone, scheduled, fire_time,
@@ -195,6 +195,11 @@ def simulate_sessions(
     stop   — optional (zone, at_dt): the user stops that zone's run at that
              minute (session cleared, its open interval truncated) — the
              stop-mid-insertion scenario.
+    lockout — optional (from_dt, until_dt): rain lockout. Mirrors _tick's
+             v1.17.3 behavior exactly: last_tick still ADVANCES on every
+             locked tick, then the tick early-returns before planning/firing
+             (no ignore_rain_lockout schedules here), so slots inside the
+             window are deliberately skipped, never backfired.
     """
     sessions: dict[str, dict] = {}
     ledger: dict[str, str] = {}  # coordinator's fired_occurrences (every scheduled firing)
@@ -206,6 +211,11 @@ def simulate_sessions(
     while now <= end:
         if last is None:
             last = now
+            now += timedelta(minutes=1)
+            continue
+
+        if lockout is not None and lockout[0] <= now < lockout[1]:
+            last = now  # _tick advances last_tick BEFORE its locked-out early return
             now += timedelta(minutes=1)
             continue
 
@@ -236,7 +246,13 @@ def simulate_sessions(
         if ledger:
             upcoming = [r for r in upcoming if insertion_key(r) not in ledger]
         if insertion:
-            plan = plan_gap_insertions(upcoming, sessions, now, fired_keys=frozenset(ledger))
+            plan = plan_gap_insertions(
+                upcoming,
+                sessions,
+                now,
+                fired_keys=frozenset(ledger),
+                controller_cap_minutes=cap_min,
+            )
             if plan:
                 upcoming = [
                     (
@@ -256,7 +272,14 @@ def simulate_sessions(
             rescue_eligible=lambda r: insertion_key(r) in pending_seen,
         )
         for run in resolved:
-            if run.reason != REASON_COMMITTED and run.start_at > now:
+            # Displaced-only (mirrors coordinator._tick): recording EVERY
+            # future-planned occurrence would make lockout-skipped slots
+            # rescue-eligible — the post-lockout backfire flood.
+            if (
+                run.reason != REASON_COMMITTED
+                and run.start_at > now
+                and (run.reason == REASON_GAP_INSERTED or run.start_at > run.scheduled_start_at)
+            ):
                 pending_seen[insertion_key(run)] = run.scheduled_start_at
         for run in due_runs_since(resolved, last, now):
             if run.reason == REASON_COMMITTED:
@@ -586,3 +609,48 @@ def test_randomized_days_never_lose_a_run_or_double_book():
         for a, b in pairwise(ordered):
             a_end = a["fire_time"] + timedelta(minutes=a["minutes"])
             assert b["fire_time"] >= a_end, f"double-booked: {a['key']} vs {b['key']} | {ctx}"
+
+
+# ── v1.39.1 watering-critical regressions ────────────────────────────────────
+
+
+def test_slot_skipped_during_rain_lockout_is_not_backfired():
+    """_pending_seen used to record EVERY future-planned occurrence, so a slot
+    that then fell inside a rain lockout stayed rescue-eligible and BACKFIRED
+    on the first post-lockout tick — the exact v1.17.3 flood the design
+    forbids. Displaced-only recording keeps a never-displaced slot ineligible:
+    skipped during lockout means skipped, not watered-later."""
+    scheds = [_sched("garden", 6, 30, 15)]
+    start = UDAY + timedelta(hours=4, minutes=30)
+    end = UDAY + timedelta(hours=9, minutes=30)
+
+    # Sanity: without lockout the 06:30 slot fires exactly once.
+    fires, _ = simulate_sessions(scheds, start, end)
+    assert len(fires) == 1
+
+    # Rain lockout 05:00 -> 08:00 swallows the slot; ticks from 04:30 onward
+    # had already enumerated it in the planning horizon (the pre-fix trap).
+    lockout = (UDAY + timedelta(hours=5), UDAY + timedelta(hours=8))
+    fires, busy = simulate_sessions(scheds, start, end, lockout=lockout)
+    assert fires == [], f"lockout-skipped slot was backfired: {fires}"
+    assert busy == []
+
+
+def test_would_chunk_run_is_never_gap_inserted():
+    """cap=5/gap=600 (schema-legal): a 6-min short FITS a 600s gap as one
+    continuous activation, but run_zone would CHUNK it ([5, 1] + a 600s
+    inter-block gap = ~16 min wall) and burst out of its host gap. It must
+    defer normally — never pinned, never fired as gap-inserted — and both
+    runs still fire exactly once with one valve open at a time."""
+    scheds = [
+        _sched("citrus", 6, 0, 12),  # blocks [5, 5, 2] at cap 5
+        _sched("garden", 6, 3, 6),  # would-chunk short, scheduled mid-giant
+    ]
+    start = UDAY + timedelta(hours=5, minutes=30)
+    end = UDAY + timedelta(hours=9)
+    fires, busy = simulate_sessions(scheds, start, end, cap_min=5, gap_seconds=600)
+
+    inserted = [f for f in fires if f["reason"] == REASON_GAP_INSERTED]
+    assert not inserted, f"a run longer than the controller cap was gap-inserted: {inserted}"
+    _assert_never_two_valves_open(busy)
+    assert {f["key"] for f in fires} == _expected_firings(scheds, start, end)
