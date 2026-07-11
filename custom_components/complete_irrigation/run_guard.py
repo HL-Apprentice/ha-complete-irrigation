@@ -52,3 +52,62 @@ def external_off_decision(
     if reasserts_left > 0:
         return "retry"
     return "abort"
+
+
+# v1.40 — "check back" valve-actuation verification (inspired by Irrigation
+# Unlimited's check_back). After commanding the zone switch on/off we re-read
+# its state this many seconds later and react if the command didn't take
+# (Rachio-cloud/WiFi command loss: the service call "succeeds" but the valve
+# never actuates and the switch state never flips). 0 disables the check.
+DEFAULT_VERIFY_SWITCH_SECONDS = 30
+
+
+def valve_verify_on_decision(
+    run_live: bool,
+    state_now: str,
+    external_off_pending: bool,
+    first_attempt: bool,
+) -> str:
+    """Decide what to do when the post-turn-ON verify check fires.
+
+    • "ended"          — the run is no longer live (auto-stop / Stop / abort
+                         already tore it down); nothing left to verify.
+    • "verified"       — the switch reports on; the command actuated.
+    • "defer_external" — the switch is off but the off was DETECTED by the
+                         run's state listener (its debounce is pending): the
+                         switch DID come on and something — possibly the
+                         user — turned it off. The external-off machinery
+                         owns that path (re-assert budget / abort); retrying
+                         on from here would fight it and override the user.
+    • "retry"          — off with no detected off-transition (the turn-on was
+                         most likely lost in flight): re-send turn_on once.
+    • "fail"           — still off after the retry: the valve never actuated.
+    """
+    if not run_live:
+        return "ended"
+    if state_now == "on":
+        return "verified"
+    if external_off_pending:
+        return "defer_external"
+    return "retry" if first_attempt else "fail"
+
+
+def valve_verify_off_decision(
+    new_run_live: bool,
+    state_now: str,
+    first_attempt: bool,
+) -> str:
+    """Decide what to do when the post-turn-OFF verify check fires.
+
+    • "superseded" — a NEW run started on this zone inside the verify window
+                     (a fresh manual run, or the next chunked block): it owns
+                     the valve now; enforcing the old off would kill it.
+    • "verified"   — the switch no longer reports on; the valve closed.
+    • "retry"      — still on: re-send turn_off once.
+    • "fail"       — still on after the retry: the valve may be stuck open.
+    """
+    if new_run_live:
+        return "superseded"
+    if state_now != "on":
+        return "verified"
+    return "retry" if first_attempt else "fail"
