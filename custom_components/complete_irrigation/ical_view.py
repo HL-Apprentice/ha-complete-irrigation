@@ -79,6 +79,7 @@ class IrrigationCalendarICSView(HomeAssistantView):
             coord.schedule_store.enabled_schedules(),
             from_dt=now,
             until_dt=now + timedelta(days=_LOOKAHEAD_DAYS),
+            sun_times=coord.sun_times,
         )
         runs = [
             r

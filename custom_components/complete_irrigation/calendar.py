@@ -81,6 +81,7 @@ class IrrigationCalendar(CalendarEntity):
             self._coordinator.schedule_store.enabled_schedules(),
             from_dt=now - timedelta(hours=1),  # include events that started recently
             until_dt=now + timedelta(days=30),
+            sun_times=self._coordinator.sun_times,
         )
         upcoming = [
             r
@@ -110,6 +111,7 @@ class IrrigationCalendar(CalendarEntity):
             self._coordinator.schedule_store.enabled_schedules(),
             from_dt=start_date,
             until_dt=end_date,
+            sun_times=self._coordinator.sun_times,
         )
         runs = [
             r

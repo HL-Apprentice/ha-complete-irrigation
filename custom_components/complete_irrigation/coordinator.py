@@ -334,6 +334,23 @@ class ScheduleCoordinator:
     def care_tasks(self) -> CareTaskStore:
         return self._care_tasks
 
+    def sun_times(self, day):
+        """v1.40 — (sunrise, sunset) local-aware datetimes for `day`, or None.
+        Passed into next_runs so sun-anchored schedules resolve per-date;
+        None (or a raise, which the planner catches) falls back to the
+        schedule's fixed start_time."""
+        try:
+            from homeassistant.helpers.sun import get_astral_event_date
+            from homeassistant.util import dt as dt_util
+
+            sunrise = get_astral_event_date(self._hass, "sunrise", day)
+            sunset = get_astral_event_date(self._hass, "sunset", day)
+            if sunrise is None or sunset is None:
+                return None
+            return (dt_util.as_local(sunrise), dt_util.as_local(sunset))
+        except Exception:
+            return None
+
     def register_lockout_listener(self, callback: Callable[[], None]) -> None:
         self._lockout_listeners.append(callback)
 
@@ -965,6 +982,7 @@ class ScheduleCoordinator:
             from_dt=last - horizon,
             until_dt=now + horizon,
             zone_buffer_seconds=int(zone_buffer) if zone_buffer is not None else None,
+            sun_times=self.sun_times,
         )
         # Honor a user-selected global conflict policy (Settings tab).
         # Unknown / missing → keep safe default of POLICY_DEFER_NEW.
@@ -1973,6 +1991,7 @@ class ScheduleCoordinator:
                 from_dt=start_of_day,
                 until_dt=end_of_day,
                 zone_buffer_seconds=int(zb) if zb is not None else None,
+                sun_times=self.sun_times,
             )
             eto = float(self.effective_eto())
             eto_factor = max(0.0, min(1.0, eto / SANE_ETO_MAX)) if SANE_ETO_MAX else 0.0

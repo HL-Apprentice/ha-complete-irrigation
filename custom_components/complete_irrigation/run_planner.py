@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from .schedule import (
+    ANCHOR_FINISH,
     DEFAULT_ZONE_BUFFER_SECONDS,
     MODE_INTERVAL,
     MODE_INTERVAL_HOURS,
@@ -51,6 +52,7 @@ def next_runs(
     until_dt: datetime,
     *,
     zone_buffer_seconds: int | None = None,
+    sun_times=None,
 ) -> list[PlannedRun]:
     """Return all runs in [from_dt, until_dt) sorted by start_at.
 
@@ -65,7 +67,7 @@ def next_runs(
     for sched in schedules:
         if not sched.enabled:
             continue
-        runs.extend(_runs_for_schedule(sched, from_dt, until_dt, zone_buffer_seconds))
+        runs.extend(_runs_for_schedule(sched, from_dt, until_dt, zone_buffer_seconds, sun_times))
 
     return sorted(runs, key=lambda r: r.start_at)
 
@@ -75,6 +77,7 @@ def _runs_for_schedule(
     from_dt: datetime,
     until_dt: datetime,
     zone_buffer_seconds: int | None = None,
+    sun_times=None,
 ) -> Iterable[PlannedRun]:
     """All firings of one Schedule in the window.
 
@@ -87,11 +90,11 @@ def _runs_for_schedule(
     Preserves `from_dt`'s tzinfo so aware/naive comparisons don't blow up.
     """
     if sched.mode == MODE_INTERVAL:
-        yield from _runs_for_interval(sched, from_dt, until_dt, zone_buffer_seconds)
+        yield from _runs_for_interval(sched, from_dt, until_dt, zone_buffer_seconds, sun_times)
     elif sched.mode == MODE_INTERVAL_HOURS:
         yield from _runs_for_interval_hours(sched, from_dt, until_dt, zone_buffer_seconds)
     else:
-        yield from _runs_for_weekdays(sched, from_dt, until_dt, zone_buffer_seconds)
+        yield from _runs_for_weekdays(sched, from_dt, until_dt, zone_buffer_seconds, sun_times)
 
 
 def _expand_steps(
@@ -119,11 +122,39 @@ def _expand_steps(
         )
 
 
+def _base_start_for(sched, day, tz, buffer_seconds, sun_times):
+    """The concrete start datetime for one occurrence on `day`.
+
+    v1.40 — when the schedule is sun-anchored and the provider yields times
+    for the day, resolve sunrise/sunset ± offset; anchor="finish" backs the
+    start up by the schedule's total span so the firing COMPLETES at the
+    resolved moment. Falls back to the fixed start_time whenever sun times
+    are unavailable (provider absent/failed) — a sun schedule never goes
+    silent, it just runs at its fallback time.
+    """
+    if sched.sun_event is not None and sun_times is not None:
+        st = None
+        try:
+            st = sun_times(day)
+        except Exception:  # provider failure -> fixed-time fallback
+            st = None
+        if st is not None:
+            ev = st[0] if sched.sun_event == "sunrise" else st[1]
+            dt = ev + timedelta(minutes=sched.sun_offset_minutes)
+            if sched.anchor == ANCHOR_FINISH:
+                dt -= timedelta(minutes=sched.total_span_minutes(buffer_seconds))
+            if tz is not None and dt.tzinfo is not None:
+                dt = dt.astimezone(tz)
+            return dt
+    return datetime.combine(day, sched.start_time, tzinfo=tz)
+
+
 def _runs_for_weekdays(
     sched: Schedule,
     from_dt: datetime,
     until_dt: datetime,
     buffer_seconds: int | None = None,
+    sun_times=None,
 ) -> Iterable[PlannedRun]:
     tz = from_dt.tzinfo
     weekday_set = set(sched.weekdays)
@@ -138,7 +169,7 @@ def _runs_for_weekdays(
 
     while current <= end:
         if current.weekday() in weekday_set and is_within_active_window(sched, current):
-            base_start = datetime.combine(current, sched.start_time, tzinfo=tz)
+            base_start = _base_start_for(sched, current, tz, buffer_seconds, sun_times)
             for run in _expand_steps(sched, base_start, buffer_seconds):
                 # Window check on each step individually so a multi-zone
                 # firing that begins inside the window but spills past
@@ -153,6 +184,7 @@ def _runs_for_interval(
     from_dt: datetime,
     until_dt: datetime,
     buffer_seconds: int | None = None,
+    sun_times=None,
 ) -> Iterable[PlannedRun]:
     """Generate dates every `interval_days` days starting at `interval_anchor`.
     Skip past dates before the window, stop at end_date / window end."""
@@ -174,7 +206,7 @@ def _runs_for_interval(
 
     while current <= end:
         if is_within_active_window(sched, current):
-            base_start = datetime.combine(current, sched.start_time, tzinfo=tz)
+            base_start = _base_start_for(sched, current, tz, buffer_seconds, sun_times)
             for run in _expand_steps(sched, base_start, buffer_seconds):
                 if from_dt <= run.start_at < until_dt:
                     yield run
