@@ -321,6 +321,13 @@
       ignore_rain_lockout: false,
       // v1.18 — optional color for visual identification. "" = none.
       color: "",
+      // v1.40 — sun-anchored start. "" = fixed time; "sunrise"/"sunset"
+      // resolve the start daily from the sun ± offset. anchor "finish"
+      // means the run COMPLETES at that moment. start_time stays required
+      // as the fallback when sun data is unavailable.
+      sun_event: "",
+      sun_offset_minutes: "0",
+      anchor: "start",
       // Multi-zone: additional zones after the primary. Each is
       // {zone_entity_id, duration_minutes}. Empty = single-zone schedule.
       // The primary (top-level zone_entity_id + duration_minutes) is
@@ -1227,6 +1234,10 @@
         // Mode toggle flips which fields show — re-render the modal.
         this._scheduleEditor.mode = t.value;
         this._renderNow();
+      } else if (t.name === "sun_event") {
+        // v1.40 — flips the offset/anchor controls + fallback-time label.
+        this._scheduleEditor.sun_event = t.value;
+        this._renderNow();
       } else if (t.name === "duration_h" || t.name === "duration_m") {
         this._syncDurationFromForm();
       } else if (t.name === "start_time_h" || t.name === "start_time_m") {
@@ -1589,6 +1600,11 @@
         ignore_hot_weather: !!found.ignore_hot_weather,
         ignore_rain_lockout: !!found.ignore_rain_lockout,
         color: found.color || "",
+        // v1.40 — sun-anchored start (draft strings; "" = fixed time)
+        sun_event: found.sun_event || "",
+        sun_offset_minutes:
+          found.sun_offset_minutes != null ? String(found.sun_offset_minutes) : "0",
+        anchor: found.anchor || "start",
         extra_steps: extra.map((s) => ({
           zone_entity_id: s.zone_entity_id,
           duration_minutes: s.duration_minutes,
@@ -1629,6 +1645,11 @@
         ignore_hot_weather: !!found.ignore_hot_weather,
         ignore_rain_lockout: !!found.ignore_rain_lockout,
         color: found.color || "",
+        // v1.40 — the copy keeps the source's sun-anchored timing too
+        sun_event: found.sun_event || "",
+        sun_offset_minutes:
+          found.sun_offset_minutes != null ? String(found.sun_offset_minutes) : "0",
+        anchor: found.anchor || "start",
         extra_steps: extra.map((s) => ({
           zone_entity_id: s.zone_entity_id,
           duration_minutes: s.duration_minutes,
@@ -2277,6 +2298,19 @@
         }
       }
 
+      // v1.40 — sun-anchored start. Only when a sun event is active (and
+      // never in interval_hours mode — the backend rejects it; a stale
+      // draft value from before a mode switch is silently dropped).
+      const sunEvent =
+        mode !== "interval_hours" &&
+        (e.sun_event === "sunrise" || e.sun_event === "sunset")
+          ? e.sun_event
+          : null;
+      const sunOffset = sunEvent ? parseInt(e.sun_offset_minutes, 10) : 0;
+      if (sunEvent && (!Number.isFinite(sunOffset) || sunOffset < -240 || sunOffset > 240)) {
+        return alert("Sun offset must be between -240 and 240 minutes.");
+      }
+
       // Validate annual-repeat preconditions client-side for a friendlier
       // error than the server-side voluptuous failure.
       if (e.repeat_annually && (!e.start_date || !e.end_date)) {
@@ -2312,6 +2346,11 @@
         ignore_rain_lockout: !!e.ignore_rain_lockout,
         // v1.18 — color ("" → null clears it on the server)
         color: e.color ? e.color : null,
+        // v1.40 — sun-anchored start. sun_event: null EXPLICITLY clears a
+        // previously-set sun anchor on edit; offset/anchor reset with it.
+        sun_event: sunEvent,
+        sun_offset_minutes: sunEvent ? sunOffset : 0,
+        anchor: sunEvent && e.anchor === "finish" ? "finish" : "start",
       };
       if (mode === "weekdays") {
         payload.weekdays = e.weekdays;
@@ -3235,6 +3274,9 @@
 
       const policy = c.conflict_policy || "defer_new";
       const zoneBuffer = c.zone_buffer_seconds != null ? c.zone_buffer_seconds : 30;
+      // v1.40 — valve-actuation verification window (0 = disabled)
+      const verifySeconds =
+        c.verify_switch_seconds != null ? c.verify_switch_seconds : 30;
       const snoozedUntil = c.weekly_reminder_snoozed_until || "";
       const adminOnlyServices = !!c.admin_only_services;
       const policyOpt = (val, label) =>
@@ -3282,7 +3324,11 @@
         `<form class="weather-form" data-form="zone-buffer" style="background:transparent;border:none;padding:0;max-width:none">` +
         `<label>Inter-zone buffer (seconds)</label>` +
         `<input name="zone_buffer_seconds" type="number" min="0" max="600" step="1" value="${zoneBuffer}" />` +
-        `<div class="modal-actions"><button type="submit" class="btn btn-primary">Save buffer</button></div>` +
+        // v1.40 — valve-actuation verification (0 = disabled)
+        `<label style="margin-top:8px">Valve verification (seconds)</label>` +
+        `<input name="verify_switch_seconds" type="number" min="0" max="300" step="1" value="${escapeAttr(String(verifySeconds))}" />` +
+        `<p class="section-hint" style="margin-top:6px">Re-checks the switch after on/off commands; 0 disables.</p>` +
+        `<div class="modal-actions"><button type="submit" class="btn btn-primary">Save timing</button></div>` +
         `</form>` +
         `</section>` +
         // PRD #81 — snooze the Sunday weekly reminder
@@ -3469,14 +3515,26 @@
       if (!Number.isFinite(seconds) || seconds < 0 || seconds > 600) {
         return alert("Buffer must be 0–600 seconds.");
       }
+      // v1.40 — valve verification rides on the same set_general_config save.
+      const verify = parseInt(
+        form.querySelector('input[name="verify_switch_seconds"]')?.value,
+        10
+      );
+      if (!Number.isFinite(verify) || verify < 0 || verify > 300) {
+        return alert("Valve verification must be 0–300 seconds.");
+      }
       try {
         await this._hass.callService(
           "complete_irrigation",
           "set_general_config",
-          { zone_buffer_seconds: seconds }
+          { zone_buffer_seconds: seconds, verify_switch_seconds: verify }
         );
         await this._fetchConfig();
-        alert(`Inter-zone buffer saved: ${seconds}s.`);
+        alert(
+          `Saved: inter-zone buffer ${seconds}s, valve verification ${
+            verify ? verify + "s" : "off"
+          }.`
+        );
       } catch (err) {
         alert("Failed to save: " + (err?.message || err));
       }
@@ -6683,6 +6741,14 @@
           ? `${Math.floor(dur / 60)}h ${dur % 60 ? String(dur % 60).padStart(2, "0") + "m" : ""}`.trim()
           : `${dur}m`;
       const enabledClass = s.enabled ? "enabled" : "disabled";
+      // v1.40 — sun-anchored schedules show the sun phrase instead of the
+      // raw fallback time, e.g. "☀️ finishes at sunrise −30m".
+      let timeLabel = s.start_time;
+      if (s.sun_event === "sunrise" || s.sun_event === "sunset") {
+        const off = s.sun_offset_minutes || 0;
+        const offTxt = off ? ` ${off > 0 ? "+" : "−"}${Math.abs(off)}m` : "";
+        timeLabel = `☀️ ${s.anchor === "finish" ? "finishes" : "starts"} at ${s.sun_event}${offTxt}`;
+      }
       // v1.18 — left-edge color stripe when a color is set.
       const stripeStyle = s.color
         ? ` style="border-left:4px solid ${escapeAttr(s.color)};padding-left:12px"`
@@ -6694,7 +6760,7 @@
           s.enabled ? "" : " (disabled)"
         }</div>` +
         `<div class="schedule-meta">` +
-        `${escapeHtml(zoneName)} · ${s.start_time} · ${durLabel} · ${escapeHtml(recurrence)}${escapeHtml(periodLabel)}` +
+        `${escapeHtml(zoneName)} · ${escapeHtml(String(timeLabel))} · ${durLabel} · ${escapeHtml(recurrence)}${escapeHtml(periodLabel)}` +
         `</div>` +
         `</div>` +
         `<div class="schedule-row-actions">` +
@@ -6877,6 +6943,48 @@
         `<select name="zone_entity_id" required>${
           zoneOpts || `<option value="">No zones configured</option>`
         }</select>` +
+        // v1.40 — sun-anchored start timing. Not supported in
+        // interval_hours mode (backend rejects) → hide the selector there
+        // and force Fixed time in the save payload.
+        (() => {
+          const sunAllowed = mode !== "interval_hours";
+          const sunOn =
+            sunAllowed && (e.sun_event === "sunrise" || e.sun_event === "sunset");
+          if (!sunAllowed) return "";
+          return (
+            `<label>Start timing ${tip("Fixed time fires at the clock time below. At sunrise/sunset resolves the start daily from the sun ± offset; the clock time below becomes a fallback used only when sun data is unavailable.")}</label>` +
+            `<select name="sun_event">` +
+            `<option value=""${sunOn ? "" : " selected"}>Fixed time</option>` +
+            `<option value="sunrise"${
+              e.sun_event === "sunrise" ? " selected" : ""
+            }>At sunrise</option>` +
+            `<option value="sunset"${
+              e.sun_event === "sunset" ? " selected" : ""
+            }>At sunset</option>` +
+            `</select>` +
+            (sunOn
+              ? `<div class="row-2 sun-timing-row">` +
+                `<div>` +
+                `<label>Offset (min) <small style="color:var(--ci-text-2);font-size:13px">(negative = before)</small></label>` +
+                `<input name="sun_offset_minutes" type="number" min="-240" max="240" step="1" value="${escapeAttr(
+                  String(e.sun_offset_minutes == null ? 0 : e.sun_offset_minutes)
+                )}" />` +
+                `</div>` +
+                `<div>` +
+                `<label>Anchor ${tip("Start = the run begins at the sun moment. Finish = the run is scheduled to COMPLETE at that moment (e.g. 'finish at sunrise').")}</label>` +
+                `<select name="anchor">` +
+                `<option value="start"${
+                  e.anchor === "finish" ? "" : " selected"
+                }>Start at this time</option>` +
+                `<option value="finish"${
+                  e.anchor === "finish" ? " selected" : ""
+                }>Finish at this time</option>` +
+                `</select>` +
+                `</div>` +
+                `</div>`
+              : "")
+          );
+        })() +
         // Split start_time "HH:MM" into hour + minute for the two number
         // inputs. macOS HA app's WKWebView crashes on the native
         // <input type="time"> picker, so we render plain number boxes.
@@ -6884,10 +6992,16 @@
           const [stH, stM] = (e.start_time || "06:00")
             .split(":")
             .map((v) => parseInt(v, 10) || 0);
+          // v1.40 — with a sun event active the clock time is the FALLBACK.
+          const sunOn =
+            mode !== "interval_hours" &&
+            (e.sun_event === "sunrise" || e.sun_event === "sunset");
           return (
             `<div class="row-2 schedule-time-row">` +
             `<div>` +
-            `<label>Start time ${tip("Time of day (24h, local) the run starts. Defaults to 06:00.")}</label>` +
+            (sunOn
+              ? `<label>Fallback time ${tip("Used only if sun data is unavailable (e.g. the sun integration is down). 24h, local.")}</label>`
+              : `<label>Start time ${tip("Time of day (24h, local) the run starts. Defaults to 06:00.")}</label>`) +
             `<div class="duration-row">` +
             `<input name="start_time_h" type="number" min="0" max="23" step="1" value="${stH}" aria-label="Hour (0-23)" required />` +
             `<span class="duration-unit">h</span>` +
@@ -7184,6 +7298,8 @@
         `.plant-drips{margin-top:10px;font-size:13px}` +
         `.plant-drips-line{font-weight:600;color:var(--ci-text)}` +
         `.plant-drips-hint{color:var(--ci-text-2)}` +
+        // v1.40 — sun-anchored start timing (schedule editor)
+        `.sun-timing-row{margin-top:8px}` +
         // v1.40 — vision-endpoint connection test (Settings)
         `.vision-test-result{display:block;margin-top:8px;font-size:13px;font-weight:600}` +
         `.vision-test-ok{color:#2e7d32}` +
