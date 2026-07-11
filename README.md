@@ -132,6 +132,35 @@ When two schedules' run windows overlap, pick one of: defer new (safest, default
 ### Calendar feed (Settings tab → Copy)
 Subscribe to `/api/complete_irrigation/calendar.ics` from your phone calendar app for the next 30 days of planned runs.
 
+## Local AI setup (all optional, all advisory-only)
+
+Three features use a local LLM you host yourself — nothing leaves your network,
+and none of them can change watering; every output goes through a server-side
+validation rail and applies only when you tap Apply.
+
+### 1. Species identification (panel)
+Photo → species + care sheet, used by "📷 Add from photo" and 🔍 Identify.
+- Host any OpenAI-compatible **vision** model (e.g. Ollama with `qwen2.5vl:7b`
+  on a GPU box).
+- Panel → **Settings → Vision endpoint**: enter the FULL chat-completions URL,
+  e.g. `http://<gpu-host>:11434/v1/chat/completions`, and the model tag,
+  e.g. `qwen2.5vl:7b` → Save.
+
+### 2. Vision health checks (external job)
+`tools/vision_health_job.py` compares each plant's photos over time (~biannual
+per plant). Run it on the GPU host on a weekly cron/scheduler. Config via env:
+`VH_HEALTH_URL`, `VH_HA_URL`, `VH_TOKEN_FILE` (a root-only file holding an
+admin long-lived access token), `VH_VISION_URL`, `VH_VISION_MODEL`. It POSTs
+verdicts to `set_plant_health`; the integration's rail bounds them.
+
+### 3. Watering advisor (external job)
+`tools/watering_advisor_job.py` reads `health.json` (schedules, per-plant
+need-vs-delivered, daily plan, ETo) and asks a local **text** model for at most
+6 proposals in two shapes only: move a schedule's start time, or resize a
+plant's drip set. Config via env: `WA_HEALTH_URL`, `WA_HA_URL`, `WA_TOKEN_FILE`,
+`WA_LLM_URL` (the LLM host's local endpoint), `WA_LLM_MODEL`. Proposals appear
+in the panel's 🤖 advisor card — each item applies only when you tap it.
+
 ## All services
 
 Most users won't need these — the panel covers it. Available for advanced automations.
