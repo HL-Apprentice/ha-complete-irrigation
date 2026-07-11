@@ -55,10 +55,13 @@ from .manual_run import ManualRun, validate_run_duration
 from .notifications import CATEGORY_CRITICAL  # v1.16: promoted from inline imports
 from .plant import PlantRecord
 from .run_guard import (
+    DEFAULT_VERIFY_SWITCH_SECONDS,
     EXTERNAL_OFF_DEBOUNCE_SECONDS,
     EXTERNAL_OFF_HEALTHY_RUN_SECONDS,
     EXTERNAL_OFF_MAX_REASSERTS,
     external_off_decision,
+    valve_verify_off_decision,
+    valve_verify_on_decision,
 )
 from .run_history import SOURCE_MANUAL, SOURCE_SCHEDULED
 from .schedule import Schedule, ZoneStep
@@ -430,6 +433,10 @@ _SET_GENERAL_CONFIG_SCHEMA = vol.Schema(
             vol.Coerce(int), vol.Range(min=5, max=480)
         ),
         vol.Optional("block_gap_seconds"): vol.All(vol.Coerce(int), vol.Range(min=5, max=600)),
+        # v1.40 — "check back" valve-actuation verification window (seconds).
+        # After commanding the zone switch on/off we re-read its state this
+        # long after and retry/alert if the command didn't take. 0 disables.
+        vol.Optional("verify_switch_seconds"): vol.All(vol.Coerce(int), vol.Range(min=0, max=300)),
     }
 )
 
@@ -445,6 +452,7 @@ _GENERAL_CONFIG_FIELDS: dict[str, Any] = {
     "admin_only_services": bool,  # v1.17.11
     "controller_max_run_minutes": int,  # v1.25
     "block_gap_seconds": int,  # v1.25
+    "verify_switch_seconds": int,  # v1.40 — 0 disables the check-back verify
     "vision_url": lambda v: v.strip(),  # v1.37 — empty string clears
     "vision_model": lambda v: v.strip(),  # v1.37
 }
@@ -764,8 +772,21 @@ def _looks_like_image(data: bytes) -> bool:
     return data[:2] == b"BM"  # BMP
 
 
+def _cancel_verify_timer(entry_data: dict[str, Any], entity_id: str) -> None:
+    """v1.40 — cancel and drop any pending valve-verify check for this entity."""
+    cancel = entry_data.get("verify_timers", {}).pop(entity_id, None)
+    if cancel:
+        cancel()
+
+
 def _cancel_handles(entry_data: dict[str, Any], entity_id: str) -> None:
     """Cancel and remove any pending timer + state listener for this entity."""
+    # v1.40 — the valve-verify timer rides this same lifecycle: every path
+    # that tears down a run's handles (auto-stop, Stop, external-off abort,
+    # replace-run) must also disarm any pending verify so it can't fire after
+    # a legitimate stop. Runs BEFORE the early-return below because a
+    # post-run OFF-verify can be pending with no cancel_handles pair left.
+    _cancel_verify_timer(entry_data, entity_id)
     handles = entry_data.setdefault("cancel_handles", {})
     pair = handles.pop(entity_id, None)
     if pair is None:
@@ -973,6 +994,192 @@ def _clear_active_session(hass: HomeAssistant, coord, zone: str) -> None:
     sessions = coord.config.get("active_run_sessions")
     if sessions and sessions.pop(zone, None) is not None:
         hass.async_create_task(coord.async_save_config())
+
+
+def _verify_seconds(coord) -> int:
+    """v1.40 — the configured check-back verify window in seconds (0 = off)."""
+    cfg = getattr(coord, "config", None) or {}
+    try:
+        return int(cfg.get("verify_switch_seconds", DEFAULT_VERIFY_SWITCH_SECONDS))
+    except (TypeError, ValueError):
+        return DEFAULT_VERIFY_SWITCH_SECONDS
+
+
+def _schedule_valve_verify_on(
+    hass: HomeAssistant,
+    entry_data: dict[str, Any],
+    entity_id: str,
+    coord,
+    friendly: str,
+    is_final_activation: bool,
+    attempt: int = 1,
+) -> None:
+    """v1.40 "check back" — verify a commanded turn-ON actually actuated.
+
+    Rachio-cloud/WiFi can silently drop a turn-on: the service call succeeds
+    but the valve never opens and the switch state never flips on. One-shot
+    re-check at +verify_switch_seconds: still off with no externally-detected
+    off (that path belongs to the external-off debounce machinery — and may be
+    the USER's own off) -> re-send turn_on once and check back once more;
+    still off -> critical alert + abort the run with the same cleanup
+    _auto_stop performs. Decision logic is pure (run_guard.py). Disabled when
+    verify_switch_seconds is 0. The pending handle lives in
+    entry_data["verify_timers"] and is disarmed by _cancel_handles, so a run
+    that ends normally can never be chased by a stale verify.
+    """
+    verify_seconds = _verify_seconds(coord)
+    if verify_seconds <= 0:
+        return
+
+    # NOTE: async def is LOAD-BEARING (HassJobType.Coroutinefunction). A plain
+    # closure is classified HassJobType.Executor by async_call_later and runs
+    # in a worker THREAD where hass state/task APIs raise (v1.38.1 bug class).
+    async def _verify_on(_now=None) -> None:
+        entry_data.get("verify_timers", {}).pop(entity_id, None)
+        state = hass.states.get(entity_id)
+        ext = entry_data.get("external_off", {}).get(entity_id)
+        decision = valve_verify_on_decision(
+            run_live=entry_data["manual_runs"].get(entity_id) is not None,
+            state_now=state.state if state is not None else "unavailable",
+            external_off_pending=bool(ext and ext.get("pending") is not None),
+            first_attempt=attempt == 1,
+        )
+        if decision in ("ended", "verified"):
+            return
+        if decision == "defer_external":
+            _LOGGER.debug(
+                "Valve verify for %s: mid-window off was detected by the state "
+                "listener — deferring to the external-off debounce",
+                entity_id,
+            )
+            return
+        if decision == "retry":
+            _LOGGER.warning(
+                "Valve verify: %s still not on %ds after turn-on (command lost?) — "
+                "re-sending turn_on (retry 1/1)",
+                entity_id,
+                verify_seconds,
+            )
+            try:
+                await hass.services.async_call(
+                    "switch", SERVICE_TURN_ON, {"entity_id": entity_id}, blocking=True
+                )
+            except Exception:
+                _LOGGER.exception("Valve verify: retry turn_on failed for %s", entity_id)
+            _schedule_valve_verify_on(
+                hass, entry_data, entity_id, coord, friendly, is_final_activation, attempt=2
+            )
+            return
+
+        # decision == "fail" — the retry didn't take either: the valve never
+        # actuated. Abort with the same cleanup _auto_stop performs, plus a
+        # defensive off — no auto-stop timer survives the cleanup, so if the
+        # state reading is stale and water IS flowing, an off has at least
+        # been commanded (and the OFF-side verify of a healthy zone is moot).
+        entry_data["manual_runs"].stop(entity_id)
+        _clear_external_off(entry_data, entity_id)
+        _cancel_handles(entry_data, entity_id)
+        await hass.services.async_call(
+            "switch", SERVICE_TURN_OFF, {"entity_id": entity_id}, blocking=False
+        )
+        if coord is not None:
+            coord.run_history.abort_run(
+                entity_id,
+                ended_at=dt_util.utcnow(),
+                reason="valve failed to actuate",
+            )
+            await coord.async_save_run_history()
+            if coord.notifier is not None:
+                await coord.notifier.notify(
+                    f"{friendly} was commanded on, but the switch never reported on — "
+                    f"even after a retry. Water may NOT be flowing. Check the "
+                    f"controller/valve.",
+                    title="Irrigation: valve did not actuate",
+                    category=CATEGORY_CRITICAL,
+                    event_type="valve_verify_failed",
+                )
+        # Same session semantics as _auto_stop: only the run's final
+        # activation clears the restart-resume session (an intermediate
+        # chunked block keeps it so a restart can still resume the run).
+        if is_final_activation:
+            _clear_active_session(hass, coord, entity_id)
+        _LOGGER.error(
+            "Valve verify FAILED for %s: never reported on after a retry — run aborted",
+            entity_id,
+        )
+
+    entry_data.setdefault("verify_timers", {})[entity_id] = async_call_later(
+        hass, verify_seconds, _verify_on
+    )
+
+
+def _schedule_valve_verify_off(
+    hass: HomeAssistant,
+    entry_data: dict[str, Any],
+    entity_id: str,
+    coord,
+    friendly: str,
+    attempt: int = 1,
+) -> None:
+    """v1.40 "check back" — verify a commanded turn-OFF actually closed the valve.
+
+    Armed ONLY where WE command the off (_auto_stop / stop_zone) — never for
+    externally-detected offs (those never reach a commanded-off path; the
+    external-off debounce machinery owns them). Still on at +verify seconds
+    -> re-send turn_off once and check back once more; still on -> critical
+    "may be STUCK OPEN" alert. A new run starting on the zone inside the
+    window (next chunked block, fresh manual run) supersedes the check — it
+    owns the valve now. Disabled when verify_switch_seconds is 0.
+    """
+    verify_seconds = _verify_seconds(coord)
+    if verify_seconds <= 0:
+        return
+
+    # async def is LOAD-BEARING — see _schedule_valve_verify_on.
+    async def _verify_off(_now=None) -> None:
+        entry_data.get("verify_timers", {}).pop(entity_id, None)
+        state = hass.states.get(entity_id)
+        decision = valve_verify_off_decision(
+            new_run_live=entry_data["manual_runs"].get(entity_id) is not None,
+            state_now=state.state if state is not None else "unavailable",
+            first_attempt=attempt == 1,
+        )
+        if decision in ("superseded", "verified"):
+            return
+        if decision == "retry":
+            _LOGGER.warning(
+                "Valve verify: %s still reports on %ds after turn-off — re-sending "
+                "turn_off (retry 1/1)",
+                entity_id,
+                verify_seconds,
+            )
+            try:
+                await hass.services.async_call(
+                    "switch", SERVICE_TURN_OFF, {"entity_id": entity_id}, blocking=True
+                )
+            except Exception:
+                _LOGGER.exception("Valve verify: retry turn_off failed for %s", entity_id)
+            _schedule_valve_verify_off(hass, entry_data, entity_id, coord, friendly, attempt=2)
+            return
+
+        # decision == "fail" — still on after the retry.
+        if coord is not None and coord.notifier is not None:
+            await coord.notifier.notify(
+                f"{friendly} was commanded off, but the switch still reports ON — even "
+                f"after a retry. The valve may be STUCK OPEN — check it physically.",
+                title="Irrigation: valve may be stuck open",
+                category=CATEGORY_CRITICAL,
+                event_type="valve_stuck_open",
+            )
+        _LOGGER.error(
+            "Valve verify FAILED for %s: still reports on after a turn-off retry — "
+            "possible stuck-open valve",
+            entity_id,
+        )
+
+    entry_data.setdefault("verify_timers", {})[entity_id] = async_call_later(
+        hass, verify_seconds, _verify_off
+    )
 
 
 def _session_decision_for_run(entry_data: dict[str, Any], entity_id: str) -> tuple[bool, bool]:
@@ -1255,6 +1462,10 @@ async def _async_register_services(hass: HomeAssistant) -> None:
                 blocking=False,
             )
             _cancel_handles(entry_data, entity_id)
+            # v1.40 "check back" — we just commanded off; verify the valve
+            # actually closed. Armed AFTER _cancel_handles so it isn't
+            # immediately disarmed along with the run's other handles.
+            _schedule_valve_verify_off(hass, entry_data, entity_id, coord, friendly)
             # Run history: timer expired → completed
             if coord is not None:
                 coord.run_history.complete_run(entity_id, ended_at=dt_util.utcnow())
@@ -1407,6 +1618,12 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             cancel_listener,
         )
 
+        # v1.40 "check back" — verify the physical switch actually actuated.
+        # Every chunked block re-enters this single-activation path as its own
+        # run_zone sub-call, so each block activation gets exactly ONE verify
+        # (the >cap dispatch branch above returned early and armed none).
+        _schedule_valve_verify_on(hass, entry_data, entity_id, coord, friendly, is_final_activation)
+
         _LOGGER.info(
             "Started manual run: %s for %d minutes (deadline %s)",
             entity_id,
@@ -1453,6 +1670,13 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         # v1.30 — a Stop ends the whole run (incl. a chunked session), so drop
         # the restart-resume session: a later restart must not revive it.
         _clear_active_session(hass, coord, entity_id)
+        # v1.40 "check back" — we just commanded off; verify the valve closed
+        # (armed after the _cancel_handles above, so it survives the teardown).
+        stop_state = hass.states.get(entity_id)
+        stop_friendly = (
+            stop_state.attributes.get("friendly_name") if stop_state else None
+        ) or entity_id
+        _schedule_valve_verify_off(hass, entry_data, entity_id, coord, stop_friendly)
         _LOGGER.info("Stopped manual run for %s by request", entity_id)
 
     # ── Schedule CRUD ──────────────────────────────────────────────
@@ -2956,6 +3180,13 @@ def _cleanup_entry_handles(entry_data: dict[str, Any]) -> None:
         if cancel_listener:
             cancel_listener()
     handles.clear()
+    # v1.40 — also cancel any pending valve-verify (check-back) timers so a
+    # stale verify can't retry/notify against a torn-down entry.
+    verify_timers = entry_data.get("verify_timers", {})
+    for cancel in list(verify_timers.values()):
+        if cancel:
+            cancel()
+    verify_timers.clear()
     # v1.21 — also cancel any pending external-off debounce timers.
     external_off = entry_data.get("external_off", {})
     for ext in list(external_off.values()):
