@@ -46,6 +46,7 @@ def _env(name: str, default: str) -> str:
 
 
 CFG = {
+    "prompt_file": _env("WA_PROMPT_FILE", ""),
     "health_url": _env(
         "WA_HEALTH_URL", "http://homeassistant.local:8123/api/complete_irrigation/health.json"
     ),
@@ -135,12 +136,25 @@ def compact_context(health: dict) -> dict:
     }
 
 
+def _system_prompt() -> str:
+    """The embedded rules, optionally prefixed by the full canonical operations
+    prompt (tools/LLM_OPERATIONS_PROMPT.md) via WA_PROMPT_FILE — the living
+    gotcha/ground-truth document that makes a light model reliable."""
+    if CFG["prompt_file"]:
+        try:
+            doc = Path(CFG["prompt_file"]).read_text(encoding="utf-8")
+            return doc + "\n\n---\nJOB-SPECIFIC RULES (Section D applies):\n" + _SYSTEM
+        except OSError as err:
+            _log(f"prompt file unreadable ({err}); using embedded rules")
+    return _SYSTEM
+
+
 def ask_llm(context: dict) -> dict | None:
     body = json.dumps(
         {
             "model": CFG["llm_model"] or "default",
             "messages": [
-                {"role": "system", "content": _SYSTEM},
+                {"role": "system", "content": _system_prompt()},
                 {
                     "role": "user",
                     "content": "Current irrigation data (JSON): " + json.dumps(context),
