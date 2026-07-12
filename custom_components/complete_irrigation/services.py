@@ -309,6 +309,11 @@ _SET_WEATHER_CONFIG_SCHEMA = vol.Schema(
         # first plural entry is treated as primary for lockout logic.
         vol.Optional("rain_sensor"): cv.entity_id,
         vol.Optional("rain_sensors"): vol.All(cv.ensure_list, [cv.entity_id]),
+        # Monsoon floor (inches): rainfall below this never triggers a lockout.
+        # 0 = disabled. Set e.g. 0.5 so small desert cells don't strand the yard.
+        vol.Optional("rain_lockout_min_inches"): vol.All(
+            vol.Coerce(float), vol.Range(min=0, max=5)
+        ),
         vol.Optional("temperature_sensor"): cv.entity_id,
         vol.Optional("hot_threshold_f"): vol.All(vol.Coerce(float), vol.Range(min=50, max=130)),
         vol.Optional("boost_percent"): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
@@ -2903,6 +2908,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         for key in (
             "rain_sensor",
             "rain_sensors",
+            "rain_lockout_min_inches",
             "temperature_sensor",
             "hot_threshold_f",
             "boost_percent",

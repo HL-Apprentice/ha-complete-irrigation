@@ -78,7 +78,12 @@ from .run_history import (
 )
 from .run_planner import due_runs_since, longest_run_span_minutes, next_runs
 from .schedule import ScheduleStore
-from .weather_gate import evaluate_hot_weather, evaluate_rain_lockout, evaluate_wind_defer
+from .weather_gate import (
+    evaluate_hot_weather,
+    evaluate_rain_lockout,
+    evaluate_wind_defer,
+    rain_to_inches,
+)
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -1815,12 +1820,12 @@ class ScheduleCoordinator:
         state = self._hass.states.get(rain_entity)
         if state is None:
             return
-        try:
-            rainfall_in = float(state.state)
-        except (TypeError, ValueError):
-            return
-        if not math.isfinite(rainfall_in):
-            return  # a glitching "nan"/"inf" sensor must not drive lockout
+        # Unit-aware: convert the sensor's native unit (Tempest often reports mm)
+        # to INCHES before the tiers/floor apply. Reading mm as inches is the bug
+        # that turns a 0.25mm (0.01") trace into a "0.25 inch" lockout.
+        rainfall_in = rain_to_inches(state.state, state.attributes.get("unit_of_measurement"))
+        if rainfall_in is None:
+            return  # non-numeric or a glitching "nan"/"inf" sensor must not drive lockout
 
         # Only (re)arm on a RISING edge — new rainfall since the last reading. A
         # cumulative "daily total" accumulator (a common HA rain sensor that only
@@ -1833,7 +1838,39 @@ class ScheduleCoordinator:
         if last_reading is not None and rainfall_in <= last_reading:
             return
 
-        hours = evaluate_rain_lockout(rainfall_in)
+        # ET-scaled lockout (4-model consensus): duration = how many days of live
+        # evaporative demand the effective rainfall replaces. Floor is the user's
+        # monsoon knob (rain below it never locks out); default 0.10 in.
+        from .weather_gate import RAIN_LOCKOUT_MIN_INCHES
+
+        try:
+            floor = float(self._config.get("rain_lockout_min_inches", RAIN_LOCKOUT_MIN_INCHES))
+        except (TypeError, ValueError):
+            floor = RAIN_LOCKOUT_MIN_INCHES
+        # Live daily ETo = effective weekly ETo / 7 (auto FAO-56 when enabled,
+        # else the manual figure); None lets the formula use its short fallback.
+        daily_eto = None
+        try:
+            wk = float(self.eto_status().get("eto_in_week"))
+            if math.isfinite(wk) and wk > 0:
+                daily_eto = wk / 7.0
+        except (TypeError, ValueError, AttributeError):
+            daily_eto = None
+        # Heat-aware cap: on a hot day the yard MUST NOT stay locked out more than
+        # ~1 day — at 110F+ plants transpire hard and baked/hydrophobic desert soil
+        # sheds much of the rain, so even a big event shouldn't strand them. When
+        # the forecast high meets the hot-weather threshold (default 100F if unset),
+        # cap the lockout at 24h; otherwise the normal 48h max applies.
+        from .weather_gate import RAIN_LOCKOUT_HOT_MAX_HOURS, RAIN_LOCKOUT_MAX_HOURS
+
+        forecast_high = self._read_forecast_high()
+        try:
+            hot_thresh = float(self._config.get("hot_threshold_f") or 100.0)
+        except (TypeError, ValueError):
+            hot_thresh = 100.0
+        hot_day = forecast_high is not None and forecast_high >= hot_thresh
+        max_h = RAIN_LOCKOUT_HOT_MAX_HOURS if hot_day else RAIN_LOCKOUT_MAX_HOURS
+        hours = evaluate_rain_lockout(rainfall_in, daily_eto, min_inches=floor, max_hours=max_h)
         if hours is None:
             return
 

@@ -435,7 +435,19 @@ set_weather_config:
           max: 1.0
           step: 0.05
           mode: box
-
+    rain_lockout_min_inches:
+      name: Rain lockout minimum (inches)
+      description: >
+        Rainfall below this never triggers a lockout (0 = disabled). Set e.g. 0.5
+        so brief desert cells that drop a fraction of an inch don't pause watering
+        in summer heat.
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 5
+          step: 0.05
+          mode: box
 set_zone_moisture:
   name: Set zone moisture config
   description: >
