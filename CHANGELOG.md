@@ -4,6 +4,13 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.39.3 — 2026-07-11 — patch
+
+- **CI fix (no functional change):** a new test file imported `voluptuous` at
+  top level instead of via `pytest.importorskip`, breaking test collection on
+  the CI runner (which has no HA installed). The shipped integration was
+  unaffected. Matched the repo's skip-in-bare-env test convention.
+
 ## v1.39.2 — 2026-07-11 — patch — CRITICAL setup fix
 
 **Fixes a setup crash introduced in v1.39.1 — the integration failed to load.**
