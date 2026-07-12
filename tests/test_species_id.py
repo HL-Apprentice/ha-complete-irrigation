@@ -62,6 +62,27 @@ def test_none_on_unusable_input():
     assert extract_suggestion_json("[1,2,3]") is None  # not an object
 
 
+def test_research_reply_by_name_validates_without_canopy():
+    # v1.40.9 — a by-NAME research reply (no photo, so no canopy) validates with
+    # the full care attribute set. This is the exact clean reply qwen2.5vl:7b gave
+    # for "Nerium oleander".
+    reply = (
+        '{"species":"Nerium oleander","common_name":"Oleander","confidence":0.9,'
+        '"sunlight_class":"full_sun","temp_low_f":20,"temp_high_f":110,'
+        '"wucols_category":"moderate","care_plan_preset":"shrub","water_every_days":7,'
+        '"fertilize_every_days":0,"note":"tolerates heat and drought well"}'
+    )
+    sug = validate_suggestion(
+        extract_suggestion_json(reply), model="qwen2.5vl:7b", now_iso="2026-07-12T00:00:00"
+    )
+    assert sug["species"] == "Nerium oleander"
+    assert sug["common_name"] == "Oleander"
+    assert sug["wucols_category"] == "moderate"
+    assert sug["care_plan_preset"] == "shrub"
+    assert (sug["temp_low_f"], sug["temp_high_f"]) == (20, 110)
+    assert sug["canopy_area_sqft"] is None  # by-name research never sets canopy
+
+
 def test_pipe_enum_first_token_across_all_enums():
     obj = {
         "species": "Test",

@@ -4,6 +4,21 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.40.9 — 2026-07-12 — minor
+
+**Research a plant's details by name.** When the vision model misidentifies a
+plant, correct the **Plant species** field to the right name and click the new
+**🔬 Research details** button — the LLM looks up that species by name (no photo)
+and fills sun exposure, temperature tolerance, water-use category, watering /
+fertilizing cadence, and a care plan. Your species text and canopy are kept.
+
+- By-name lookup is far more accurate than a photo guess: verified live —
+  "Nerium oleander" returned Oleander / full sun / 20–110 °F / moderate water-use
+  / shrub, where the photo ID had guessed the wrong genus.
+- New `research_plant_species` service (`plant_id` + optional `species`); reuses
+  the same repair-aware JSON parsing and the configured vision endpoint in text
+  mode. Applies the researched attributes and seeds the care plan.
+
 ## v1.40.8 — 2026-07-12 — patch
 
 **Fix: species identification failed on a clear photo with a working endpoint.**

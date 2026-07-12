@@ -72,7 +72,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.40.8";
+  const PANEL_VERSION = "v1.40.9";
   const DEFAULT_MANUAL_MINUTES = 10;
   const MAX_MANUAL_MINUTES = 480; // 8 h — matches the backend schedule cap; long
   // runs are delivered in controller-cap blocks (v1.25). Was 60, which blocked
@@ -425,6 +425,7 @@
       this._zoneDiagnosis = {}; // zone entity_id -> diagnosis result (expanded row)
       // v1.37 — species identification (vision) state.
       this._identifyBusy = false; // identify_plant_species call in flight
+      this._researchBusy = false; // research_plant_species (by-name) call in flight
       this._visionDraft = null; // {vision_url, vision_model} edit draft; null = mirror config
       // v1.40 — vision-endpoint connection test state.
       this._visionTestBusy = false; // test_vision_endpoint call in flight
@@ -871,6 +872,8 @@
         // v1.37 — species identification (vision).
         if (action === "identify-species")
           return this._identifySpecies(node.dataset.plantId);
+        if (action === "research-species")
+          return this._researchSpecies(node.dataset.plantId);
         if (action === "species-apply")
           return this._applySpeciesSuggestion(node.dataset.plantId);
         if (action === "species-dismiss")
@@ -2700,6 +2703,45 @@
         alert("Could not identify the species: " + (err?.message || err));
       } finally {
         this._identifyBusy = false;
+        this._renderNow();
+      }
+    }
+
+    async _researchSpecies(plantId) {
+      // v1.40.9 — the user typed/corrected the species; ask the LLM to research
+      // that NAME and fill the care attributes (no photo). Passes the DRAFT
+      // species so it works before Save.
+      if (!plantId || this._researchBusy) return;
+      const e = this._plantEditor;
+      const species = ((e && e.species) || "").trim();
+      if (!species) {
+        alert("Enter the plant species first, then research it.");
+        return;
+      }
+      this._researchBusy = true;
+      this._renderNow();
+      try {
+        await this._hass.callService("complete_irrigation", "research_plant_species", {
+          plant_id: plantId,
+          species,
+        });
+        await this._fetchYard();
+        await this._fetchCareTasks(); // a care plan may have been seeded
+        // Re-sync the open editor from the researched plant so a later Save
+        // can't clobber the applied values with the stale draft.
+        if (this._plantEditor && this._plantEditor.id === plantId) {
+          const fresh = (this._plants || []).find((p) => p.id === plantId);
+          if (fresh) {
+            this._plantEditor.species = fresh.species || "";
+            this._plantEditor.wucols_category = fresh.wucols_category;
+            this._plantEditor.lux_low = fresh.lux_low != null ? String(fresh.lux_low) : "";
+            this._plantEditor.lux_high = fresh.lux_high != null ? String(fresh.lux_high) : "";
+          }
+        }
+      } catch (err) {
+        alert("Could not research the species: " + (err?.message || err));
+      } finally {
+        this._researchBusy = false;
         this._renderNow();
       }
     }
@@ -6058,7 +6100,18 @@
         `<div><label>Plant species</label>` +
         `<input name="species" data-action="plant-field" type="text" maxlength="120" value="${escapeAttr(
           e.species || ""
-        )}" placeholder="e.g. Citrus limon" /></div>` +
+        )}" placeholder="e.g. Citrus limon" />` +
+        // v1.40.9 — research the typed species by NAME (no photo): the LLM fills
+        // sun / temp / water-use / cadence / care plan for that species.
+        (e.id
+          ? ` <button class="btn btn-small plant-research-btn" type="button" data-action="research-species" data-plant-id="${escapeAttr(
+              e.id
+            )}"${this._researchBusy ? " disabled" : ""}>${
+              this._researchBusy ? "Researching…" : "🔬 Research details"
+            }</button>` +
+            `<div class="plant-research-hint muted">Looks up sun, temperature, water-use, and a care plan for this species name.</div>`
+          : "") +
+        `</div>` +
         `<div><label>Water-use category</label>` +
         `<select name="wucols_category" data-action="plant-field">` +
         cats
@@ -7551,6 +7604,8 @@
         `.plant-attr{display:flex;justify-content:space-between;gap:12px;font-size:13px;padding:2px 0}` +
         `.plant-attr>span:first-child{color:var(--ci-text-2)}` +
         `.plant-attr-prov{margin-top:6px;font-size:11px;color:var(--ci-text-2)}` +
+        `.plant-research-btn{margin-top:6px}` +
+        `.plant-research-hint{font-size:11px;margin-top:4px}` +
         `.yard-loop-card{padding:14px 16px}` +
         `.yard-loop-head{display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:8px}` +
         `.yard-loop-head strong{font-size:14px}` +
