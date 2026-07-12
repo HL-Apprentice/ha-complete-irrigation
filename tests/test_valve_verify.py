@@ -32,15 +32,21 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-import voluptuous as vol
 
+# HA-coupled test: skip gracefully in a bare env (CI runs pytest without HA /
+# voluptuous installed and relies on importorskip). A bare `import voluptuous`
+# here crashed CI collection — match the convention in test_services_schemas.py.
+vol = pytest.importorskip("voluptuous")
 pytest.importorskip("homeassistant.const")
 
-from homeassistant.core import HassJob, HassJobType
+from homeassistant.core import HassJob, HassJobType  # noqa: E402
 
-from custom_components.complete_irrigation import services
-from custom_components.complete_irrigation.manual_run import ManualRun, ManualRunTracker
-from custom_components.complete_irrigation.run_guard import (
+from custom_components.complete_irrigation import services  # noqa: E402
+from custom_components.complete_irrigation.manual_run import (  # noqa: E402
+    ManualRun,
+    ManualRunTracker,
+)
+from custom_components.complete_irrigation.run_guard import (  # noqa: E402
     DEFAULT_VERIFY_SWITCH_SECONDS,
     valve_verify_off_decision,
     valve_verify_on_decision,
