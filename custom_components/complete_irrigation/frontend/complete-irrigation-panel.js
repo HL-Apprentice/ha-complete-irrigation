@@ -72,7 +72,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.40.5";
+  const PANEL_VERSION = "v1.40.6";
   const DEFAULT_MANUAL_MINUTES = 10;
   const MAX_MANUAL_MINUTES = 480; // 8 h — matches the backend schedule cap; long
   // runs are delivered in controller-cap blocks (v1.25). Was 60, which blocked
@@ -6480,29 +6480,37 @@
       if (!this._plants.length) {
         return `<div class="empty">No plants yet. Add one to see its watering needs.</div>`;
       }
-      const rows = this._plants
-        .map(
-          (p) =>
-            `<tr>` +
-            `<td>${escapeHtml(p.name)}</td>` +
-            `<td>${escapeHtml(this._catLabel(p.wucols_category))}</td>` +
-            `<td>${escapeHtml(String(p.canopy_area_sqft))} ft²</td>` +
-            `<td>${escapeHtml(this._zoneFriendly(p.zone_entity_id))}</td>` +
-            `<td class="yard-row-actions">` +
+      // Responsive cards (not a table) so every plant's Edit/Delete stays on
+      // screen on a phone — a wide table pushed the actions off-screen.
+      const cards = this._plants
+        .map((p) => {
+          const species = (p.species || "").trim();
+          return (
+            `<div class="plant-row">` +
+            `<div class="plant-row-main">` +
+            `<div class="plant-row-name">${escapeHtml(p.name)}</div>` +
+            `<div class="plant-row-meta">` +
+            (species
+              ? `<span>${escapeHtml(species)}</span>`
+              : `<span class="muted">species not set</span>`) +
+            `<span>&middot; ${escapeHtml(this._zoneFriendly(p.zone_entity_id))}</span>` +
+            `<span>&middot; ${escapeHtml(this._catLabel(p.wucols_category))}</span>` +
+            `<span>&middot; ${escapeHtml(String(p.canopy_area_sqft))} ft&sup2;</span>` +
+            `</div></div>` +
+            `<div class="plant-row-actions">` +
             `<button class="btn btn-small" data-action="edit-plant" data-plant-id="${escapeAttr(
               p.id
             )}">Edit</button>` +
             `<button class="btn btn-small btn-stop" data-action="delete-plant" data-plant-id="${escapeAttr(
               p.id
             )}" data-plant-name="${escapeAttr(p.name)}">Delete</button>` +
-            `</td></tr>`
-        )
+            `</div></div>`
+          );
+        })
         .join("");
       return (
         `<h3 class="yard-h3">Plants (${this._plants.length})</h3>` +
-        `<div class="yard-table-wrap"><table class="yard-table">` +
-        `<thead><tr><th>Name</th><th>Category</th><th>Area</th><th>Zone</th><th></th></tr></thead>` +
-        `<tbody>${rows}</tbody></table></div>`
+        `<div class="plant-list">${cards}</div>`
       );
     }
 
@@ -7457,6 +7465,14 @@
         `.yard-table th{text-align:left;font-weight:600;color:var(--ci-text-2);padding:6px 10px;border-bottom:1px solid var(--ci-border);white-space:nowrap}` +
         `.yard-table td{padding:7px 10px;border-bottom:1px solid var(--ci-border);vertical-align:middle}` +
         `.yard-row-actions{display:flex;gap:6px;justify-content:flex-end}` +
+        // v1.40.6 — plant list as responsive cards (Edit/Delete never scroll off a phone)
+        `.plant-list{display:flex;flex-direction:column;gap:8px}` +
+        `.plant-row{display:flex;align-items:center;gap:12px;justify-content:space-between;padding:11px 14px;border:1px solid var(--ci-border);border-radius:12px;background:var(--ci-card)}` +
+        `.plant-row-main{min-width:0;flex:1}` +
+        `.plant-row-name{font-weight:600;font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}` +
+        `.plant-row-meta{display:flex;flex-wrap:wrap;gap:2px 8px;font-size:12px;color:var(--ci-text-2);margin-top:3px}` +
+        `.plant-row-actions{display:flex;gap:8px;flex-shrink:0}` +
+        `@media (max-width:520px){.plant-row{flex-direction:column;align-items:stretch}.plant-row-actions .btn{flex:1}}` +
         `.yard-loop-card{padding:14px 16px}` +
         `.yard-loop-head{display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:8px}` +
         `.yard-loop-head strong{font-size:14px}` +

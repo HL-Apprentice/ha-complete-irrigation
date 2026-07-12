@@ -4,6 +4,16 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.40.6 — 2026-07-12 — patch
+
+**Edit plants easily — the plant list is now a mobile-friendly card list.**
+Editing a plant after creation already existed (Yard tab → each plant's **Edit**
+button → change name, species, zone/loop, water-use, canopy, drips, light
+range), but the list was a wide 5-column table whose Edit/Delete buttons
+scrolled off-screen on a phone. It's now a stacked card per plant — name +
+species + zone + category + area, with **Edit** and **Delete** always visible
+and full-width on mobile.
+
 ## v1.40.5 — 2026-07-12 — patch
 
 **Plant add: separate "Plant species" and "Friendly name" fields.**
