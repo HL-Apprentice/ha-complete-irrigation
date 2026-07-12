@@ -72,7 +72,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.40.7";
+  const PANEL_VERSION = "v1.40.8";
   const DEFAULT_MANUAL_MINUTES = 10;
   const MAX_MANUAL_MINUTES = 480; // 8 h — matches the backend schedule cap; long
   // runs are delivered in controller-cap blocks (v1.25). Was 60, which blocked
@@ -6069,7 +6069,7 @@
           .join("") +
         `</select></div>` +
         `<div><label>Canopy area (ft²)</label>` +
-        `<input name="canopy_area_sqft" data-action="plant-field" type="number" min="0.1" step="1" value="${escapeAttr(
+        `<input name="canopy_area_sqft" data-action="plant-field" type="number" min="0.1" step="any" value="${escapeAttr(
           String(e.canopy_area_sqft)
         )}" placeholder="e.g. 100" required /></div>` +
         `<div><label>Zone / loop</label>` +
