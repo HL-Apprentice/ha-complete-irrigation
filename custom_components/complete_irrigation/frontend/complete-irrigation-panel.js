@@ -72,7 +72,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.40.4";
+  const PANEL_VERSION = "v1.40.5";
   const DEFAULT_MANUAL_MINUTES = 10;
   const MAX_MANUAL_MINUTES = 480; // 8 h — matches the backend schedule cap; long
   // runs are delivered in controller-cap blocks (v1.25). Was 60, which blocked
@@ -430,7 +430,7 @@
       this._visionTestBusy = false; // test_vision_endpoint call in flight
       this._visionTestResult = null; // {ok, detail} | null; cleared on field edit
       // v1.38 — photo-first add-plant flow. null = card closed; object =
-      // draft {pa_zone, pa_name, pa_emitter_count, pa_gph_sel, pa_gph_custom, busy}.
+      // draft {pa_zone, pa_species, pa_name, pa_emitter_count, pa_gph_sel, pa_gph_custom, file, previewUrl, busy}.
       this._photoAdd = null;
       // v1.39 — watering-advisor local state: idx -> true once that item
       // was applied this session; reset when a NEW advice blob arrives.
@@ -779,6 +779,7 @@
         if (action === "photo-add-open") {
           this._photoAdd = {
             pa_zone: "",
+            pa_species: "",
             pa_name: "",
             pa_emitter_count: "",
             pa_gph_sel: "",
@@ -5970,10 +5971,14 @@
           )
           .join("") +
         `</select></div>` +
-        `<div><label>Name (optional)</label>` +
+        `<div><label>Plant species (optional)</label>` +
+        `<input name="pa_species" data-action="photo-add-field" type="text" maxlength="120" value="${escapeAttr(
+          d.pa_species || ""
+        )}" placeholder="auto-identified from photo"${dis} /></div>` +
+        `<div><label>Friendly name (optional)</label>` +
         `<input name="pa_name" data-action="photo-add-field" type="text" maxlength="80" value="${escapeAttr(
           d.pa_name || ""
-        )}" placeholder="auto from photo"${dis} /></div>` +
+        )}" placeholder="e.g. Front-yard lemon"${dis} /></div>` +
         `<div><label>Drips (optional)</label>` +
         `<div class="photo-add-emitters">` +
         `<input name="pa_emitter_count" data-action="photo-add-field" type="number" min="1" max="100" step="1" value="${escapeAttr(
@@ -6045,12 +6050,12 @@
         `<form class="card plant-form">` +
         `<h3>${e.id ? "Edit plant" : "Add plant"}</h3>` +
         `<div class="yard-form-grid">` +
-        `<div><label>Name</label>` +
+        `<div><label>Friendly name</label>` +
         `<input name="name" data-action="plant-field" type="text" value="${escapeAttr(
           e.name
-        )}" placeholder="e.g. Lemon tree" required /></div>` +
+        )}" placeholder="e.g. Front-yard lemon" required /></div>` +
         // v1.35 — optional species (free text, backend caps at 120)
-        `<div><label>Species</label>` +
+        `<div><label>Plant species</label>` +
         `<input name="species" data-action="plant-field" type="text" maxlength="120" value="${escapeAttr(
           e.species || ""
         )}" placeholder="e.g. Citrus limon" /></div>` +
@@ -6449,6 +6454,8 @@
         }
         const name = (d.pa_name || "").trim();
         if (name) payload.name = name;
+        const species = (d.pa_species || "").trim();
+        if (species) payload.species = species;
         if (haveCount) {
           payload.emitter_count = count;
           payload.emitter_gph = gph;
