@@ -365,3 +365,27 @@ def test_care_task_store_for_plant_supports_cascade_delete():
     for t in mine:
         assert store.delete(t.id)
     assert [t.id for t in store.all()] == ["a3"]
+
+
+def test_every_service_registration_has_exactly_three_positional_args():
+    """v1.39.2 regression lock — a stray 4th positional arg in async_register
+    (schema slot) raises TypeError AT SETUP and kills half the integration
+    (sidebar/views gone, coordinator still ticking). Nothing executes the
+    registration function in tests, so lock the call SHAPE via AST instead."""
+    import ast
+    import pathlib
+
+    src = pathlib.Path("custom_components/complete_irrigation/services.py").read_text()
+    tree = ast.parse(src)
+    bad = []
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "async_register"
+            and isinstance(node.func.value, ast.Attribute)
+            and node.func.value.attr == "services"
+        ):
+            if len(node.args) != 3:
+                bad.append(f"line {node.lineno}: {len(node.args)} positional args")
+    assert not bad, f"async_register calls must have exactly 3 positional args: {bad}"
