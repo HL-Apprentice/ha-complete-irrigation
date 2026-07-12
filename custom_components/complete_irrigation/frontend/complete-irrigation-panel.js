@@ -72,7 +72,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.40.3";
+  const PANEL_VERSION = "v1.40.4";
   const DEFAULT_MANUAL_MINUTES = 10;
   const MAX_MANUAL_MINUTES = 480; // 8 h — matches the backend schedule cap; long
   // runs are delivered in controller-cap blocks (v1.25). Was 60, which blocked
@@ -615,6 +615,7 @@
       this.shadowRoot.removeEventListener("pointerup", this._onMapPointerUp);
       this.shadowRoot.removeEventListener("pointercancel", this._onMapPointerUp);
       this.shadowRoot.removeEventListener("scroll", this._onAnyScroll, true);
+      this._revokePhotoAddPreview(); // free a staged photo-add object URL on teardown
       this._stopNowLineTimer();
       if (this._deferredRenderTimer) {
         clearTimeout(this._deferredRenderTimer);
@@ -782,14 +783,26 @@
             pa_emitter_count: "",
             pa_gph_sel: "",
             pa_gph_custom: "",
+            file: null, // v1.40.4 — staged photo (preview + explicit submit)
+            previewUrl: "",
             busy: false,
           };
           this._plantEditor = null; // one add flow open at a time
           return this._renderNow();
         }
         if (action === "photo-add-cancel") {
+          this._revokePhotoAddPreview();
           this._photoAdd = null;
           return this._renderNow();
+        }
+        // v1.40.4 — explicit submit (the photo pick no longer auto-submits).
+        if (action === "photo-add-submit") {
+          if (this._photoAdd && this._photoAdd.file) {
+            this._addPlantFromPhoto(this._photoAdd.file);
+          } else {
+            alert("Take or choose a photo first.");
+          }
+          return;
         }
         if (action === "edit-plant") {
           const p = this._plants.find((x) => x.id === node.dataset.plantId);
@@ -1111,10 +1124,22 @@
         return;
       }
       if (action === "photo-add-file") {
-        // v1.38 — picking the photo IS the submit for the photo-first flow.
+        // v1.40.4 — taking/choosing a photo STAGES it (preview + explicit
+        // "Add plant" submit) instead of auto-submitting. The old auto-submit
+        // gave no feedback when a capture silently returned no file (e.g. the
+        // HA app lacking camera permission), so it looked like nothing happened.
         const file = t.files && t.files[0];
-        if (file) this._addPlantFromPhoto(file);
         t.value = ""; // allow re-selecting the same file
+        if (file && this._photoAdd) {
+          this._revokePhotoAddPreview();
+          this._photoAdd.file = file;
+          try {
+            this._photoAdd.previewUrl = URL.createObjectURL(file);
+          } catch (_) {
+            this._photoAdd.previewUrl = "";
+          }
+          this._renderNow();
+        }
         return;
       }
       if (action === "notify-target-change") {
@@ -5928,8 +5953,10 @@
       return (
         `<div class="card photo-add-card">` +
         `<h3>📷 Add plant from photo</h3>` +
-        `<p class="photo-add-hint">Snap the plant and the vision endpoint names it, then fills ` +
-        `species, water needs, and a starter care plan automatically.</p>` +
+        `<p class="photo-add-hint">Pick a zone, then <strong>Take photo</strong> (allow camera ` +
+        `access if the app asks) or <strong>Choose photo</strong> from your library. You'll see a ` +
+        `thumbnail — then tap <strong>Add plant</strong>. A library photo keeps its location, so the ` +
+        `plant auto-places on the yard map; the vision endpoint names it and fills its care plan.</p>` +
         `<div class="photo-add-row">` +
         `<div><label>Zone / loop</label>` +
         `<select name="pa_zone" data-action="photo-add-field"${dis}>` +
@@ -5968,14 +5995,38 @@
           : "") +
         `</div></div>` +
         `</div>` +
+        // v1.40.4 — staged-photo thumbnail: a small icon copy of the captured
+        // image so you can SEE it was taken, and that it's being submitted.
+        (d.previewUrl
+          ? `<div class="photo-add-preview">` +
+            `<img src="${escapeAttr(d.previewUrl)}" alt="Selected plant photo" />` +
+            `<span class="photo-add-preview-tag">${
+              busy ? "⏳ Submitting…" : "✓ Photo ready"
+            }</span>` +
+            `</div>`
+          : "") +
         `<div class="yard-form-actions">` +
         (busy
           ? `<span class="photo-add-busy">Adding + identifying… this can take ` +
             `30–60 seconds on the first model load.</span>`
-          : `<label class="btn btn-primary photo-add-take">📷 Take / choose photo` +
-            `<input type="file" accept="image/*" capture="environment" data-action="photo-add-file" hidden />` +
-            `</label>` +
-            `<button class="btn btn-small" type="button" data-action="photo-add-cancel">Cancel</button>`) +
+          : d.previewUrl
+            ? // photo staged -> explicit submit + retake (camera OR library)
+              `<button class="btn btn-primary" type="button" data-action="photo-add-submit">Add plant</button>` +
+              `<label class="btn btn-small photo-add-take">📷 Retake` +
+              `<input type="file" accept="image/*" capture="environment" data-action="photo-add-file" hidden />` +
+              `</label>` +
+              `<label class="btn btn-small photo-add-take">🖼 Choose from library` +
+              `<input type="file" accept="image/*" data-action="photo-add-file" hidden />` +
+              `</label>` +
+              `<button class="btn btn-small" type="button" data-action="photo-add-cancel">Cancel</button>`
+            : // no photo yet -> take (camera) OR choose (library)
+              `<label class="btn btn-primary photo-add-take">📷 Take photo` +
+              `<input type="file" accept="image/*" capture="environment" data-action="photo-add-file" hidden />` +
+              `</label>` +
+              `<label class="btn btn-small photo-add-take">🖼 Choose photo` +
+              `<input type="file" accept="image/*" data-action="photo-add-file" hidden />` +
+              `</label>` +
+              `<button class="btn btn-small" type="button" data-action="photo-add-cancel">Cancel</button>`) +
         `</div>` +
         `</div>`
       );
@@ -6340,6 +6391,19 @@
       }
     }
 
+    _revokePhotoAddPreview() {
+      // Free the object URL backing the staged-photo thumbnail (avoids a leak
+      // when the photo is replaced, the card is cancelled, or the add succeeds).
+      const url = this._photoAdd?.previewUrl;
+      if (url) {
+        try {
+          URL.revokeObjectURL(url);
+        } catch (_) {
+          /* already revoked / unsupported — harmless */
+        }
+      }
+    }
+
     async _addPlantFromPhoto(file) {
       // v1.38 — photo-first plant creation: one service call creates the
       // plant, attaches the photo, identifies the species, and auto-applies
@@ -6394,6 +6458,7 @@
           "add_plant_from_photo",
           payload
         );
+        this._revokePhotoAddPreview();
         this._photoAdd = null; // success — close the card
         await this._fetchYard(); // refetches plants + care tasks together
       } catch (err) {
@@ -7298,6 +7363,9 @@
         `.photo-add-x{font-size:13px;color:var(--ci-text-2)}` +
         `.photo-add-take{cursor:pointer}` +
         `.photo-add-busy{font-size:13px;font-weight:600;color:var(--ci-accent)}` +
+        `.photo-add-preview{display:flex;align-items:center;gap:10px;margin:4px 0 12px}` +
+        `.photo-add-preview img{width:64px;height:64px;object-fit:cover;border-radius:10px;border:1px solid var(--ci-border)}` +
+        `.photo-add-preview-tag{font-size:13px;font-weight:600;color:var(--ci-accent)}` +
         `.emitter-hint{display:block;margin-top:4px;font-size:13px;color:var(--ci-text-2)}` +
         `.plant-drips{margin-top:10px;font-size:13px}` +
         `.plant-drips-line{font-weight:600;color:var(--ci-text)}` +

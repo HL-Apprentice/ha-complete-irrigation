@@ -4,7 +4,22 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
-## v1.40.3 — 2026-07-12 — minor
+## v1.40.4 — 2026-07-12 — patch
+
+**Plant photo-add flow: clearer, confirmable, and camera-vs-library aware.**
+
+- **Thumbnail + explicit "Add plant" submit.** Taking or choosing a photo used
+  to auto-submit with only a subtle busy line — so if a camera capture silently
+  returned no file (e.g. the HA app lacking camera permission), it looked like
+  nothing happened. Now the photo is staged with a **thumbnail** (a small icon
+  copy so you can see it took), and you tap **Add plant** to submit. The
+  thumbnail stays visible with a "⏳ Submitting…" tag while the add runs.
+- **Take photo vs Choose photo.** Two distinct buttons: **📷 Take photo** opens
+  the camera (`capture`); **🖼 Choose photo** opens your photo library (no
+  `capture`). A library photo keeps its **GPS EXIF**, so the plant auto-places on
+  the yard map — the upload pipeline reads location from the original bytes
+  before downsizing (a camera capture usually has no location metadata).
+- The **zone picker** already lists only configured controller zones (v1.40.3).
 
 **Rain-lockout override + the ceiling now truly reads the forecast.** Follows
 v1.40.2; multi-model regression gated.
