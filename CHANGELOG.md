@@ -4,6 +4,35 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.40.0 — 2026-07-12 — minor
+
+**Scheduling power + hardware verification** (features inspired by a review of
+Irrigation Unlimited). 4-model reviewed (Grok + Gemini + Qwen external panel
+raised 7 concerns; Claude's adversarial verification refuted ALL 7 against the
+real code — each was already guarded — so the gate shipped clean).
+
+- **Check-back valve verification.** After the integration commands a zone
+  on or off, it re-reads the physical switch ~30 s later; on mismatch it
+  retries the command once, and on a second failure raises a CRITICAL alert
+  ("water may not be flowing" on-fail, "valve may be STUCK OPEN" off-fail) and
+  records the run aborted. Hardens against Rachio-cloud/Wi-Fi command loss —
+  software answer to "did the valve actually actuate?". Configurable
+  (`verify_switch_seconds`, 0 disables; default 30). The verify decision
+  re-reads live run-state at fire time, so it can never re-open a legitimately
+  stopped valve, and never fires for externally-detected offs.
+- **Sunrise / sunset anchored schedules.** A schedule can start at sunrise or
+  sunset ± an offset, and can be **finish-at** anchored (the run COMPLETES at
+  the anchor — e.g. "finish watering by sunrise"), with correct multi-block
+  span back-up across midnight. Falls back to the fixed time when sun data is
+  unavailable. Fully guarded for polar day/night and DST.
+- **Seasonal month windows.** A schedule can be limited to a range of months
+  (e.g. water only May–September).
+- **`tools/LLM_OPERATIONS_PROMPT.md`** — a living, light-model-friendly
+  operations prompt encoding every learned ground truth and failure signature
+  (block chunking, independent zones, gap insertion, skip-don't-backfire,
+  plant-id vs zone-id, check-back semantics); the advisor job can load it via
+  `WA_PROMPT_FILE`.
+
 ## v1.39.3 — 2026-07-11 — patch
 
 - **CI fix (no functional change):** a new test file imported `voluptuous` at
