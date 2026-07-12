@@ -72,7 +72,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.40.1";
+  const PANEL_VERSION = "v1.40.2";
   const DEFAULT_MANUAL_MINUTES = 10;
   const MAX_MANUAL_MINUTES = 480; // 8 h — matches the backend schedule cap; long
   // runs are delivered in controller-cap blocks (v1.25). Was 60, which blocked
@@ -5558,6 +5558,7 @@
       const windMph = c.wind_defer_mph ?? 0;
       const hotF = c.hot_threshold_f ?? 100;
       const boost = c.boost_percent ?? 25;
+      const rainMin = c.rain_lockout_min_inches ?? 0.1;
 
       const allSensors = this._hass?.states
         ? Object.values(this._hass.states)
@@ -5626,6 +5627,8 @@
         `<h3 class="section-title">Rain lockout</h3>` +
         `<label>Rain sensors ${tip("Pick one or more rainfall sensors (accumulation today / yesterday / duration / intensity, etc.). The first checked sensor is used for the lockout calc; the others show on the Today banner. Check the boxes in your preferred priority order.")}</label>` +
         `<div class="rain-pick-list">${rainChecks || '<div class="empty">No sensors found in HA.</div>'}</div>` +
+        `<label>Minimum rain to lock out (inches) ${tip("Rainfall below this never pauses watering (0 = disabled). Default 0.10\". Raise it (e.g. 0.20\") outside monsoon so brief desert cells dropping a fraction of an inch don't strand plants in summer heat. The lockout DURATION then scales with live ETo, and its ceiling shrinks with the day's heat (never more than ~1 day when it's very hot).")}</label>` +
+        `<input name="rain_lockout_min_inches" type="number" min="0" max="5" step="0.05" value="${rainMin}" />` +
         `<h3 class="section-title">Hot weather boost</h3>` +
         `<label>Temperature sensor ${tip("Sensor reporting outdoor temp in °F. Hot days trigger a runtime boost.")}</label>` +
         `<select name="temperature_sensor"><option value="">— None —</option>${tempOptHtml}</select>` +
@@ -5711,9 +5714,11 @@
       const hot = parseInt(data.get("hot_threshold_f"), 10);
       const boost = parseInt(data.get("boost_percent"), 10);
       const windMph = parseFloat(data.get("wind_defer_mph"));
+      const rainMin = parseFloat(data.get("rain_lockout_min_inches"));
       if (!Number.isNaN(hot)) payload.hot_threshold_f = hot;
       if (!Number.isNaN(boost)) payload.boost_percent = boost;
       if (Number.isFinite(windMph)) payload.wind_defer_mph = windMph;
+      if (Number.isFinite(rainMin)) payload.rain_lockout_min_inches = rainMin;
       try {
         await this._hass.callService(
           "complete_irrigation",

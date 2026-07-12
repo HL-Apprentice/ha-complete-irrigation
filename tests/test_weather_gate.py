@@ -10,6 +10,7 @@ from custom_components.complete_irrigation.weather_gate import (
     HotWeatherDecision,
     evaluate_hot_weather,
     evaluate_rain_lockout,
+    rain_lockout_max_hours,
 )
 
 # ── rain lockout: ET-scaled formula (4-model consensus 2026-07) ────
@@ -98,13 +99,33 @@ def test_custom_boost_percent():
     assert d.multiplier == 1.5
 
 
-def test_hot_day_cap_never_exceeds_24h():
-    """Heat-aware cap — on a hot day a big rain must still resume within ~1 day
-    (112F + no water >1 day stresses plants; baked desert soil sheds rain)."""
-    # Summer ETo, big rain: normal cap 48h, but hot-day max_hours=24 clamps it.
-    assert evaluate_rain_lockout(1.0, 0.30, max_hours=24) == 24
-    assert evaluate_rain_lockout(2.0, 0.30, max_hours=24) == 24
-    # Small rain still scales below the cap unaffected.
-    assert evaluate_rain_lockout(0.25, 0.30, max_hours=24) == 12
-    # Off a hot day (max 48) the same big rain may lock out longer.
-    assert evaluate_rain_lockout(1.0, 0.30, max_hours=48) == 48
+def test_graduated_ceiling_shrinks_with_heat():
+    """The lockout MAX is a smooth curve on the day's heat, not a binary step —
+    hotter -> shorter ceiling so a big rain never strands the yard (112F + no
+    water >1 day stresses plants; baked desert soil sheds rain)."""
+    # Anchor points the ceiling passes through exactly.
+    assert rain_lockout_max_hours(85) == 48  # mild: 2 days
+    assert rain_lockout_max_hours(95) == 36
+    assert rain_lockout_max_hours(105) == 24  # 1 day
+    assert rain_lockout_max_hours(115) == 18  # extreme
+    # Flat outside the endpoints (cool winter day / brutal 120F day).
+    assert rain_lockout_max_hours(60) == 48
+    assert rain_lockout_max_hours(120) == 18
+    # Interpolates between anchors; 112F (Peter's example) stays under a day.
+    assert rain_lockout_max_hours(100) == 30
+    assert rain_lockout_max_hours(112) == round(24 + (112 - 105) / 10 * (18 - 24))  # ~20h
+    assert rain_lockout_max_hours(112) < 24
+    # Missing/NaN temp -> FAIL-SAFE 24h (assume it may be hot; never the longest
+    # lockout on a blind sensor — err toward watering).
+    assert rain_lockout_max_hours(None) == 24
+    assert rain_lockout_max_hours(float("nan")) == 24
+
+
+def test_graduated_ceiling_clamps_big_rain():
+    """The graduated ceiling feeds max_hours: a big rain resumes within ~1 day on
+    a hot day but may hold 2 days when mild."""
+    hot = rain_lockout_max_hours(112)  # ~20h
+    assert evaluate_rain_lockout(2.0, 0.30, max_hours=hot) == hot
+    assert evaluate_rain_lockout(0.25, 0.30, max_hours=hot) == 12  # small rain unaffected
+    mild = rain_lockout_max_hours(80)  # 48h
+    assert evaluate_rain_lockout(1.0, 0.30, max_hours=mild) == 48

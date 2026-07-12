@@ -4,6 +4,33 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.40.2 — 2026-07-12 — minor
+
+**Rain lockout reworked for the desert** — brief monsoon cells no longer strand
+plants in the heat, and the lockout now adapts to temperature two ways. 4-model
+agronomy + implementation gated (Grok + Gemini + Qwen external panel).
+
+- **ET-scaled lockout duration.** The lockout length is now
+  `effective_rain / daily_ETo`, using the integration's own live FAO-56 ETo,
+  instead of fixed rainfall tiers. `effective_rain = rain − 0.10"` interception
+  (canopy + arid surface evaporation). Because ETo rises with temperature, a
+  hotter forecast automatically produces a **shorter** lockout — the same 0.25"
+  locks out ~12 h in summer vs 48 h in cool winter.
+- **Temperature-graduated ceiling.** The maximum lockout is no longer a fixed
+  cap — it shrinks smoothly with the day's heat (the hotter of the current temp
+  and the forecast high): ~48 h when mild (≤85 °F), 24 h at 105 °F, 18 h in
+  extreme heat (≥115 °F). So a big rain never strands the yard more than about a
+  day when it's very hot, while a cool-weather rain can hold up to two days. If
+  the temperature signal is missing, the ceiling fails safe to 24 h (assume it
+  may be hot — never default a blind sensor to the longest lockout).
+- **Configurable rain floor.** New `rain_lockout_min_inches` (default 0.10")
+  — rainfall below it never pauses watering. Raise it (e.g. 0.20") outside
+  monsoon so passing cells that drop a fraction of an inch don't lock out.
+  Exposed in the Weather tab and via `set_weather_config`.
+- **Unit-safe rainfall reading.** The rain sensor's `unit_of_measurement` is now
+  honored (mm/cm → inches). Fixes spurious lockouts where a millimetre reading
+  was treated as inches (e.g. a Tempest reporting 0.25 mm ≈ 0.01").
+
 ## v1.40.1 — 2026-07-12 — patch
 
 - **Integration brand icon (HA 2026.3+).** Ships `brand/icon.png` +

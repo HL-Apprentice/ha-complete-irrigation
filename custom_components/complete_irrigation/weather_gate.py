@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from itertools import pairwise
 
 
 def rain_to_inches(value: float, unit: str | None) -> float | None:
@@ -48,9 +49,18 @@ def rain_to_inches(value: float, unit: str | None) -> float | None:
 RAIN_INTERCEPTION_LOSS_IN = 0.10  # first 0.1" lost to canopy interception + surface evap (arid)
 RAIN_LOCKOUT_MIN_INCHES = 0.10  # default floor: below this, rain never locks out (trace/monsoon)
 RAIN_LOCKOUT_MIN_HOURS = 3  # if it locks out at all, at least this long (avoid sub-noise)
-RAIN_LOCKOUT_MAX_HOURS = 48  # normal cap: err TOWARD watering + runoff overstates depth
-RAIN_LOCKOUT_HOT_MAX_HOURS = 24  # hot-day cap: never strand plants >1 day in extreme heat
+RAIN_LOCKOUT_MAX_HOURS = 48  # mild-day ceiling (temp <= 85F): err TOWARD watering
+RAIN_LOCKOUT_UNKNOWN_TEMP_HOURS = 24  # temp signal missing -> FAIL-SAFE: assume it may be a
+# hot day and never hold water >1 day (a failed sensor in a heatwave must not default to the
+# LONGEST lockout; matches Peter's rule "no lockout >1 day when it could be hot")
 RAIN_LOCKOUT_FALLBACK_DAILY_ETO_IN = 0.25  # when live ETo is unavailable — biases short (summer)
+
+# Graduated lockout ceiling by the day's heat (hottest of current + forecast high).
+# Hotter -> plants transpire faster AND baked/hydrophobic desert soil sheds more of
+# the rain, so a big event must never strand them: the max shrinks with temperature.
+# Piecewise-linear through these anchors (flat outside the endpoints):
+#   <=85F -> 48h (2 days, mild)   95F -> 36h   105F -> 24h (1 day)   >=115F -> 18h (extreme)
+RAIN_LOCKOUT_MAX_ANCHORS = ((85.0, 48), (95.0, 36), (105.0, 24), (115.0, 18))
 
 
 def evaluate_rain_lockout(
@@ -86,6 +96,31 @@ def evaluate_rain_lockout(
     )
     hours = round(effective / eto * 24)
     return max(min_hours, min(max_hours, hours))
+
+
+def rain_lockout_max_hours(temp_f: float | None) -> int:
+    """Graduated lockout ceiling (hours) for the day's heat.
+
+    `temp_f` is the hottest relevant temperature — the max of the current temp
+    and the forecast high — so the ceiling reflects the heat the plants will
+    actually face during the lockout. Hotter -> shorter ceiling, so a big rain
+    never strands the yard in the heat. Piecewise-linear through
+    RAIN_LOCKOUT_MAX_ANCHORS; flat outside the endpoints. Missing/NaN temp ->
+    a fail-safe 24h ceiling (assume it MAY be hot; never default a blind sensor
+    to the longest lockout — err toward watering per the prime directive).
+    """
+    if temp_f is None or not math.isfinite(temp_f):
+        return RAIN_LOCKOUT_UNKNOWN_TEMP_HOURS
+    anchors = RAIN_LOCKOUT_MAX_ANCHORS
+    if temp_f <= anchors[0][0]:
+        return anchors[0][1]
+    if temp_f >= anchors[-1][0]:
+        return anchors[-1][1]
+    for (t0, h0), (t1, h1) in pairwise(anchors):
+        if t0 <= temp_f <= t1:
+            frac = (temp_f - t0) / (t1 - t0)
+            return round(h0 + frac * (h1 - h0))
+    return RAIN_LOCKOUT_MAX_HOURS  # unreachable (anchors cover the range)
 
 
 @dataclass(frozen=True)
