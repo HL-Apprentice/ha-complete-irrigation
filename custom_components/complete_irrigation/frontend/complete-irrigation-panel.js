@@ -72,7 +72,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.40.2";
+  const PANEL_VERSION = "v1.40.3";
   const DEFAULT_MANUAL_MINUTES = 10;
   const MAX_MANUAL_MINUTES = 480; // 8 h — matches the backend schedule cap; long
   // runs are delivered in controller-cap blocks (v1.25). Was 60, which blocked
@@ -3719,6 +3719,7 @@
         `<div style="font-weight:600">Rain lockout active</div>` +
         `<div style="font-size:12px;opacity:0.85">All watering paused until ${escapeHtml(timeStr)}</div>` +
         `</div>` +
+        `<button class="btn btn-small" data-action="clear-rain-lockout" title="End this rain lockout now — the next rain re-arms it">Override</button>` +
         `</div>`
       );
     }
@@ -5615,7 +5616,7 @@
       const lockoutHtml = c.lockout_until
         ? `<div class="rain-lockout-banner"><span>🌧️</span><span>Rain lockout active until ${escapeHtml(
             new Date(c.lockout_until).toLocaleString()
-          )}</span><button class="btn btn-small" data-action="clear-rain-lockout">Clear now</button></div>`
+          )}</span><button class="btn btn-small" data-action="clear-rain-lockout" title="End this rain lockout now — the next rain re-arms it">Override</button></div>`
         : "";
 
       return (
@@ -5747,15 +5748,12 @@
       return (s && s.attributes?.friendly_name) || entityId;
     }
 
-    _switchOptions() {
-      const out = [];
-      const states = this._hass?.states || {};
-      for (const eid of Object.keys(states)) {
-        if (!eid.startsWith("switch.")) continue;
-        out.push({ id: eid, name: states[eid].attributes?.friendly_name || eid });
-      }
-      out.sort((a, b) => a.name.localeCompare(b.name));
-      return out;
+    _zonePickOptions() {
+      // Only the CONFIGURED irrigation-controller zones — never every switch.* in
+      // HA. A plant lives on a controller zone, so the zone/loop picker (photo-add
+      // + manual add) must not offer unrelated switches (lights, plugs, fans).
+      // Shape {id, name} matches the two add-plant selects that consume it.
+      return this._zones().map((z) => ({ id: z.entityId, name: z.name }));
     }
 
     _catLabel(cat) {
@@ -5915,7 +5913,7 @@
       // required; drips + name optional. Picking the photo submits.
       const d = this._photoAdd || {};
       const busy = !!d.busy;
-      const zones = this._switchOptions();
+      const zones = this._zonePickOptions();
       const gphOptions = [
         ["", "— GPH —"],
         ["0.5", "0.5"],
@@ -5991,7 +5989,7 @@
         ["moderate", "Moderate"],
         ["high", "High"],
       ];
-      const zones = this._switchOptions();
+      const zones = this._zonePickOptions();
       return (
         `<form class="card plant-form">` +
         `<h3>${e.id ? "Edit plant" : "Add plant"}</h3>` +
@@ -6702,6 +6700,7 @@
         `<h2>Schedules</h2>` +
         `<button class="btn btn-primary" data-action="add-schedule">+ Add Schedule</button>` +
         `</header>` +
+        this._renderRainLockoutBanner() +
         (this._schedules.length === 0
           ? `<div class="empty"><p>No schedules yet. Click "+ Add Schedule" to create one.</p></div>`
           : `<div class="schedule-list">${this._schedules

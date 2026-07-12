@@ -84,6 +84,7 @@ from .weather_gate import (
     evaluate_wind_defer,
     rain_lockout_max_hours,
     rain_to_inches,
+    temp_to_fahrenheit,
 )
 
 if TYPE_CHECKING:
@@ -276,6 +277,12 @@ class ScheduleCoordinator:
         # fresh forecast is fetched at startup if auto is on.
         self._auto_eto_in_week: float | None = None
         self._auto_eto_at: datetime | None = None
+        # Near-term forecast daily HIGH (F) + when it was cached — fed into the
+        # rain-lockout ceiling so it reflects the heat the plants will face
+        # DURING the lockout, not just the (often cool) temp when rain falls.
+        # Cached alongside the auto-ETo forecast fetch; None when auto-ETo is off.
+        self._forecast_high_f: float | None = None
+        self._forecast_high_at: datetime | None = None
         self._cancel_eto = None
         # v1.30 — restart fail-over: a one-shot timer that resumes any run
         # interrupted by an HA restart (see _resume_interrupted_runs).
@@ -1905,26 +1912,43 @@ class ScheduleCoordinator:
     def _read_heat_signal_f(self) -> float | None:
         """Hottest relevant temperature (F) for the rain-lockout ceiling.
 
-        Takes the MAX of (a) the configured temperature sensor — which the
-        hot-weather boost already treats as the day's heat — and (b) the current
-        temperature from a weather.* entity, if present. Using the hotter of the
-        two is the conservative choice: a shorter ceiling errs toward watering.
-        Returns None when no temperature signal is available (-> mild 48h cap)."""
+        The ceiling reflects the heat the plants will face DURING the lockout, so
+        take the MAX of three signals, each normalized to Fahrenheit:
+          (a) the configured temperature sensor,
+          (b) the current temperature from a weather.* entity,
+          (c) the cached near-term forecast daily HIGH (today+tomorrow) — this is
+              what makes the ceiling respond to a hot FORECAST even when the rain
+              itself falls during a cool storm cell.
+        The hottest wins (a shorter ceiling errs toward watering). Returns None
+        when no signal is available (-> the fail-safe 24h cap)."""
         vals: list[float] = []
-        fh = self._read_forecast_high()
-        if fh is not None:
-            vals.append(fh)
+        # (a) configured temperature sensor, unit-converted
+        ent = self._config.get("temperature_sensor")
+        if ent:
+            state = self._hass.states.get(ent)
+            if state is not None and state.state not in ("unknown", "unavailable"):
+                f = temp_to_fahrenheit(state.state, state.attributes.get("unit_of_measurement"))
+                if f is not None:
+                    vals.append(f)
+        # (b) current temp from the first usable weather.* entity, unit-converted
         for eid in self._hass.states.async_entity_ids("weather"):
             state = self._hass.states.get(eid)
             if state is None or state.state in ("unknown", "unavailable"):
                 continue
-            temp = state.attributes.get("temperature")
-            try:
-                if temp is not None:
-                    vals.append(float(temp))
-            except (TypeError, ValueError):
-                pass
+            f = temp_to_fahrenheit(
+                state.attributes.get("temperature"),
+                state.attributes.get("temperature_unit"),
+            )
+            if f is not None:
+                vals.append(f)
             break  # first usable weather entity is enough
+        # (c) cached forecast daily high, if fresh (<=36h, matching the ETo gate)
+        if self._forecast_high_f is not None and self._forecast_high_at is not None:
+            from homeassistant.util import dt as dt_util
+
+            age_h = (dt_util.now() - self._forecast_high_at).total_seconds() / 3600
+            if age_h <= 36:
+                vals.append(self._forecast_high_f)
         return max(vals) if vals else None
 
     def _read_current_wind_mph(self) -> float | None:
@@ -2110,6 +2134,19 @@ class ScheduleCoordinator:
         from homeassistant.util import dt as dt_util
 
         now_local = dt_util.now()
+        # Cache the near-term forecast daily HIGH (today + tomorrow) in F for the
+        # rain-lockout ceiling. Done before the ETo compute so a rejected/garbage
+        # ETo value doesn't also drop the heat signal.
+        highs: list[float] = []
+        for entry in forecast[:2]:
+            fh = temp_to_fahrenheit(
+                entry.get("temperature"), state.attributes.get("temperature_unit")
+            )
+            if fh is not None:
+                highs.append(fh)
+        if highs:
+            self._forecast_high_f = max(highs)
+            self._forecast_high_at = now_local
         try:
             eto = weekly_eto_inches_from_forecast(
                 forecast,
