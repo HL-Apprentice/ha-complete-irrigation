@@ -76,6 +76,21 @@ class PlantRecord:
     # fact only the user knows. Feeds delivered-water math. Both-or-neither.
     emitter_count: int | None = None
     emitter_gph: float | None = None
+    # v1.40.7 — the FULL attribute set the vision ID returns, persisted so nothing
+    # the model found is dropped (advisory; each value was already bounded by
+    # species_id.validate_suggestion before it reached the record). All optional;
+    # absent in pre-v1.40.7 records -> the defaults below.
+    common_name: str = ""  # e.g. "Oleander" (distinct from the free-text species)
+    sunlight_class: str | None = None  # full_sun|partial_sun|bright_shade|deep_shade
+    temp_low_f: int | None = None  # tolerated low/high (F); both-or-neither, low < high
+    temp_high_f: int | None = None
+    care_plan_preset: str | None = None  # tree|shrub|flower|cactus_succulent|grass
+    water_every_days: int | None = None  # typical cadence (days) the model suggested
+    fertilize_every_days: int | None = None  # 0 = not necessary
+    id_confidence: float | None = None  # 0..1 — how sure the auto-ID was
+    id_model: str = ""  # the vision model that produced the ID (e.g. "qwen2.5vl:7b")
+    id_note: str = ""  # the model's one-line description of the plant
+    identified_at: str = ""  # ISO timestamp of the identification
 
     def __post_init__(self) -> None:
         if not self.id:
@@ -129,6 +144,16 @@ class PlantRecord:
             raise ValueError("light_surveys must be a tuple")
         if self.species_suggestion is not None and not isinstance(self.species_suggestion, dict):
             raise ValueError("species_suggestion must be a dict or None")
+        # v1.40.7 — temp tolerance: both-or-neither with sane ordering (from_dict
+        # sanitizes a stored bad pair to None, so this only guards live construction).
+        if (self.temp_low_f is None) != (self.temp_high_f is None):
+            raise ValueError("temp_low_f and temp_high_f must be set together")
+        if (
+            self.temp_low_f is not None
+            and self.temp_high_f is not None
+            and not (self.temp_low_f < self.temp_high_f)
+        ):
+            raise ValueError("temp_low_f must be less than temp_high_f")
         if (self.emitter_count is None) != (self.emitter_gph is None):
             raise ValueError("emitter_count and emitter_gph must be set together")
         if self.emitter_count is not None:
@@ -157,6 +182,18 @@ class PlantRecord:
             ),
             "emitter_count": self.emitter_count,
             "emitter_gph": self.emitter_gph,
+            # v1.40.7 — full auto-ID attribute set
+            "common_name": self.common_name,
+            "sunlight_class": self.sunlight_class,
+            "temp_low_f": self.temp_low_f,
+            "temp_high_f": self.temp_high_f,
+            "care_plan_preset": self.care_plan_preset,
+            "water_every_days": self.water_every_days,
+            "fertilize_every_days": self.fertilize_every_days,
+            "id_confidence": self.id_confidence,
+            "id_model": self.id_model,
+            "id_note": self.id_note,
+            "identified_at": self.identified_at,
         }
 
     @classmethod
@@ -204,6 +241,29 @@ class PlantRecord:
         except (TypeError, ValueError):
             _emitters = (None, None)
 
+        # v1.40.7 — auto-ID attributes: forgiving read (advisory; a bad value
+        # degrades to the default rather than dropping the whole record).
+        def _opt_int(key: str, lo: int, hi: int) -> int | None:
+            v = data.get(key)
+            try:
+                iv = int(v) if v is not None else None
+            except (TypeError, ValueError):
+                return None
+            return iv if iv is not None and lo <= iv <= hi else None
+
+        t_lo, t_hi = _opt_int("temp_low_f", -60, 160), _opt_int("temp_high_f", -60, 160)
+        if t_lo is None or t_hi is None or not (t_lo < t_hi):
+            t_lo = t_hi = None
+        try:
+            conf = data.get("id_confidence")
+            conf = float(conf) if conf is not None else None
+            if conf is not None and not (0.0 <= conf <= 1.0):
+                conf = None
+        except (TypeError, ValueError):
+            conf = None
+        _sun = data.get("sunlight_class")
+        _preset = data.get("care_plan_preset")
+
         return cls(
             id=str(data["id"]),
             name=str(data["name"]),
@@ -221,6 +281,17 @@ class PlantRecord:
             species_suggestion=clean_stored_suggestion(data.get("species_suggestion")),
             emitter_count=_emitters[0],
             emitter_gph=_emitters[1],
+            common_name=str(data.get("common_name") or "")[:120],
+            sunlight_class=_sun if isinstance(_sun, str) and _sun else None,
+            temp_low_f=t_lo,
+            temp_high_f=t_hi,
+            care_plan_preset=_preset if isinstance(_preset, str) and _preset else None,
+            water_every_days=_opt_int("water_every_days", 1, 60),
+            fertilize_every_days=_opt_int("fertilize_every_days", 0, 3650),
+            id_confidence=conf,
+            id_model=str(data.get("id_model") or "")[:80],
+            id_note=str(data.get("id_note") or "")[:300],
+            identified_at=str(data.get("identified_at") or "")[:40],
         )
 
     def to_calc_plant(self) -> Plant:

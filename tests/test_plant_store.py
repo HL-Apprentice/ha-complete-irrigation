@@ -290,3 +290,70 @@ def test_from_serializable_skips_bad_records_without_failing_load():
     bad_value = {**_rec("p4").to_dict(), "wucols_category": "ultra"}
     restored = PlantStore.from_serializable([good, bad_missing_key, good2, bad_value])
     assert [p.id for p in restored.all()] == ["p1", "p2"]  # only the valid ones
+
+
+# ── v1.40.7 — full auto-ID attribute set ─────────────────────────────
+
+
+def test_id_attributes_roundtrip():
+    rec = PlantRecord(
+        id="p1",
+        name="Front oleander",
+        wucols_category="low",
+        canopy_area_sqft=40.0,
+        zone_entity_id="switch.shrubs",
+        common_name="Oleander",
+        sunlight_class="full_sun",
+        temp_low_f=20,
+        temp_high_f=110,
+        care_plan_preset="shrub",
+        water_every_days=7,
+        fertilize_every_days=0,
+        id_confidence=0.82,
+        id_model="qwen2.5vl:7b",
+        id_note="A hardy evergreen shrub.",
+        identified_at="2026-07-12T20:00:00",
+    )
+    back = PlantRecord.from_dict(rec.to_dict())
+    assert back.common_name == "Oleander"
+    assert back.sunlight_class == "full_sun"
+    assert (back.temp_low_f, back.temp_high_f) == (20, 110)
+    assert back.care_plan_preset == "shrub"
+    assert back.water_every_days == 7
+    assert back.fertilize_every_days == 0
+    assert back.id_confidence == 0.82
+    assert back.id_model == "qwen2.5vl:7b"
+    assert back.id_note == "A hardy evergreen shrub."
+    assert back.identified_at == "2026-07-12T20:00:00"
+
+
+def test_old_record_without_id_attributes_loads_with_defaults():
+    # A pre-v1.40.7 record has none of the new keys -> empty/None defaults, no crash.
+    old = _rec("p1").to_dict()
+    for k in (
+        "common_name",
+        "sunlight_class",
+        "temp_low_f",
+        "temp_high_f",
+        "care_plan_preset",
+        "water_every_days",
+        "fertilize_every_days",
+        "id_confidence",
+        "id_model",
+        "id_note",
+        "identified_at",
+    ):
+        old.pop(k, None)
+    back = PlantRecord.from_dict(old)
+    assert back.common_name == "" and back.id_model == "" and back.identified_at == ""
+    assert back.temp_low_f is None and back.temp_high_f is None
+    assert back.id_confidence is None and back.water_every_days is None
+
+
+def test_bad_temp_pair_sanitizes_to_none_on_load():
+    # A tampered/garbage temp pair (inverted, or only one set) degrades to None
+    # rather than dropping the record.
+    for bad in ({"temp_low_f": 120, "temp_high_f": 40}, {"temp_low_f": 40}, {"temp_high_f": 40}):
+        data = {**_rec().to_dict(), **bad}
+        back = PlantRecord.from_dict(data)
+        assert back.temp_low_f is None and back.temp_high_f is None

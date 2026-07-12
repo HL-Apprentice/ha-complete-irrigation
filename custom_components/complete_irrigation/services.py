@@ -2599,6 +2599,19 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             overrides["wucols_category"] = sug["wucols_category"]
         if data["apply_canopy"] and sug.get("canopy_area_sqft"):
             overrides["canopy_area_sqft"] = float(sug["canopy_area_sqft"])
+        # v1.40.7 — persist the FULL attribute set the model returned (nothing dropped).
+        overrides["common_name"] = sug.get("common_name") or ""
+        overrides["sunlight_class"] = sug.get("sunlight_class")
+        if sug.get("temp_low_f") is not None and sug.get("temp_high_f") is not None:
+            overrides["temp_low_f"] = sug["temp_low_f"]
+            overrides["temp_high_f"] = sug["temp_high_f"]
+        overrides["care_plan_preset"] = sug.get("care_plan_preset")
+        overrides["water_every_days"] = sug.get("water_every_days")
+        overrides["fertilize_every_days"] = sug.get("fertilize_every_days")
+        overrides["id_confidence"] = sug.get("confidence")
+        overrides["id_model"] = sug.get("model") or ""
+        overrides["id_note"] = sug.get("note") or ""
+        overrides["identified_at"] = sug.get("identified_at") or ""
         coord.plants.upsert(replace(plant, **overrides))
         await coord.async_save_plants()
 
