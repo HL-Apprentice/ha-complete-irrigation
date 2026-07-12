@@ -4,6 +4,13 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.40.1 — 2026-07-12 — patch
+
+- **Integration brand icon (HA 2026.3+).** Ships `brand/icon.png` +
+  `brand/icon@2x.png` so the integration's own icon shows in the UI (the
+  home-assistant/brands repo no longer accepts custom-integration icons —
+  local brand images are served directly and take priority over the CDN).
+
 ## v1.40.0 — 2026-07-12 — minor
 
 **Scheduling power + hardware verification** (features inspired by a review of
