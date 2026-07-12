@@ -4,6 +4,30 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.40.8 — 2026-07-12 — patch
+
+**Fix: species identification failed on a clear photo with a working endpoint.**
+Root cause: small local vision models (e.g. qwen2.5vl:7b) echoed the prompt's
+inline hints into their JSON — e.g. `"fertilize_every_days": 30 (0 = not
+necessary)` and `"sunlight_class": "full_sun|bright_shade"` — producing invalid
+JSON, so the reply never parsed and identification "failed."
+
+- **Rewrote the vision prompt** to a valid-JSON skeleton with the enum choices
+  described in prose, so the model can't copy pipe-lists or parenthetical notes
+  into its output. Verified live against qwen2.5vl:7b — it now returns clean JSON.
+- **Added a repair layer** (`extract_suggestion_json`): strips code fences /
+  surrounding prose, `//` comments, a parenthetical annotation echoed after a
+  numeric value, and trailing commas — belt-and-suspenders for any small model.
+- **Enum robustness**: a `"a|b"` echo is now read as its first token, so
+  sunlight/water-use/care-preset survive instead of being dropped.
+- Note: identification now **succeeds** (returns a full suggestion you accept or
+  edit). A 7B vision model's *species guess* can still be off — correct it in the
+  **Plant species** field; the sun/temp/water-use/canopy/care attributes still fill.
+- **Fix: saving a plant edit failed with "enter a valid number" on canopy.** The
+  canopy input was `min="0.1" step="1"`, so the browser rejected every real canopy
+  value (20, 12, 2.5 …) as a step mismatch. Changed to `step="any"` — any positive
+  area saves. (Affected the manual add form too; photo-add was unaffected.)
+
 ## v1.40.7 — 2026-07-12 — minor
 
 **Capture every attribute the plant ID returns, and turn the multi-schedule

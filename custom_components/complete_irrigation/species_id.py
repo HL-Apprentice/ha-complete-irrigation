@@ -15,6 +15,7 @@ model can never plant unbounded text, non-finite numbers, or an unknown enum in
 
 from __future__ import annotations
 
+import json
 import math
 import re
 import unicodedata
@@ -65,6 +66,41 @@ def _clean_int(v: Any, lo: int, hi: int) -> int | None:
     return None if f is None else int(f)
 
 
+def _first_enum(v: Any) -> Any:
+    """A small vision model sometimes echoes the whole pipe list of options
+    (`"full_sun|bright_shade"`) instead of picking one. Take the first token."""
+    return v.split("|", 1)[0].strip() if isinstance(v, str) and "|" in v else v
+
+
+def extract_suggestion_json(text: Any) -> dict | None:
+    """Pull the JSON object out of a vision model's reply, repairing the mistakes
+    small models make so a near-miss still identifies the plant:
+      * prose / code fences / leading label around the object,
+      * `//` line comments,
+      * a prompt annotation echoed AFTER a value (`30 (0 = not necessary)`),
+      * trailing commas before a closing brace/bracket.
+    Returns the parsed dict, or None if nothing usable is present.
+    """
+    if not isinstance(text, str):
+        return None
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end <= start:
+        return None
+    original = text[start : end + 1]
+    repaired = re.sub(r"//[^\n\r]*", "", original)  # line comments
+    # `<value> (annotation)` after a number -> `<value>` (the observed failure)
+    repaired = re.sub(r"([:,]\s*-?\d+(?:\.\d+)?)\s*\([^)]*\)", r"\1", repaired)
+    repaired = re.sub(r",\s*([}\]])", r"\1", repaired)  # trailing commas
+    for candidate in (repaired, original):
+        try:
+            obj = json.loads(candidate)
+        except ValueError:
+            continue
+        if isinstance(obj, dict):
+            return obj
+    return None
+
+
 def validate_suggestion(raw: Any, *, model: str, now_iso: str) -> dict[str, Any] | None:
     """Bound a raw model reply into a stored suggestion dict, or None if unusable.
 
@@ -88,7 +124,7 @@ def validate_suggestion(raw: Any, *, model: str, now_iso: str) -> dict[str, Any]
     if out["confidence"] is None:
         out["confidence"] = _DEFAULT_CONFIDENCE
 
-    sunlight = raw.get("sunlight_class")
+    sunlight = _first_enum(raw.get("sunlight_class"))
     out["sunlight_class"] = (
         sunlight if isinstance(sunlight, str) and sunlight in SUNLIGHT_LUX else None
     )
@@ -101,12 +137,12 @@ def validate_suggestion(raw: Any, *, model: str, now_iso: str) -> dict[str, Any]
     else:
         out["temp_low_f"] = out["temp_high_f"] = None
 
-    wucols = raw.get("wucols_category")
+    wucols = _first_enum(raw.get("wucols_category"))
     out["wucols_category"] = (
         wucols if isinstance(wucols, str) and wucols in WUCOLS_FACTORS else None
     )
 
-    preset = raw.get("care_plan_preset")
+    preset = _first_enum(raw.get("care_plan_preset"))
     out["care_plan_preset"] = (
         preset if isinstance(preset, str) and preset in CARE_PLAN_PRESETS else None
     )

@@ -657,19 +657,23 @@ _DISMISS_ADVICE_SCHEMA = vol.Schema({})
 _TEST_VISION_SCHEMA = vol.Schema({})
 
 _SPECIES_PROMPT = (
-    "You are a botanist identifying the plant in the photo. Reply with ONLY minified "
-    'JSON, no prose: {"species":"scientific name","common_name":"common name",'
-    '"confidence":0.0-1.0,"sunlight_class":"full_sun|partial_sun|bright_shade|deep_shade",'
-    '"temp_low_f":int,"temp_high_f":int,'
-    '"wucols_category":"very_low|low|moderate|high",'
-    '"care_plan_preset":"tree|shrub|flower|cactus_succulent|grass",'
-    '"water_every_days":int,"fertilize_every_days":int (0 = not necessary),'
-    '"canopy_area_sqft":number,'
-    '"note":"one short sentence"} '
-    "Base temperature tolerance and water/fertilizer cadence on the species' typical "
-    "outdoor care in a hot arid climate. Estimate canopy_area_sqft (the plant's "
-    "footprint in square feet) from the photo using visible context for scale. "
-    "If unsure of the species, give your best guess with a low confidence."
+    "You are a botanist. Identify the plant in the photo. Reply with ONLY a single "
+    "valid JSON object and NOTHING else: no prose, no code fences, and no comments "
+    "or notes inside the JSON. Fill in this exact template, replacing each value "
+    "and keeping it valid JSON a strict parser can read:\n"
+    '{"species":"scientific name","common_name":"common name","confidence":0.7,'
+    '"sunlight_class":"full_sun","temp_low_f":20,"temp_high_f":110,'
+    '"wucols_category":"moderate","care_plan_preset":"shrub","water_every_days":7,'
+    '"fertilize_every_days":0,"canopy_area_sqft":10,"note":"one short sentence"}\n'
+    "Pick exactly ONE value for each of these (do NOT return the list or a pipe): "
+    "sunlight_class is one of full_sun, partial_sun, bright_shade, deep_shade; "
+    "wucols_category is one of very_low, low, moderate, high; care_plan_preset is "
+    "one of tree, shrub, flower, cactus_succulent, grass. confidence is a number "
+    "from 0 to 1. Use 0 for fertilize_every_days when fertilizer is not needed. "
+    "Base temperature tolerance and the watering/fertilizing cadence on the "
+    "species' typical outdoor care in a hot arid climate. Estimate canopy_area_sqft "
+    "(the plant's footprint in square feet) from visible scale in the photo. If "
+    "unsure of the species, give your best guess with a low confidence."
 )
 
 
@@ -2289,7 +2293,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         from homeassistant.helpers.aiohttp_client import async_get_clientsession
         from homeassistant.util import dt as dt_util
 
-        from .species_id import validate_suggestion
+        from .species_id import extract_suggestion_json, validate_suggestion
 
         # Newest photo path is server-set "/local/complete_irrigation/plants/<id>/…"
         # (from_dict guarantees the /local/ prefix; the id is slug-safe). Re-guard anyway.
@@ -2357,13 +2361,9 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             text = _json.loads(raw)["choices"][0]["message"]["content"]
         except (KeyError, IndexError, ValueError, TypeError) as err:
             raise vol.Invalid("vision endpoint returned an unexpected envelope") from err
-        start, end = text.find("{"), text.rfind("}")
-        obj = None
-        if start >= 0 and end > start:
-            try:
-                obj = _json.loads(text[start : end + 1])
-            except ValueError:
-                obj = None
+        # Repair-aware extraction: small vision models wrap the JSON in prose,
+        # echo the prompt's inline hints into values, or leave trailing commas.
+        obj = extract_suggestion_json(text)
         suggestion = validate_suggestion(obj, model=model, now_iso=dt_util.utcnow().isoformat())
         if suggestion is None:
             raise vol.Invalid("the model could not identify the plant — try a clearer photo")
