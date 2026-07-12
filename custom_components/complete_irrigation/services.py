@@ -115,6 +115,7 @@ SERVICE_DELETE_CARE_TASK = "delete_care_task"
 SERVICE_COMPLETE_CARE_TASK = "complete_care_task"
 SERVICE_SEED_CARE_PLAN = "seed_care_plan"  # v1.36 — one-tap plan from a preset
 SERVICE_IDENTIFY_PLANT_SPECIES = "identify_plant_species"  # v1.37 — photo -> suggestion
+SERVICE_RESEARCH_PLANT_SPECIES = "research_plant_species"  # v1.40.9 — NAME -> care details
 SERVICE_ADD_PLANT_FROM_PHOTO = "add_plant_from_photo"  # v1.38 — photo-first creation
 SERVICE_PROPOSE_WATERING_ADVICE = "propose_watering_advice"  # v1.39 — LLM advisor
 SERVICE_DISMISS_WATERING_ADVICE = "dismiss_watering_advice"
@@ -619,6 +620,11 @@ _SEED_CARE_PLAN_SCHEMA = vol.Schema(
 
 # v1.37 — species identification round-trip.
 _IDENTIFY_SPECIES_SCHEMA = vol.Schema({vol.Required("plant_id"): cv.string})
+# v1.40.9 — research by name; `species` overrides the plant's stored species (so the
+# user can type the correct name and research it in one step). Falls back to stored.
+_RESEARCH_SCHEMA = vol.Schema(
+    {vol.Required("plant_id"): cv.string, vol.Optional("species", default=""): _SPECIES}
+)
 # v1.38 — photo-first: zone + photo are all that's required; drip emitters are the
 # other user-only fact (optional here, editable later). The LLM fills the rest.
 _ADD_PLANT_FROM_PHOTO_SCHEMA = vol.Schema(
@@ -674,6 +680,26 @@ _SPECIES_PROMPT = (
     "species' typical outdoor care in a hot arid climate. Estimate canopy_area_sqft "
     "(the plant's footprint in square feet) from visible scale in the photo. If "
     "unsure of the species, give your best guess with a low confidence."
+)
+
+# v1.40.9 — research a species BY NAME (no photo): the user corrected the species,
+# now look up its care details. Same JSON contract minus canopy (name alone can't
+# know a specific plant's size). {SPECIES} is filled with the user's name.
+_RESEARCH_PROMPT = (
+    "You are a botanist. The plant species is: {SPECIES}. Return ONLY a single valid "
+    "JSON object describing its typical OUTDOOR care in a hot arid climate — no prose, "
+    "no code fences, and no comments inside the JSON. Fill in this exact template, "
+    "keeping it valid JSON a strict parser can read:\n"
+    '{"species":"{SPECIES}","common_name":"common name","confidence":0.9,'
+    '"sunlight_class":"full_sun","temp_low_f":20,"temp_high_f":110,'
+    '"wucols_category":"moderate","care_plan_preset":"shrub","water_every_days":7,'
+    '"fertilize_every_days":0,"note":"one short sentence"}\n'
+    "Pick exactly ONE value for each of these (do NOT return the list or a pipe): "
+    "sunlight_class is one of full_sun, partial_sun, bright_shade, deep_shade; "
+    "wucols_category is one of very_low, low, moderate, high; care_plan_preset is one "
+    "of tree, shrub, flower, cactus_succulent, grass. confidence (0 to 1) is how sure "
+    "you are the details fit this species. Use 0 for fertilize_every_days when it is "
+    "not needed. Do NOT include canopy_area_sqft."
 )
 
 
@@ -2390,6 +2416,126 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             raise vol.Invalid(f"no such plant {data['plant_id']}")
         await _run_identify(coord, plant)
 
+    async def _run_research(coord, species_name: str) -> dict:
+        """v1.40.9 — research a NAMED species (no photo) via the configured vision
+        endpoint in text mode. Returns a bounded suggestion dict or raises
+        vol.Invalid with a user-actionable message."""
+        vision_url = str(coord.config.get("vision_url") or "").strip()
+        if not vision_url.startswith(("http://", "https://")):
+            raise vol.Invalid(
+                "set a vision endpoint first (Settings -> Vision endpoint) to research a species"
+            )
+        model = str(coord.config.get("vision_model") or "").strip() or "default"
+
+        import json as _json
+
+        import aiohttp
+        from homeassistant.helpers.aiohttp_client import async_get_clientsession
+        from homeassistant.util import dt as dt_util
+
+        from .species_id import extract_suggestion_json, validate_suggestion
+
+        prompt = _RESEARCH_PROMPT.replace("{SPECIES}", species_name)
+        body = _json.dumps(
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.2,
+                "max_tokens": 400,
+            }
+        )
+        session = async_get_clientsession(hass)
+        try:
+            async with session.post(
+                vision_url,
+                data=body,
+                headers={"Content-Type": "application/json"},
+                timeout=aiohttp.ClientTimeout(total=120),
+            ) as resp:
+                if resp.status != 200:
+                    raise vol.Invalid(f"vision endpoint returned HTTP {resp.status}")
+                raw = await resp.content.read(1_000_001)
+                if len(raw) > 1_000_000:
+                    raise vol.Invalid("vision endpoint response too large")
+        except vol.Invalid:
+            raise
+        except Exception as err:
+            raise vol.Invalid(f"vision endpoint unreachable: {err}") from err
+        try:
+            text = _json.loads(raw)["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, ValueError, TypeError) as err:
+            raise vol.Invalid("vision endpoint returned an unexpected envelope") from err
+        obj = extract_suggestion_json(text)
+        if isinstance(obj, dict) and not str(obj.get("species") or "").strip():
+            obj["species"] = species_name  # the name IS the answer; satisfy the validator
+        suggestion = validate_suggestion(obj, model=model, now_iso=dt_util.utcnow().isoformat())
+        if suggestion is None:
+            raise vol.Invalid("could not research that species -- check the name and try again")
+        return suggestion
+
+    async def handle_research_plant_species(call: ServiceCall) -> None:
+        """v1.40.9 — the user typed the correct species; research its care details by
+        NAME and apply them (keeping the user's species + canopy)."""
+        if not await _require_admin(hass, call):  # outbound call + data write
+            return
+        data = _RESEARCH_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None:
+            return
+        plant = coord.plants.get(data["plant_id"])
+        if plant is None:
+            raise vol.Invalid(f"no such plant {data['plant_id']}")
+        species_name = (data["species"].strip() or (plant.species or "").strip())[:120]
+        if not species_name:
+            raise vol.Invalid("enter the plant's species first, then research it")
+
+        from homeassistant.util import dt as dt_util
+
+        from .species_id import suggested_lux_range
+
+        sug = await _run_research(coord, species_name)
+        # Apply the researched attributes; KEEP the user's species text + canopy.
+        overrides: dict = {"species": species_name, "species_suggestion": None}
+        if sug.get("common_name"):
+            overrides["common_name"] = sug["common_name"]
+        overrides["sunlight_class"] = sug.get("sunlight_class")
+        if sug.get("temp_low_f") is not None and sug.get("temp_high_f") is not None:
+            overrides["temp_low_f"] = sug["temp_low_f"]
+            overrides["temp_high_f"] = sug["temp_high_f"]
+        if sug.get("wucols_category"):
+            overrides["wucols_category"] = sug["wucols_category"]
+        overrides["care_plan_preset"] = sug.get("care_plan_preset")
+        overrides["water_every_days"] = sug.get("water_every_days")
+        overrides["fertilize_every_days"] = sug.get("fertilize_every_days")
+        overrides["id_confidence"] = sug.get("confidence")
+        overrides["id_model"] = sug.get("model") or ""
+        overrides["id_note"] = sug.get("note") or ""
+        overrides["identified_at"] = dt_util.utcnow().isoformat()
+        rng = suggested_lux_range(sug)
+        if rng is not None:
+            overrides["lux_low"], overrides["lux_high"] = rng
+        coord.plants.upsert(replace(plant, **overrides))
+        await coord.async_save_plants()
+        # Seed the care plan from the preset (skip kinds already present).
+        seeded = 0
+        if sug.get("care_plan_preset"):
+            existing_kinds = {t.kind for t in coord.care_tasks.for_plant(plant.id)}
+            for t in seed_care_plan(
+                plant.id, sug["care_plan_preset"], id_factory=lambda: uuid.uuid4().hex[:12]
+            ):
+                if t.kind not in existing_kinds:
+                    coord.care_tasks.add(t)
+                    seeded += 1
+            if seeded:
+                await coord.async_save_care_tasks()
+        if coord.notifier is not None:
+            await coord.notifier.notify(
+                f"Researched {species_name}: sun, temperature range, water-use, and a "
+                f"care plan applied ({sug['confidence'] * 100:.0f}% confidence).",
+                title="Plant details researched",
+                event_type="plant_researched",
+            )
+
     async def handle_test_vision_endpoint(call: ServiceCall) -> ServiceResponse:
         """v1.39.1 — probe the configured vision endpoint with a tiny text-only
         request and report reachability + model reply, so a bad URL/model shows
@@ -2884,6 +3030,12 @@ async def _async_register_services(hass: HomeAssistant) -> None:
     )
     hass.services.async_register(
         DOMAIN,
+        SERVICE_RESEARCH_PLANT_SPECIES,
+        handle_research_plant_species,
+        schema=_RESEARCH_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
         SERVICE_ADD_PLANT_FROM_PHOTO,
         handle_add_plant_from_photo,
         schema=_ADD_PLANT_FROM_PHOTO_SCHEMA,
@@ -3191,6 +3343,7 @@ def _async_unregister_services(hass: HomeAssistant) -> None:
         SERVICE_COMPLETE_CARE_TASK,
         SERVICE_SEED_CARE_PLAN,
         SERVICE_IDENTIFY_PLANT_SPECIES,
+        SERVICE_RESEARCH_PLANT_SPECIES,
         SERVICE_ADD_PLANT_FROM_PHOTO,
         SERVICE_PROPOSE_WATERING_ADVICE,
         SERVICE_DISMISS_WATERING_ADVICE,
