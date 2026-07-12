@@ -4,6 +4,22 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.40.5 — 2026-07-12 — patch
+
+**Plant add: separate "Plant species" and "Friendly name" fields.**
+
+- The photo-add card's single "Name" field is now two: **Plant species**
+  (what it is — auto-identified from the photo, or type your own) and
+  **Friendly name** (what you call it — e.g. "Front-yard lemon"). The manual
+  add form uses the same two labels.
+- A typed **species is kept** over the vision guess (and survives an identify
+  failure) — you still get the vision care plan / water-use category / canopy.
+  `add_plant_from_photo` now accepts an optional `species`.
+- Backend note (not a bug): a plant added while the vision endpoint is
+  unreachable saves correctly with its photo on the chosen zone, but stays at
+  provisional defaults (species blank, moderate / 20 sqft) until identified —
+  configure the vision endpoint or use **Identify species** to fill it.
+
 ## v1.40.4 — 2026-07-12 — patch
 
 **Plant photo-add flow: clearer, confirmable, and camera-vs-library aware.**

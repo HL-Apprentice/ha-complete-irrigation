@@ -628,6 +628,9 @@ _ADD_PLANT_FROM_PHOTO_SCHEMA = vol.Schema(
         vol.Optional("latitude"): vol.All(vol.Coerce(float), vol.Range(min=-90, max=90)),
         vol.Optional("longitude"): vol.All(vol.Coerce(float), vol.Range(min=-180, max=180)),
         vol.Optional("name", default=""): vol.All(cv.string, vol.Length(max=80), _no_control_chars),
+        # v1.40.5 — optional user-entered species; kept over the vision guess when
+        # provided (and survives an identify failure). Blank -> vision fills it.
+        vol.Optional("species", default=""): _SPECIES,
         vol.Optional("emitter_count"): vol.All(vol.Coerce(int), vol.Range(min=1, max=100)),
         vol.Optional("emitter_gph"): vol.All(vol.Coerce(float), vol.Range(min=0.1, max=50)),
     }
@@ -2494,9 +2497,11 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         if (data.get("emitter_count") is None) != (data.get("emitter_gph") is None):
             raise vol.Invalid("set both emitter_count and emitter_gph, or neither")
         name = data["name"].strip() or f"New plant {dt_util.now().strftime('%b %d %H:%M')}"
+        user_species = data["species"].strip()  # v1.40.5 — kept over the vision guess
         plant = PlantRecord(
             id=uuid.uuid4().hex[:12],
             name=name,
+            species=user_species,
             wucols_category="moderate",  # provisional; the suggestion replaces it
             canopy_area_sqft=20.0,  # provisional; the photo estimate replaces it
             zone_entity_id=data["zone_entity_id"],
@@ -2549,6 +2554,13 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             blocking=True,
             context=call.context,
         )
+        # v1.40.5 — the vision apply overwrites species; if the user typed one,
+        # keep THEIR text (we still took the vision care plan / category / canopy).
+        if user_species:
+            cur = coord.plants.get(plant.id)
+            if cur is not None and cur.species != user_species:
+                coord.plants.upsert(replace(cur, species=user_species))
+                await coord.async_save_plants()
         if coord.notifier is not None:
             await coord.notifier.notify(
                 f"Added {common or suggestion['species']} ({suggestion['species']}) — "
