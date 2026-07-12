@@ -4,6 +4,34 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.40.3 — 2026-07-12 — minor
+
+**Rain-lockout override + the ceiling now truly reads the forecast.** Follows
+v1.40.2; multi-model regression gated.
+
+- **Override button on the Today and Scheduling tabs.** When a rain lockout is
+  active, both tabs now show an **Override** button that ends the current lockout
+  immediately so watering resumes — the next rain re-arms it normally. Previously
+  this only existed on the Weather tab (all three now read "Override" for
+  consistency). One tap, self-limiting — nothing to leave switched on by accident.
+- **Ceiling responds to the forecast high, not just the current temp.** Rain
+  usually falls during a cool storm cell, so the heat-graduated ceiling was being
+  set from an 85–90°F reading even when the day's high was 112°F. The coordinator
+  now caches the near-term forecast daily high (today + tomorrow, from the ETo
+  forecast it already fetches) and feeds the **hottest of {current temp, weather
+  temp, forecast high}** into the ceiling. A big rain now resumes on the schedule
+  the *heat* dictates, not the storm's momentary chill.
+- **Unit-safe temperature.** All three heat signals are normalized to °F
+  (Celsius/Kelvin converted) — a latent mis-scale for metric weather entities.
+- **Test coverage for the coordinator glue.** Added coordinator-level tests for
+  the exact wiring the earlier bug lived in — unit-safe rainfall (mm→in), the
+  config floor, the F-normalized heat signal, rising-edge arming, and the
+  forecast-high cache — plus pure tests for `rain_to_inches` / `temp_to_fahrenheit`.
+- **Fixed: the plant "Zone / loop" picker listed every switch in HA.** When
+  adding a plant (from a photo or the manual form), the zone dropdown offered
+  *all* `switch.*` entities — lights, plugs, fans — instead of just the
+  configured irrigation-controller zones. It now lists only the controller zones.
+
 ## v1.40.2 — 2026-07-12 — minor
 
 **Rain lockout reworked for the desert** — brief monsoon cells no longer strand

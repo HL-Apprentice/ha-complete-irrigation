@@ -42,6 +42,31 @@ def rain_to_inches(value: float, unit: str | None) -> float | None:
     return v
 
 
+def temp_to_fahrenheit(value: float, unit: str | None) -> float | None:
+    """Normalize a temperature reading to FAHRENHEIT regardless of the source unit.
+
+    The rain-lockout ceiling anchors are in F. A weather entity or sensor may
+    report Celsius (or, rarely, Kelvin); reading a C value AS F would wildly
+    mis-scale the ceiling (30C read as 30F). Celsius/Kelvin are converted;
+    Fahrenheit / unknown / blank is assumed already F (the US default for this
+    desert integration). Non-numeric or non-finite -> None.
+    """
+    if value is None:
+        return None
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(v):
+        return None
+    u = (unit or "").strip().lower().lstrip("°")
+    if u in ("c", "celsius"):
+        return v * 9.0 / 5.0 + 32.0
+    if u in ("k", "kelvin"):
+        return (v - 273.15) * 9.0 / 5.0 + 32.0
+    return v  # fahrenheit / unknown -> already F
+
+
 # 4-model agronomy panel consensus (Grok+Gemini+Qwen+Claude, 2026-07): an
 # ET-SCALED formula beats fixed tiers — lockout duration = how many days of
 # evaporative demand the EFFECTIVE rainfall replaces, scaled by the LIVE ETo the

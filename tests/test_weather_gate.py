@@ -6,11 +6,15 @@ that should apply.
 
 from __future__ import annotations
 
+import pytest
+
 from custom_components.complete_irrigation.weather_gate import (
     HotWeatherDecision,
     evaluate_hot_weather,
     evaluate_rain_lockout,
     rain_lockout_max_hours,
+    rain_to_inches,
+    temp_to_fahrenheit,
 )
 
 # ── rain lockout: ET-scaled formula (4-model consensus 2026-07) ────
@@ -129,3 +133,37 @@ def test_graduated_ceiling_clamps_big_rain():
     assert evaluate_rain_lockout(0.25, 0.30, max_hours=hot) == 12  # small rain unaffected
     mild = rain_lockout_max_hours(80)  # 48h
     assert evaluate_rain_lockout(1.0, 0.30, max_hours=mild) == 48
+
+
+# ── unit conversion: the glue where the original bugs lived ─────────
+
+
+def test_rain_to_inches_converts_units():
+    # The reported bug: a Tempest reporting mm read AS inches. 6.35mm = 0.25in.
+    assert rain_to_inches(6.35, "mm") == pytest.approx(0.25, abs=1e-6)
+    assert rain_to_inches(0.25, "mm") == pytest.approx(0.25 / 25.4, abs=1e-6)  # 0.01in trace
+    assert rain_to_inches(2.54, "cm") == pytest.approx(1.0, abs=1e-6)
+    assert rain_to_inches(0.01, "m") == pytest.approx(0.393701, abs=1e-5)
+    # inches / unknown / blank -> passthrough (config default is inches).
+    assert rain_to_inches(0.5, "in") == 0.5
+    assert rain_to_inches(0.5, None) == 0.5
+    assert rain_to_inches(0.5, "") == 0.5
+    assert rain_to_inches(0.5, '"') == 0.5
+    # non-numeric / non-finite -> None (must not drive a lockout).
+    assert rain_to_inches("nan", "mm") is None
+    assert rain_to_inches("not-a-number", "in") is None
+    assert rain_to_inches(None, "in") is None
+
+
+def test_temp_to_fahrenheit_converts_units():
+    assert temp_to_fahrenheit(0, "°C") == pytest.approx(32.0)
+    assert temp_to_fahrenheit(44.4, "C") == pytest.approx(111.92, abs=1e-2)  # ~112F desert day
+    assert temp_to_fahrenheit(273.15, "K") == pytest.approx(32.0, abs=1e-6)
+    # fahrenheit / unknown / blank -> passthrough.
+    assert temp_to_fahrenheit(112, "°F") == 112
+    assert temp_to_fahrenheit(112, None) == 112
+    assert temp_to_fahrenheit(112, "") == 112
+    # non-numeric / non-finite -> None.
+    assert temp_to_fahrenheit("nan", "C") is None
+    assert temp_to_fahrenheit(float("inf"), "F") is None
+    assert temp_to_fahrenheit(None, "C") is None
