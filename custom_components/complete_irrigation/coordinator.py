@@ -82,6 +82,7 @@ from .weather_gate import (
     evaluate_hot_weather,
     evaluate_rain_lockout,
     evaluate_wind_defer,
+    rain_lockout_max_hours,
     rain_to_inches,
 )
 
@@ -1856,20 +1857,12 @@ class ScheduleCoordinator:
                 daily_eto = wk / 7.0
         except (TypeError, ValueError, AttributeError):
             daily_eto = None
-        # Heat-aware cap: on a hot day the yard MUST NOT stay locked out more than
-        # ~1 day — at 110F+ plants transpire hard and baked/hydrophobic desert soil
-        # sheds much of the rain, so even a big event shouldn't strand them. When
-        # the forecast high meets the hot-weather threshold (default 100F if unset),
-        # cap the lockout at 24h; otherwise the normal 48h max applies.
-        from .weather_gate import RAIN_LOCKOUT_HOT_MAX_HOURS, RAIN_LOCKOUT_MAX_HOURS
-
-        forecast_high = self._read_forecast_high()
-        try:
-            hot_thresh = float(self._config.get("hot_threshold_f") or 100.0)
-        except (TypeError, ValueError):
-            hot_thresh = 100.0
-        hot_day = forecast_high is not None and forecast_high >= hot_thresh
-        max_h = RAIN_LOCKOUT_HOT_MAX_HOURS if hot_day else RAIN_LOCKOUT_MAX_HOURS
+        # Heat-aware ceiling: the lockout MAX shrinks with the day's heat, so a big
+        # rain never strands the yard — at 110F+ plants transpire hard and baked/
+        # hydrophobic desert soil sheds much of the rain. rain_lockout_max_hours maps
+        # the hottest relevant temperature (current temp OR forecast high, whichever
+        # is hotter) to the ceiling: ~48h mild, 24h at 105F, 18h in extreme heat.
+        max_h = rain_lockout_max_hours(self._read_heat_signal_f())
         hours = evaluate_rain_lockout(rainfall_in, daily_eto, min_inches=floor, max_hours=max_h)
         if hours is None:
             return
@@ -1908,6 +1901,31 @@ class ScheduleCoordinator:
             return float(state.state)
         except (TypeError, ValueError):
             return None
+
+    def _read_heat_signal_f(self) -> float | None:
+        """Hottest relevant temperature (F) for the rain-lockout ceiling.
+
+        Takes the MAX of (a) the configured temperature sensor — which the
+        hot-weather boost already treats as the day's heat — and (b) the current
+        temperature from a weather.* entity, if present. Using the hotter of the
+        two is the conservative choice: a shorter ceiling errs toward watering.
+        Returns None when no temperature signal is available (-> mild 48h cap)."""
+        vals: list[float] = []
+        fh = self._read_forecast_high()
+        if fh is not None:
+            vals.append(fh)
+        for eid in self._hass.states.async_entity_ids("weather"):
+            state = self._hass.states.get(eid)
+            if state is None or state.state in ("unknown", "unavailable"):
+                continue
+            temp = state.attributes.get("temperature")
+            try:
+                if temp is not None:
+                    vals.append(float(temp))
+            except (TypeError, ValueError):
+                pass
+            break  # first usable weather entity is enough
+        return max(vals) if vals else None
 
     def _read_current_wind_mph(self) -> float | None:
         """PRD #52 — current wind speed (mph) from configured sensor.
