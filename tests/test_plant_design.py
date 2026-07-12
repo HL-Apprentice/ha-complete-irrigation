@@ -125,16 +125,25 @@ def test_disabled_schedule_does_not_count():
     assert any("no enabled schedule" in w.lower() for w in reports[0].warnings)
 
 
-def test_multiple_schedules_picks_primary_and_notes_others():
+def test_multiple_schedules_picks_primary_and_lists_all():
     # A big weekly soak (240m x7 = 1680 wk-min) vs a small interval (10m x3.5
-    # = 35 wk-min). Primary = the soak; the report notes the other.
+    # = 35 wk-min). Primary = the soak; ALL schedules are LISTED (not warned).
     big = _weekday_sched("switch.citrus", 240, sid="big", name="Big Soak")
     small = _interval_sched("switch.citrus", 10, days=2, sid="sm", name="Top-up")
     reports = build_yard_report([_plant("p1", "switch.citrus")], [small, big], eto_in_week=1.8)
     rep = reports[0]
     assert rep.loop.runtime_minutes == 240  # the soak, not the top-up
-    assert any("also watered by" in w.lower() for w in rep.warnings)
-    assert any("Big Soak" in w for w in rep.warnings)
+    # v1.40.7 — no "also watered by" WARNING; instead both schedules are listed,
+    # most-weekly-water first, with the soak marked primary.
+    assert not any("also watered" in w.lower() for w in rep.warnings)
+    assert [s["name"] for s in rep.schedules] == ["Big Soak", "Top-up"]
+    assert rep.schedules[0]["primary"] is True
+    assert rep.schedules[1]["primary"] is False
+    assert rep.schedules[0]["runtime_minutes"] == 240
+    # serialization carries the list to the panel
+    from custom_components.complete_irrigation.plant_design import serialize_loop_report
+
+    assert [s["name"] for s in serialize_loop_report(rep)["schedules"]] == ["Big Soak", "Top-up"]
 
 
 def test_watering_schedules_sorted_by_weekly_water():

@@ -144,6 +144,10 @@ class LoopReport:
     warnings: tuple[str, ...]
     suggested_runtime_minutes: int
     topups: tuple[TopUpPlan, ...] = ()
+    # v1.40.7 — the ENABLED schedules that water this loop (name / runtime /
+    # runs-per-week / primary), most weekly water first. Surfaced by the panel as
+    # a "Scheduled for this loop" section instead of a "watered by N others" warning.
+    schedules: tuple[dict, ...] = ()
 
 
 # ── core formulas ───────────────────────────────────────────────────

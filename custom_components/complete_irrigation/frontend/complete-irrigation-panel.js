@@ -72,7 +72,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.40.6";
+  const PANEL_VERSION = "v1.40.7";
   const DEFAULT_MANUAL_MINUTES = 10;
   const MAX_MANUAL_MINUTES = 480; // 8 h — matches the backend schedule cap; long
   // runs are delivered in controller-cap blocks (v1.25). Was 60, which blocked
@@ -6133,6 +6133,8 @@
         (e.id ? this._renderLightSection(e) : "") +
         // v1.38 — installed-drips status line (saved plants only).
         (e.id ? this._renderDripsLine(e) : "") +
+        // v1.40.7 — full identified-attribute set from the vision ID (read-only).
+        (e.id ? this._renderIdentifiedAttrs(e) : "") +
         `<div class="yard-form-actions">` +
         `<button class="btn btn-primary" type="submit">${e.id ? "Save" : "Add plant"}</button>` +
         `<button class="btn btn-small" type="button" data-action="cancel-plant">Cancel</button>` +
@@ -6529,6 +6531,49 @@
       );
     }
 
+    _renderIdentifiedAttrs(e) {
+      // v1.40.7 — read-only display of the full attribute set captured from the
+      // vision ID. Reads the FRESH plant record; hidden until a plant is identified.
+      const p = (this._plants || []).find((x) => x.id === e.id) || {};
+      const nice = (s) => String(s).replace(/_/g, " ");
+      const rows = [];
+      if (p.common_name) rows.push(["Common name", p.common_name]);
+      if (p.sunlight_class) rows.push(["Sunlight", nice(p.sunlight_class)]);
+      if (p.temp_low_f != null && p.temp_high_f != null)
+        rows.push(["Temp tolerance", `${p.temp_low_f}–${p.temp_high_f} °F`]);
+      if (p.water_every_days != null)
+        rows.push(["Water cadence", `every ${p.water_every_days} days`]);
+      if (p.fertilize_every_days != null)
+        rows.push([
+          "Fertilize",
+          p.fertilize_every_days === 0 ? "not necessary" : `every ${p.fertilize_every_days} days`,
+        ]);
+      if (p.care_plan_preset) rows.push(["Care preset", nice(p.care_plan_preset)]);
+      if (p.id_note) rows.push(["Note", p.id_note]);
+      const prov = [];
+      if (p.id_confidence != null) prov.push(`${Math.round(p.id_confidence * 100)}% confident`);
+      if (p.id_model) prov.push(p.id_model);
+      if (p.identified_at) {
+        const d = new Date(p.identified_at);
+        if (!isNaN(d.getTime())) prov.push(d.toLocaleDateString());
+      }
+      if (!rows.length && !prov.length) return "";
+      return (
+        `<div class="plant-attrs"><div class="plant-attrs-h">Identified attributes</div>` +
+        rows
+          .map(
+            ([k, v]) =>
+              `<div class="plant-attr"><span>${escapeHtml(k)}</span>` +
+              `<span class="muted">${escapeHtml(String(v))}</span></div>`
+          )
+          .join("") +
+        (prov.length
+          ? `<div class="plant-attr-prov">Auto-identified · ${escapeHtml(prov.join(" · "))}</div>`
+          : "") +
+        `</div>`
+      );
+    }
+
     _careSubject(t) {
       // v1.35 — a task points at either a plant (resolve its name) or a zone.
       if (t.plant_id) {
@@ -6753,6 +6798,26 @@
           );
         })
         .join("");
+      // v1.40.7 — schedules watering this loop shown as an informational section
+      // (was a "watered by N other schedule(s)" warning).
+      const schedList = r.schedules || [];
+      const schedHtml = schedList.length
+        ? `<div class="yard-scheds"><div class="yard-scheds-h">Scheduled for this loop</div>` +
+          schedList
+            .map(
+              (s) =>
+                `<div class="yard-sched"><span class="yard-sched-name">${escapeHtml(s.name)}</span>` +
+                `<span class="muted">${escapeHtml(String(s.runtime_minutes))} min &middot; ${escapeHtml(
+                  String(s.runs_per_week)
+                )}&times;/wk${
+                  s.primary && schedList.length > 1
+                    ? ` &middot; <span class="yard-sched-primary">primary</span>`
+                    : ""
+                }</span></div>`
+            )
+            .join("") +
+          `</div>`
+        : "";
       return (
         `<div class="card yard-loop-card">` +
         `<div class="yard-loop-head">` +
@@ -6763,6 +6828,7 @@
           capStr
         )} · suggested ${r.suggested_runtime_minutes} min</span>` +
         `</div>` +
+        schedHtml +
         (plantRows
           ? `<div class="yard-table-wrap"><table class="yard-table">` +
             `<thead><tr><th>Plant</th><th>Needs</th><th>Emitters</th><th>Gets</th><th>Status</th></tr></thead>` +
@@ -7473,6 +7539,18 @@
         `.plant-row-meta{display:flex;flex-wrap:wrap;gap:2px 8px;font-size:12px;color:var(--ci-text-2);margin-top:3px}` +
         `.plant-row-actions{display:flex;gap:8px;flex-shrink:0}` +
         `@media (max-width:520px){.plant-row{flex-direction:column;align-items:stretch}.plant-row-actions .btn{flex:1}}` +
+        // v1.40.7 — "Scheduled for this loop" info section (was a warning)
+        `.yard-scheds{margin:8px 0 4px;padding:8px 11px;border:1px solid var(--ci-border);border-radius:10px}` +
+        `.yard-scheds-h{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--ci-text-2);margin-bottom:5px}` +
+        `.yard-sched{display:flex;justify-content:space-between;gap:10px;font-size:13px;padding:2px 0}` +
+        `.yard-sched-name{font-weight:500}` +
+        `.yard-sched-primary{color:var(--ci-accent,#4aa3ff);font-weight:600}` +
+        // v1.40.7 — identified-attributes read-only block in the plant editor
+        `.plant-attrs{margin:10px 0;padding:10px 12px;border:1px solid var(--ci-border);border-radius:10px}` +
+        `.plant-attrs-h{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--ci-text-2);margin-bottom:6px}` +
+        `.plant-attr{display:flex;justify-content:space-between;gap:12px;font-size:13px;padding:2px 0}` +
+        `.plant-attr>span:first-child{color:var(--ci-text-2)}` +
+        `.plant-attr-prov{margin-top:6px;font-size:11px;color:var(--ci-text-2)}` +
         `.yard-loop-card{padding:14px 16px}` +
         `.yard-loop-head{display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:8px}` +
         `.yard-loop-head strong{font-size:14px}` +

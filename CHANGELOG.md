@@ -4,6 +4,27 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.40.7 — 2026-07-12 — minor
+
+**Capture every attribute the plant ID returns, and turn the multi-schedule
+warning into an informational section.**
+
+- **Full identified-attribute set is now persisted.** The vision model returns
+  common name, sunlight class, temperature tolerance (°F), care preset, water &
+  fertilize cadence, a one-line note, plus ID confidence / model / timestamp —
+  but the plant record only kept species, water-use, canopy, and light range.
+  All of it is now stored on the plant and shown in a read-only **Identified
+  attributes** panel in the plant editor. Old records load with empty defaults;
+  `add_plant_from_photo` / **Identify species** fill them.
+- **"Scheduled for this loop" section replaces the warning.** A loop watered by
+  more than one schedule showed a ⚠ *"Also watered by N other schedule(s)"*
+  warning. That's now a plain **Scheduled for this loop** list in the loop's
+  design card — every schedule with its runtime and runs/week, the biggest one
+  marked *primary*. (A loop with **no** schedule still warns — that's actionable.)
+- Note on identification: a plant added **before** the vision endpoint was
+  connected saves as a provisional stub (species blank); use **Identify species**
+  on it to fill the species and all the attributes above.
+
 ## v1.40.6 — 2026-07-12 — patch
 
 **Edit plants easily — the plant list is now a mobile-friendly card list.**

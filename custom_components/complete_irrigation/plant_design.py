@@ -111,15 +111,18 @@ def build_yard_report(
         primary, run_min, _ = watering[0]
         loop = Loop(zone, run_min, schedule_runs_per_week(primary), cap)
         rep = build_loop_report(loop, calc_plants, eto_in_week, efficiency)
-        if len(watering) > 1:
-            rep = replace(
-                rep,
-                warnings=(
-                    *rep.warnings,
-                    f"Also watered by {len(watering) - 1} other schedule(s); this "
-                    f"report reflects the primary schedule '{primary.name}'.",
-                ),
-            )
+        # v1.40.7 — carry the schedules watering this loop (the design reflects
+        # the primary = most-weekly-water one; the rest are shown, not warned).
+        sched_list = tuple(
+            {
+                "name": s.name,
+                "runtime_minutes": rm,
+                "runs_per_week": round(schedule_runs_per_week(s), 1),
+                "primary": i == 0,
+            }
+            for i, (s, rm, _w) in enumerate(watering)
+        )
+        rep = replace(rep, schedules=sched_list)
         reports.append(rep)
     return reports
 
@@ -176,6 +179,7 @@ def serialize_loop_report(rep: LoopReport) -> dict:
         "max_flow_gph": rep.loop.max_flow_gph,
         "total_flow_gph": round(rep.total_flow_gph, 2),
         "warnings": list(rep.warnings),
+        "schedules": [dict(s) for s in rep.schedules],
         "suggested_runtime_minutes": rep.suggested_runtime_minutes,
         "plants": [serialize_plant_result(p) for p in rep.plants],
         "topups": [serialize_topup(t) for t in rep.topups],
