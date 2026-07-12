@@ -4,6 +4,19 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.39.2 — 2026-07-11 — patch — CRITICAL setup fix
+
+**Fixes a setup crash introduced in v1.39.1 — the integration failed to load.**
+A stray extra argument in the `dismiss_watering_advice` service registration
+raised `TypeError: async_register() got multiple values for 'schema'` during
+setup, so everything registered after it (the WebSocket API, health.json view,
+and the sidebar panel) never came up — the sidebar entry disappeared and the
+panel/API 404'd. (The watering coordinator itself still started, so schedules
+kept running.) Fixed the registration; added an AST regression test that fails
+the build if ANY `services.async_register` call ever has the wrong number of
+positional arguments again. If you were on v1.39.1: update to v1.39.2 and
+restart; the sidebar returns.
+
 ## v1.39.1 — 2026-07-11 — patch
 
 - **"Test connection" for the vision endpoint** (Settings) — probes the

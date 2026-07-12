@@ -385,7 +385,7 @@ def test_every_service_registration_has_exactly_three_positional_args():
             and node.func.attr == "async_register"
             and isinstance(node.func.value, ast.Attribute)
             and node.func.value.attr == "services"
+            and len(node.args) != 3
         ):
-            if len(node.args) != 3:
-                bad.append(f"line {node.lineno}: {len(node.args)} positional args")
+            bad.append(f"line {node.lineno}: {len(node.args)} positional args")
     assert not bad, f"async_register calls must have exactly 3 positional args: {bad}"
