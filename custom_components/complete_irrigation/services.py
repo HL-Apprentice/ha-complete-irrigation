@@ -2867,7 +2867,6 @@ async def _async_register_services(hass: HomeAssistant) -> None:
     hass.services.async_register(
         DOMAIN,
         SERVICE_DISMISS_WATERING_ADVICE,
-        SERVICE_TEST_VISION_ENDPOINT,
         handle_dismiss_watering_advice,
         schema=_DISMISS_ADVICE_SCHEMA,
     )
