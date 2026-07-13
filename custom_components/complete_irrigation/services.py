@@ -102,6 +102,7 @@ SERVICE_SET_GENERAL_CONFIG = "set_general_config"
 SERVICE_ADD_PLANT = "add_plant"
 SERVICE_UPDATE_PLANT = "update_plant"
 SERVICE_DELETE_PLANT = "delete_plant"
+SERVICE_DUPLICATE_PLANT = "duplicate_plant"  # v1.40.11 — copy a plant (minus photos)
 SERVICE_SET_YARD_MAP = "set_yard_map"  # v1.30 — fetch + cache the aerial backdrop
 SERVICE_ADD_PLANT_PHOTO = "add_plant_photo"  # v1.32 — per-plant photo + EXIF-GPS place
 SERVICE_SET_PLANT_HEALTH = "set_plant_health"  # v1.33 — store a vision-health verdict
@@ -525,6 +526,7 @@ _UPDATE_PLANT_SCHEMA = vol.Schema(
 )
 
 _DELETE_PLANT_SCHEMA = vol.Schema({vol.Required("plant_id"): cv.string})
+_DUPLICATE_PLANT_SCHEMA = vol.Schema({vol.Required("plant_id"): cv.string})
 
 # v1.30 — fetch + cache the aerial backdrop. Center defaults to the HA location.
 _SET_YARD_MAP_SCHEMA = vol.Schema(
@@ -2154,6 +2156,36 @@ async def _async_register_services(hass: HomeAssistant) -> None:
                 )
             _LOGGER.info("Deleted plant %s", data["plant_id"])
 
+    async def handle_duplicate_plant(call: ServiceCall) -> ServiceResponse:
+        """v1.40.11 — copy a plant into a new record (same species / care / zone /
+        drips), MINUS its photos, map position, health, surveys, and any pending
+        suggestion. For quickly adding the next of many identical plants; the user
+        then attaches a fresh photo. Returns {'plant_id': <new id>}."""
+        if not await _require_admin(hass, call):  # data write — admin only
+            return None
+        data = _DUPLICATE_PLANT_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None:
+            return None
+        src = coord.plants.get(data["plant_id"])
+        if src is None:
+            raise vol.Invalid(f"no such plant {data['plant_id']}")
+        new = replace(
+            src,
+            id=uuid.uuid4().hex[:12],
+            name=f"{src.name} (copy)"[:80],
+            photos=(),
+            map_x=None,
+            map_y=None,
+            health=None,
+            species_suggestion=None,
+            light_surveys=(),
+        )
+        coord.plants.add(new)
+        await coord.async_save_plants()
+        _LOGGER.info("Duplicated plant %s -> %s (%s)", src.id, new.id, new.name)
+        return {"plant_id": new.id}
+
     # ── v1.35: light surveys ────────────────────────────────────────
 
     async def handle_set_plant_light_range(call: ServiceCall) -> None:
@@ -2978,6 +3010,13 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         DOMAIN, SERVICE_DELETE_PLANT, handle_delete_plant, schema=_DELETE_PLANT_SCHEMA
     )
     hass.services.async_register(
+        DOMAIN,
+        SERVICE_DUPLICATE_PLANT,
+        handle_duplicate_plant,
+        schema=_DUPLICATE_PLANT_SCHEMA,
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
         DOMAIN, SERVICE_SET_YARD_MAP, handle_set_yard_map, schema=_SET_YARD_MAP_SCHEMA
     )
     hass.services.async_register(
@@ -3331,6 +3370,7 @@ def _async_unregister_services(hass: HomeAssistant) -> None:
         SERVICE_ADD_PLANT,
         SERVICE_UPDATE_PLANT,
         SERVICE_DELETE_PLANT,
+        SERVICE_DUPLICATE_PLANT,
         SERVICE_SET_YARD_MAP,
         SERVICE_ADD_PLANT_PHOTO,
         SERVICE_SET_PLANT_HEALTH,

@@ -357,3 +357,48 @@ def test_bad_temp_pair_sanitizes_to_none_on_load():
         data = {**_rec().to_dict(), **bad}
         back = PlantRecord.from_dict(data)
         assert back.temp_low_f is None and back.temp_high_f is None
+
+
+def test_duplicate_copies_care_but_not_photos():
+    # v1.40.11 — duplicate_plant does replace(src, new id, cleared photos/map/...).
+    # This locks the copy semantics the handler relies on.
+    from dataclasses import replace
+
+    src = PlantRecord(
+        id="p1",
+        name="Oleander",
+        wucols_category="low",
+        canopy_area_sqft=20.0,
+        zone_entity_id="switch.shrubs",
+        species="Oleander (Nerium oleander)",
+        emitter_count=2,
+        emitter_gph=2.0,
+        photos=({"path": "/local/x.jpg"},),
+        sunlight_class="full_sun",
+        temp_low_f=15,
+        temp_high_f=115,
+        care_plan_preset="shrub",
+        water_every_days=10,
+        map_x=0.5,
+        map_y=0.5,
+    )
+    new = replace(
+        src,
+        id="p2",
+        name=f"{src.name} (copy)",
+        photos=(),
+        map_x=None,
+        map_y=None,
+        health=None,
+        species_suggestion=None,
+        light_surveys=(),
+    )
+    # copied
+    assert (new.id, new.name) == ("p2", "Oleander (copy)")
+    assert new.species == src.species and new.wucols_category == "low"
+    assert new.canopy_area_sqft == 20.0 and new.zone_entity_id == "switch.shrubs"
+    assert (new.emitter_count, new.emitter_gph) == (2, 2.0)
+    assert new.sunlight_class == "full_sun" and new.care_plan_preset == "shrub"
+    assert (new.temp_low_f, new.temp_high_f) == (15, 115)
+    # NOT copied (fresh photo + placement)
+    assert new.photos == () and new.map_x is None and new.map_y is None
