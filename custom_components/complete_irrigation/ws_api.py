@@ -78,6 +78,11 @@ async def get_config(hass, connection, msg):
     # Also include current lockout state for the panel banner
     payload = dict(coord.config)
     payload["lockout_until"] = coord.lockout_until.isoformat() if coord.lockout_until else None
+    # v1.41 — never ship the external-LLM API key to the browser. Expose only
+    # WHETHER one is stored, so the settings UI can show "key saved" and decide
+    # its placeholder without the secret ever leaving the box.
+    payload["llm_external_api_key_set"] = bool(payload.get("llm_external_api_key"))
+    payload.pop("llm_external_api_key", None)
     connection.send_result(msg["id"], payload)
 
 

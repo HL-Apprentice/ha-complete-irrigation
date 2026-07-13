@@ -72,7 +72,33 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.40.12";
+  const PANEL_VERSION = "v1.41.0";
+  // v1.41 — external plant-ID providers (mirrors llm_client.PROVIDERS). URL is
+  // auto-filled when a provider is picked; model is an editable hint. All speak
+  // the same OpenAI /v1/chat/completions shape, so one settings form covers them.
+  const LLM_PROVIDERS = {
+    anthropic: {
+      label: "Anthropic (Claude)",
+      url: "https://api.anthropic.com/v1/chat/completions",
+      model: "claude-sonnet-5",
+    },
+    xai: {
+      label: "xAI (Grok)",
+      url: "https://api.x.ai/v1/chat/completions",
+      model: "grok-4",
+    },
+    google: {
+      label: "Google (Gemini)",
+      url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+      model: "gemini-2.5-flash",
+    },
+    custom: { label: "Custom (OpenAI-compatible)", url: "", model: "" },
+  };
+  const LLM_MODES = [
+    ["local", "Local model only"],
+    ["fallback", "Local, with external fallback"],
+    ["external", "External model only"],
+  ];
   const DEFAULT_MANUAL_MINUTES = 10;
   const MAX_MANUAL_MINUTES = 480; // 8 h — matches the backend schedule cap; long
   // runs are delivered in controller-cap blocks (v1.25). Was 60, which blocked
@@ -867,6 +893,7 @@
           return this._dismissSpeciesSuggestion(node.dataset.plantId);
         if (action === "save-vision-endpoint") return this._saveVisionEndpoint();
         if (action === "test-vision") return this._testVisionEndpoint();
+        if (action === "clear-llm-key") return this._clearLlmKey();
         // v1.39 — watering advisor.
         if (action === "advice-apply")
           return this._applyAdviceItem(parseInt(node.dataset.idx, 10));
@@ -1294,6 +1321,16 @@
       // v1.37 — vision-endpoint inputs: same keep-typing-alive treatment.
       if (t.dataset?.action === "vision-field") {
         this._syncVisionField(t);
+        return;
+      }
+      // v1.41 — plant-ID mode / provider selects re-render (reveal external
+      // block, auto-fill the provider's endpoint URL + model).
+      if (t.dataset?.action === "llm-mode-change") {
+        this._onLlmModeChange(t.value);
+        return;
+      }
+      if (t.dataset?.action === "llm-provider-change") {
+        this._onLlmProviderChange(t.value);
         return;
       }
       // v1.38 — photo-first add form: same keep-typing-alive treatment.
@@ -3473,36 +3510,9 @@
         `<div class="modal-actions"><button type="submit" class="btn btn-primary">Save default</button></div>` +
         `</form>` +
         `</section>` +
-        // v1.37 — LAN vision endpoint for plant identification
-        `<section class="settings-card">` +
-        `<h3 class="section-title">Vision endpoint</h3>` +
-        `<p class="section-hint">OpenAI-compatible /v1/chat/completions endpoint on your LAN (e.g. Ollama). Used for plant identification.</p>` +
-        `<div class="weather-form" style="background:transparent;border:none;padding:0;max-width:none">` +
-        `<label>Endpoint URL</label>` +
-        `<input name="vision_url" data-action="vision-field" type="text" value="${escapeAttr(
-          (this._visionDraft || c).vision_url || ""
-        )}" placeholder="http://192.168.1.10:11434/v1/chat/completions" />` +
-        `<label style="margin-top:8px">Model name</label>` +
-        `<input name="vision_model" data-action="vision-field" type="text" value="${escapeAttr(
-          (this._visionDraft || c).vision_model || ""
-        )}" placeholder="e.g. qwen2.5-vl" />` +
-        `<div class="modal-actions">` +
-        `<button type="button" class="btn btn-primary" data-action="save-vision-endpoint">${this._visionSaved ? "✓ Saved" : "Save vision endpoint"}</button>` +
-        // v1.40 — probe the configured endpoint without leaving the panel.
-        `<button type="button" class="btn" data-action="test-vision"${
-          this._visionTestBusy ? " disabled" : ""
-        }>${this._visionTestBusy ? "Testing…" : "Test connection"}</button>` +
-        `</div>` +
-        (this._visionTestResult
-          ? `<span class="vision-test-result vision-test-${
-              this._visionTestResult.ok ? "ok" : "fail"
-            }">` +
-            (this._visionTestResult.ok ? "✓ Connected — " : "✗ ") +
-            escapeHtml(String(this._visionTestResult.detail || "")) +
-            `</span>`
-          : "") +
-        `</div>` +
-        `</section>` +
+        // v1.37/v1.41 — plant identification: local vision model + optional
+        // external provider (Claude / Grok / Gemini / custom) with a mode.
+        this._renderPlantIdCard(c) +
         `<section class="settings-card">` +
         `<h3 class="section-title">Calendar feed</h3>` +
         `<p class="section-hint">Subscribe from your phone's calendar app to see the next 30 days of planned runs.</p>` +
@@ -3521,20 +3531,142 @@
       );
     }
 
-    _syncVisionField(t) {
-      // v1.37 — mirror a vision-endpoint input into the draft; seed the
-      // draft from the saved config on first edit.
-      if (!this._visionDraft) {
-        const c = this._config || {};
-        this._visionDraft = {
-          vision_url: c.vision_url || "",
-          vision_model: c.vision_model || "",
-        };
+    _renderPlantIdCard(c) {
+      // v1.41 — local plant-ID model + optional external provider with a mode.
+      const d = this._visionDraft || c;
+      const mode = d.llm_mode || "local";
+      const provider = d.llm_provider || "custom";
+      const preset = LLM_PROVIDERS[provider] || LLM_PROVIDERS.custom;
+      const keySaved = !!c.llm_external_api_key_set;
+      const showExternal = mode !== "local";
+      const modeOpts = LLM_MODES.map(
+        ([v, lbl]) =>
+          `<option value="${v}"${v === mode ? " selected" : ""}>${escapeHtml(lbl)}</option>`
+      ).join("");
+      const provOpts = Object.entries(LLM_PROVIDERS)
+        .map(
+          ([v, p]) =>
+            `<option value="${v}"${v === provider ? " selected" : ""}>${escapeHtml(p.label)}</option>`
+        )
+        .join("");
+      return (
+        `<section class="settings-card">` +
+        `<h3 class="section-title">Plant identification</h3>` +
+        `<p class="section-hint">Identify a plant from a photo and research its care. Use a local vision model, an external AI (Claude / Grok / Gemini), or both.</p>` +
+        `<div class="weather-form" style="background:transparent;border:none;padding:0;max-width:none">` +
+        `<label>Mode</label>` +
+        `<select name="llm_mode" data-action="llm-mode-change">${modeOpts}</select>` +
+        `<p class="section-hint" style="margin-top:4px">Fallback tries the local model first and only calls the external AI when the local one fails or can't identify the plant.</p>` +
+        `<label style="margin-top:10px">Local endpoint URL</label>` +
+        `<input name="vision_url" data-action="vision-field" type="text" value="${escapeAttr(
+          d.vision_url || ""
+        )}" placeholder="http://192.168.1.10:11434/v1/chat/completions" />` +
+        `<label style="margin-top:8px">Local model name</label>` +
+        `<input name="vision_model" data-action="vision-field" type="text" value="${escapeAttr(
+          d.vision_model || ""
+        )}" placeholder="e.g. qwen2.5-vl" />` +
+        (showExternal
+          ? `<label style="margin-top:14px">External provider</label>` +
+            `<select name="llm_provider" data-action="llm-provider-change">${provOpts}</select>` +
+            `<label style="margin-top:8px">External endpoint URL</label>` +
+            `<input name="llm_external_url" data-action="vision-field" type="text" value="${escapeAttr(
+              d.llm_external_url || ""
+            )}" placeholder="${escapeAttr(preset.url || "https://…/v1/chat/completions")}" />` +
+            `<label style="margin-top:8px">External model</label>` +
+            `<input name="llm_external_model" data-action="vision-field" type="text" value="${escapeAttr(
+              d.llm_external_model || ""
+            )}" placeholder="${escapeAttr(preset.model || "model id")}" />` +
+            `<label style="margin-top:8px">API key</label>` +
+            `<input name="llm_external_api_key" data-action="vision-field" type="password" autocomplete="off" value="" placeholder="${
+              keySaved ? "key saved — leave blank to keep it" : "paste your API key"
+            }" />` +
+            `<p class="section-hint" style="margin-top:4px">${
+              keySaved
+                ? "A key is saved on your Home Assistant server. "
+                : "Stored on your Home Assistant server; never shown again. "
+            }${
+              keySaved
+                ? `<button type="button" class="btn btn-small" data-action="clear-llm-key">Clear key</button>`
+                : ""
+            }</p>`
+          : "") +
+        `<div class="modal-actions">` +
+        `<button type="button" class="btn btn-primary" data-action="save-vision-endpoint">${
+          this._visionSaved ? "✓ Saved" : "Save"
+        }</button>` +
+        `<button type="button" class="btn" data-action="test-vision"${
+          this._visionTestBusy ? " disabled" : ""
+        }>${this._visionTestBusy ? "Testing…" : "Test connection"}</button>` +
+        `</div>` +
+        (this._visionTestResult
+          ? `<span class="vision-test-result vision-test-${
+              this._visionTestResult.ok ? "ok" : "fail"
+            }">` +
+            (this._visionTestResult.ok ? "✓ " : "✗ ") +
+            escapeHtml(String(this._visionTestResult.detail || "")) +
+            `</span>`
+          : "") +
+        `</div>` +
+        `</section>`
+      );
+    }
+
+    _seedVisionDraft() {
+      // v1.41 — lazily seed the plant-ID edit draft from saved config so a
+      // background re-render can't wipe unsaved typing. The API key is NEVER
+      // seeded from config (the backend redacts it) — blank means "keep".
+      if (this._visionDraft) return;
+      const c = this._config || {};
+      this._visionDraft = {
+        vision_url: c.vision_url || "",
+        vision_model: c.vision_model || "",
+        llm_mode: c.llm_mode || "local",
+        llm_provider: c.llm_provider || "custom",
+        llm_external_url: c.llm_external_url || "",
+        llm_external_model: c.llm_external_model || "",
+        llm_external_api_key: "",
+      };
+    }
+
+    _onLlmModeChange(value) {
+      this._seedVisionDraft();
+      this._visionDraft.llm_mode = value;
+      this._renderNow(); // re-render to reveal/hide the external block
+    }
+
+    _onLlmProviderChange(value) {
+      this._seedVisionDraft();
+      this._visionDraft.llm_provider = value;
+      const p = LLM_PROVIDERS[value];
+      if (p) {
+        // Prefill URL + model from the preset when empty (editable; keep any
+        // custom URL the user already typed).
+        if (!this._visionDraft.llm_external_url) this._visionDraft.llm_external_url = p.url;
+        if (!this._visionDraft.llm_external_model) this._visionDraft.llm_external_model = p.model;
       }
+      this._renderNow();
+    }
+
+    async _clearLlmKey() {
+      try {
+        await this._hass.callService("complete_irrigation", "set_general_config", {
+          llm_external_api_key: "",
+        });
+        if (this._visionDraft) this._visionDraft.llm_external_api_key = "";
+        await this._fetchConfig();
+        this._renderNow();
+      } catch (err) {
+        alert("Failed to clear the API key: " + (err?.message || err));
+      }
+    }
+
+    _syncVisionField(t) {
+      // v1.37/v1.41 — mirror a plant-ID input into the draft.
+      this._seedVisionDraft();
       if (t.name in this._visionDraft) this._visionDraft[t.name] = t.value;
-      // v1.40 — editing either field invalidates the last connection-test
-      // result. Remove the status line surgically (no full re-render, so
-      // typing focus/cursor stay put — same pattern as the category hint).
+      // v1.40 — editing any field invalidates the last connection-test result.
+      // Remove the status line surgically (no full re-render, so typing focus
+      // stays put — same pattern as the category hint).
       if (this._visionTestResult) {
         this._visionTestResult = null;
         const line = this.shadowRoot?.querySelector(".vision-test-result");
@@ -3543,20 +3675,31 @@
     }
 
     async _saveVisionEndpoint() {
-      // v1.37 — persist the vision endpoint (URL + model) used for plant
-      // identification. Reads the rendered inputs; the draft only keeps
-      // typing alive across re-renders.
+      // v1.37/v1.41 — persist plant-ID settings. Only fields present in the DOM
+      // are sent, so saving in "local" mode preserves the external config, and a
+      // blank API key keeps the stored one (Clear key removes it explicitly).
       const root = this.shadowRoot;
-      const url = (root?.querySelector('input[name="vision_url"]')?.value || "").trim();
-      const model = (root?.querySelector('input[name="vision_model"]')?.value || "").trim();
+      const g = (n) => (root?.querySelector(`[name="${n}"]`)?.value || "").trim();
+      const has = (n) => root?.querySelector(`[name="${n}"]`) != null;
+      const payload = {};
+      for (const n of [
+        "vision_url",
+        "vision_model",
+        "llm_mode",
+        "llm_provider",
+        "llm_external_url",
+        "llm_external_model",
+      ]) {
+        if (has(n)) payload[n] = g(n);
+      }
+      // Only overwrite the stored key when the user typed a NEW one.
+      if (has("llm_external_api_key") && g("llm_external_api_key")) {
+        payload.llm_external_api_key = g("llm_external_api_key");
+      }
       try {
-        await this._hass.callService("complete_irrigation", "set_general_config", {
-          vision_url: url,
-          vision_model: model,
-        });
+        await this._hass.callService("complete_irrigation", "set_general_config", payload);
         this._visionDraft = null; // re-hydrate from the saved config
         await this._fetchConfig();
-        // Visible confirmation: flip the button label for a moment.
         this._visionSaved = true;
         this._renderNow();
         setTimeout(() => {
@@ -3564,7 +3707,7 @@
           this._renderNow();
         }, 2500);
       } catch (err) {
-        alert("Failed to save the vision endpoint: " + (err?.message || err));
+        alert("Failed to save plant identification settings: " + (err?.message || err));
       }
     }
 
