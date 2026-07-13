@@ -4,6 +4,15 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.40.11 — 2026-07-12 — minor
+
+**Duplicate a plant.** Each plant now has a **Duplicate** button (next to
+Edit/Delete) that creates a copy with the same species, water-use, canopy, zone,
+drips, and care attributes — **minus the photos, map position, and health** — then
+opens the copy in the editor so you can add a fresh photo and tweak the name.
+Fast when you have many identical plants (a row of oleanders, lantanas, etc.).
+New `duplicate_plant` service returns the new plant's id.
+
 ## v1.40.10 — 2026-07-12 — patch
 
 **Plant photos open in a pop-up lightbox.** Tapping a plant's photo thumbnail now

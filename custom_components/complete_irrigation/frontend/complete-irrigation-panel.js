@@ -72,7 +72,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.40.10";
+  const PANEL_VERSION = "v1.40.11";
   const DEFAULT_MANUAL_MINUTES = 10;
   const MAX_MANUAL_MINUTES = 480; // 8 h — matches the backend schedule cap; long
   // runs are delivered in controller-cap blocks (v1.25). Was 60, which blocked
@@ -426,6 +426,7 @@
       // v1.37 — species identification (vision) state.
       this._identifyBusy = false; // identify_plant_species call in flight
       this._researchBusy = false; // research_plant_species (by-name) call in flight
+      this._duplicateBusy = false; // duplicate_plant call in flight
       this._visionDraft = null; // {vision_url, vision_model} edit draft; null = mirror config
       // v1.40 — vision-endpoint connection test state.
       this._visionTestBusy = false; // test_vision_endpoint call in flight
@@ -810,34 +811,9 @@
           }
           return;
         }
-        if (action === "edit-plant") {
-          const p = this._plants.find((x) => x.id === node.dataset.plantId);
-          if (p) {
-            this._plantEditor = {
-              id: p.id,
-              name: p.name,
-              wucols_category: p.wucols_category,
-              canopy_area_sqft: p.canopy_area_sqft,
-              zone_entity_id: p.zone_entity_id,
-              photos: Array.isArray(p.photos) ? p.photos : [],
-              health: p.health || null,
-              // v1.35 — species + light range (draft strings; empty = unset)
-              species: p.species || "",
-              lux_low: p.lux_low != null ? String(p.lux_low) : "",
-              lux_high: p.lux_high != null ? String(p.lux_high) : "",
-              _hadLightRange: p.lux_low != null && p.lux_high != null,
-              _hadEmitters: p.emitter_count != null && p.emitter_gph != null,
-              // v1.38 — installed drips (draft strings; empty = unset)
-              emitter_count: p.emitter_count != null ? String(p.emitter_count) : "",
-              emitter_gph: p.emitter_gph != null ? String(p.emitter_gph) : "",
-              // Survey controls: default the sensor from the most recent survey.
-              light_survey_sensor:
-                (Array.isArray(p.light_surveys) && p.light_surveys[0]?.sensor) || "",
-              light_survey_minutes: "10",
-            };
-          }
-          return this._renderNow();
-        }
+        if (action === "edit-plant") return this._editPlant(node.dataset.plantId);
+        if (action === "duplicate-plant")
+          return this._duplicatePlant(node.dataset.plantId);
         if (action === "cancel-plant") {
           this._plantEditor = null;
           return this._renderNow();
@@ -2460,6 +2436,58 @@
     }
 
     // ── v2 Yard: plant CRUD + ETo ──────────────────────────────────
+    _editPlant(plantId) {
+      // Open the plant editor populated from the (fresh) plant record.
+      const p = (this._plants || []).find((x) => x.id === plantId);
+      if (p) {
+        this._plantEditor = {
+          id: p.id,
+          name: p.name,
+          wucols_category: p.wucols_category,
+          canopy_area_sqft: p.canopy_area_sqft,
+          zone_entity_id: p.zone_entity_id,
+          photos: Array.isArray(p.photos) ? p.photos : [],
+          health: p.health || null,
+          species: p.species || "",
+          lux_low: p.lux_low != null ? String(p.lux_low) : "",
+          lux_high: p.lux_high != null ? String(p.lux_high) : "",
+          _hadLightRange: p.lux_low != null && p.lux_high != null,
+          _hadEmitters: p.emitter_count != null && p.emitter_gph != null,
+          emitter_count: p.emitter_count != null ? String(p.emitter_count) : "",
+          emitter_gph: p.emitter_gph != null ? String(p.emitter_gph) : "",
+          light_survey_sensor:
+            (Array.isArray(p.light_surveys) && p.light_surveys[0]?.sensor) || "",
+          light_survey_minutes: "10",
+        };
+      }
+      this._renderNow();
+    }
+
+    async _duplicatePlant(plantId) {
+      // v1.40.11 — copy a plant (species/care/zone/drips, minus photos) then open
+      // the new copy in the editor so a fresh photo can be added.
+      if (!plantId || this._duplicateBusy || !this._hass?.callWS) return;
+      this._duplicateBusy = true;
+      this._renderNow();
+      try {
+        const res = await this._hass.callWS({
+          type: "call_service",
+          domain: "complete_irrigation",
+          service: "duplicate_plant",
+          service_data: { plant_id: plantId },
+          return_response: true,
+        });
+        const newId = res?.response?.plant_id;
+        await this._fetchYard(); // pull the new plant
+        if (newId) this._editPlant(newId); // open it (add a photo, tweak the name)
+      } catch (err) {
+        alert("Could not duplicate the plant: " + (err?.message || err));
+      } finally {
+        this._duplicateBusy = false;
+        this._renderNow();
+      }
+    }
+
     async _savePlant() {
       const e = this._plantEditor;
       if (!e) return;
@@ -6588,6 +6616,9 @@
             `<button class="btn btn-small" data-action="edit-plant" data-plant-id="${escapeAttr(
               p.id
             )}">Edit</button>` +
+            `<button class="btn btn-small" data-action="duplicate-plant" data-plant-id="${escapeAttr(
+              p.id
+            )}"${this._duplicateBusy ? " disabled" : ""} title="Copy this plant (species + care + drips), then add a photo">Duplicate</button>` +
             `<button class="btn btn-small btn-stop" data-action="delete-plant" data-plant-id="${escapeAttr(
               p.id
             )}" data-plant-name="${escapeAttr(p.name)}">Delete</button>` +
