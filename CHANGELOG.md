@@ -4,6 +4,20 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.40.12 — 2026-07-13 — minor
+
+**Curated care beats the LLM's blind spot.** A small vision model (qwen2.5vl:7b)
+reliably fails to *differentiate* water-use — it labels essentially every species
+"moderate / full_sun", which is exactly the value that drives the irrigation math.
+New `plant_care_db.py` ships a deterministic, curated care table for ~37 common
+Southwest / low-desert landscape species (WUCOLS water-use category, sun class,
+frost/heat range, care-plan preset, water + fertilize cadences). The species-ID
+rail now consults this table **first** — so once identification gets the *name*
+right (oleander, Texas ranger, sissoo, citrus, rose, rosemary…), the plant is
+seeded with accurate low-desert care instead of the model's flat "moderate". The
+model is only a fallback for species the table doesn't cover, and every curated
+value is still bounded by `validate_suggestion` before it reaches a record.
+
 ## v1.40.11 — 2026-07-12 — minor
 
 **Duplicate a plant.** Each plant now has a **Duplicate** button (next to
