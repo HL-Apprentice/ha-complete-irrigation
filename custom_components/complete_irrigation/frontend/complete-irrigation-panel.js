@@ -72,7 +72,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.41.0";
+  const PANEL_VERSION = "v1.41.1";
   // v1.41 — external plant-ID providers (mirrors llm_client.PROVIDERS). URL is
   // auto-filled when a provider is picked; model is an editable hint. All speak
   // the same OpenAI /v1/chat/completions shape, so one settings form covers them.
@@ -675,7 +675,11 @@
       // down. Idempotent: no-op if already running.
       if (this._nowLineTimer) return;
       this._nowLineTimer = setInterval(() => {
-        if (this._currentSection === "today") this._scheduleRender();
+        if (this._currentSection !== "today") return;
+        // v1.41.1 — refetch run history so a run that just fired flips its
+        // Today's-plan item to "Ran on schedule" without a manual reload.
+        // _fetchRunHistory re-renders on success (also drifts the now-line).
+        this._fetchRunHistory();
       }, 60000);
     }
 
@@ -1566,9 +1570,10 @@
       if (sectionId === "history") this._fetchRunHistory();  // always refetch on open
       // v2 — Yard: always refetch on open (report depends on schedules + ETo).
       if (sectionId === "yard") this._fetchYard();
-      // v1.17 — Today screen's missed-runs banner reads from run history,
-      // so load it lazily on first Today open if not already cached.
-      if (sectionId === "today" && !this._runHistoryLoaded) this._fetchRunHistory();
+      // v1.17 — Today screen's missed-runs banner + (v1.41.1) the Today's-plan
+      // outcome marks read from run history, so refetch on every Today open (not
+      // just first) to reflect runs that fired since the last visit.
+      if (sectionId === "today") this._fetchRunHistory();
       // v1.19.0 — keep the now-line drifting only while Today is open.
       if (sectionId === "today") this._startNowLineTimer();
       else this._stopNowLineTimer();
@@ -1939,14 +1944,22 @@
         light: { icon: "🔵", label: "Light" },
         skip: { icon: "⚪", label: "Skip" },
       };
+      // v1.41.1 — reflect what ACTUALLY happened today: a planned run that has
+      // already fired flips from the forward-looking recommendation to its
+      // outcome (matched to run history by schedule_id, else zone). So "On track
+      // — run as scheduled" becomes "Ran on schedule" once the run completes.
+      const outcomes = this._todaysRunOutcomes();
       const rows = plan.items
         .map((it) => {
-          const m = meta[it.recommendation] || meta.run;
+          const outcome = this._planItemOutcome(it, outcomes);
+          const m = outcome || meta[it.recommendation] || meta.run;
+          const stateCls = outcome ? ` plan-${escapeAttr(outcome.state)}` : "";
+          const reason = outcome ? outcome.reason : it.reason;
           return (
-            `<li class="plan-item plan-${escapeAttr(it.recommendation)}">` +
+            `<li class="plan-item plan-${escapeAttr(it.recommendation)}${stateCls}">` +
             `<span class="plan-rec" title="${escapeAttr(m.label)}">${m.icon}</span>` +
             `<span class="plan-zone">${escapeHtml(it.zone_name)}</span>` +
-            `<span class="plan-reason">${escapeHtml(it.reason)}</span>` +
+            `<span class="plan-reason">${escapeHtml(reason)}</span>` +
             `</li>`
           );
         })
@@ -1961,6 +1974,54 @@
         `<ul class="plan-list">${rows}</ul>` +
         `</section>`
       );
+    }
+
+    _todaysRunOutcomes() {
+      // v1.41.1 — index today's run-history records for the Today's-plan card,
+      // keyed by schedule_id (exact) and by zone (fallback), keeping the most
+      // significant status per key: running > completed > aborted > skipped.
+      const hist = Array.isArray(this._runHistory) ? this._runHistory : [];
+      const dayStart = new Date();
+      dayStart.setHours(0, 0, 0, 0);
+      const startMs = dayStart.getTime();
+      const rank = { running: 4, completed: 3, aborted: 2, skipped: 1 };
+      const bySchedule = new Map();
+      const byZone = new Map();
+      for (const r of hist) {
+        const ts = Date.parse(r.started_at);
+        if (!isFinite(ts) || ts < startMs) continue;
+        const cur = rank[r.status] || 0;
+        if (r.schedule_id) {
+          const prev = bySchedule.get(r.schedule_id);
+          if (!prev || cur > (rank[prev.status] || 0)) bySchedule.set(r.schedule_id, r);
+        }
+        const pz = byZone.get(r.zone_entity_id);
+        if (!pz || cur > (rank[pz.status] || 0)) byZone.set(r.zone_entity_id, r);
+      }
+      return { bySchedule, byZone };
+    }
+
+    _planItemOutcome(it, outcomes) {
+      // v1.41.1 — if this planned run already happened today, return its outcome
+      // {icon,label,state,reason} to replace the forward-looking recommendation;
+      // else null (keep "run as scheduled"). Match by schedule_id, else by zone
+      // only when the item has NO schedule (so a different schedule's run on the
+      // same zone can't wrongly mark this one as done).
+      let rec = it.schedule_id ? outcomes.bySchedule.get(it.schedule_id) : null;
+      if (!rec && !it.schedule_id) rec = outcomes.byZone.get(it.zone_entity_id);
+      if (!rec) return null;
+      switch (rec.status) {
+        case "running":
+          return { icon: "💧", label: "Running", state: "running", reason: "Running now…" };
+        case "completed":
+          return { icon: "✅", label: "Ran", state: "ran", reason: "Ran on schedule." };
+        case "aborted":
+          return { icon: "🟠", label: "Stopped", state: "aborted", reason: "Stopped early." };
+        case "skipped":
+          return { icon: "⏭️", label: "Skipped", state: "skipped", reason: "Skipped today." };
+        default:
+          return null;
+      }
     }
 
     _renderAdviceCard() {
@@ -7778,6 +7839,14 @@
         `.plan-zone{font-weight:600;color:var(--ci-text)}` +
         `.plan-reason{color:var(--ci-text-2);font-size:12px}` +
         `.plan-skip .plan-zone{color:var(--ci-text-2);text-decoration:line-through}` +
+        // v1.41.1 — outcome states once a planned run has fired today.
+        `.plan-ran .plan-zone{color:var(--ci-text-2)}` +
+        `.plan-ran .plan-reason{color:#2e7d32}` +
+        `:host([data-theme="dark"]) .plan-ran .plan-reason{color:#a5d6a7}` +
+        `.plan-running .plan-reason{color:var(--ci-accent);font-weight:600}` +
+        `.plan-aborted .plan-reason{color:#e65100}` +
+        `:host([data-theme="dark"]) .plan-aborted .plan-reason{color:#ffb74d}` +
+        `.plan-skipped .plan-zone{color:var(--ci-text-2);text-decoration:line-through}` +
         // v1.39 — watering-advisor card (Today) + installed-drips report row
         `.advice-card{margin-bottom:18px;padding:14px 16px;border:1px solid var(--ci-accent);border-radius:10px;background:rgba(3,169,244,0.06)}` +
         `.advice-summary{margin:4px 0 10px;font-size:13px;color:var(--ci-text)}` +
