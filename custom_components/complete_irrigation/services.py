@@ -2449,9 +2449,35 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         await _run_identify(coord, plant)
 
     async def _run_research(coord, species_name: str) -> dict:
-        """v1.40.9 — research a NAMED species (no photo) via the configured vision
+        """v1.40.9 — research a NAMED species. v1.40.12 — try the curated care DB
+        FIRST (accurate, offline, no LLM); fall back to the configured vision
         endpoint in text mode. Returns a bounded suggestion dict or raises
         vol.Invalid with a user-actionable message."""
+        from homeassistant.util import dt as dt_util
+
+        from .plant_care_db import lookup_care
+        from .species_id import validate_suggestion
+
+        curated = lookup_care(species_name)
+        if curated:
+            raw = {
+                "species": species_name,
+                "common_name": curated["common"],
+                "confidence": 1.0,
+                "sunlight_class": curated["sun"],
+                "temp_low_f": curated["temp_low"],
+                "temp_high_f": curated["temp_high"],
+                "wucols_category": curated["wucols"],
+                "care_plan_preset": curated["preset"],
+                "water_every_days": curated["water_days"],
+                "fertilize_every_days": curated["fert_days"],
+                "note": curated["note"],
+            }
+            sug = validate_suggestion(
+                raw, model="curated-care-db", now_iso=dt_util.utcnow().isoformat()
+            )
+            if sug:
+                return sug
         vision_url = str(coord.config.get("vision_url") or "").strip()
         if not vision_url.startswith(("http://", "https://")):
             raise vol.Invalid(
@@ -2463,9 +2489,8 @@ async def _async_register_services(hass: HomeAssistant) -> None:
 
         import aiohttp
         from homeassistant.helpers.aiohttp_client import async_get_clientsession
-        from homeassistant.util import dt as dt_util
 
-        from .species_id import extract_suggestion_json, validate_suggestion
+        from .species_id import extract_suggestion_json
 
         prompt = _RESEARCH_PROMPT.replace("{SPECIES}", species_name)
         body = _json.dumps(
@@ -2790,14 +2815,29 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         overrides["id_model"] = sug.get("model") or ""
         overrides["id_note"] = sug.get("note") or ""
         overrides["identified_at"] = sug.get("identified_at") or ""
+        # v1.40.12 — for species we cover, the curated DB's accurate water-use /
+        # care OVERRIDES the model's guess (which is generically "moderate"). This
+        # is the photo-identify path; the by-name research already uses curated data.
+        from .plant_care_db import lookup_care
+
+        curated = lookup_care(species_text)
+        if curated:
+            overrides["wucols_category"] = curated["wucols"]
+            overrides["sunlight_class"] = curated["sun"]
+            overrides["temp_low_f"] = curated["temp_low"]
+            overrides["temp_high_f"] = curated["temp_high"]
+            overrides["care_plan_preset"] = curated["preset"]
+            overrides["water_every_days"] = curated["water_days"]
+            overrides["fertilize_every_days"] = curated["fert_days"]
         coord.plants.upsert(replace(plant, **overrides))
         await coord.async_save_plants()
 
         seeded = 0
-        if data["seed_plan"] and sug.get("care_plan_preset"):
+        _seed_preset = (curated or {}).get("preset") or sug.get("care_plan_preset")
+        if data["seed_plan"] and _seed_preset:
             existing_kinds = {t.kind for t in coord.care_tasks.for_plant(plant.id)}
             for t in seed_care_plan(
-                plant.id, sug["care_plan_preset"], id_factory=lambda: uuid.uuid4().hex[:12]
+                plant.id, _seed_preset, id_factory=lambda: uuid.uuid4().hex[:12]
             ):
                 if t.kind not in existing_kinds:
                     coord.care_tasks.add(t)
