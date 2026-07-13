@@ -72,7 +72,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.40.9";
+  const PANEL_VERSION = "v1.40.10";
   const DEFAULT_MANUAL_MINUTES = 10;
   const MAX_MANUAL_MINUTES = 480; // 8 h — matches the backend schedule cap; long
   // runs are delivered in controller-cap blocks (v1.25). Was 60, which blocked
@@ -458,6 +458,10 @@
       // Establishment mode ("New grass") modal state
       this._establishmentModalOpen = false;
       this._establishmentEditor = null;
+
+      // v1.40.10 — plant-photo lightbox (click a thumbnail to view it large)
+      this._lightboxSrc = null;
+      this._lightboxLabel = "";
 
       // Weather + config cached from WS API
       this._config = {};
@@ -874,6 +878,13 @@
           return this._identifySpecies(node.dataset.plantId);
         if (action === "research-species")
           return this._researchSpecies(node.dataset.plantId);
+        if (action === "photo-lightbox") {
+          if (e.metaKey || e.ctrlKey || e.shiftKey) return; // let cmd/ctrl-click use the href (new tab)
+          e.preventDefault(); // otherwise open the in-panel lightbox instead
+          this._lightboxSrc = node.dataset.src || "";
+          this._lightboxLabel = node.dataset.label || "";
+          return this._renderNow();
+        }
         if (action === "species-apply")
           return this._applySpeciesSuggestion(node.dataset.plantId);
         if (action === "species-dismiss")
@@ -1696,6 +1707,8 @@
       this._bannerModalOpen = false;
       this._establishmentModalOpen = false;
       this._establishmentEditor = null;
+      this._lightboxSrc = null;
+      this._lightboxLabel = "";
       this._renderNow();
     }
 
@@ -3096,6 +3109,7 @@
         (this._runModalOpen ? this._renderRunModal() : "") +
         (this._scheduleModalOpen ? this._renderScheduleModal() : "") +
         (this._sensorModalOpen ? this._renderSensorModal() : "") +
+        (this._lightboxSrc ? this._renderPhotoLightbox() : "") +
         (this._bannerModalOpen ? this._renderBannerSettingsModal() : "") +
         (this._establishmentModalOpen ? this._renderEstablishmentModal() : "");
     }
@@ -6196,6 +6210,23 @@
       );
     }
 
+    _renderPhotoLightbox() {
+      // v1.40.10 — full-size plant photo in an in-panel modal (backdrop + close
+      // reuse the shared modal-cancel / modal-backdrop close handlers).
+      return (
+        `<div class="modal-backdrop"></div>` +
+        `<div class="photo-lightbox" role="dialog" aria-modal="true" aria-label="Plant photo">` +
+        `<button class="photo-lightbox-close modal-cancel" type="button" aria-label="Close">&times;</button>` +
+        `<img class="photo-lightbox-img" src="${escapeAttr(this._lightboxSrc)}" alt="${escapeAttr(
+          this._lightboxLabel || "Plant photo"
+        )}" />` +
+        (this._lightboxLabel
+          ? `<div class="photo-lightbox-cap">${escapeHtml(this._lightboxLabel)}</div>`
+          : "") +
+        `</div>`
+      );
+    }
+
     _renderPhotoSection(e) {
       const photos = Array.isArray(e.photos) ? e.photos : [];
       const thumbs = photos.length
@@ -6203,7 +6234,8 @@
             .map(
               (p) =>
                 `<a class="plant-photo-thumb" href="${escapeAttr(p.path)}" target="_blank" ` +
-                `rel="noopener" title="${escapeAttr(photoLabel(p))}">` +
+                `rel="noopener" data-action="photo-lightbox" data-src="${escapeAttr(p.path)}" ` +
+                `data-label="${escapeAttr(photoLabel(p))}" title="${escapeAttr(photoLabel(p))}">` +
                 `<img src="${escapeAttr(p.path)}" alt="${escapeAttr(
                   e.name
                 )} photo" loading="lazy" draggable="false" />` +
@@ -7467,7 +7499,12 @@
         `.plant-photos{margin-top:14px;border-top:1px solid var(--ci-border);padding-top:12px}` +
         `.plant-photos-title{display:block;font-size:12px;color:var(--ci-text-2);margin-bottom:8px}` +
         `.plant-photo-grid{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}` +
-        `.plant-photo-thumb{display:block;width:72px;height:72px;border-radius:8px;overflow:hidden;border:1px solid var(--ci-border);background:var(--ci-hover)}` +
+        // v1.40.10 — plant-photo lightbox (click a thumbnail to view full size)
+        `.photo-lightbox{position:fixed;inset:0;z-index:100;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;pointer-events:none}` +
+        `.photo-lightbox-img{max-width:92vw;max-height:82vh;border-radius:12px;box-shadow:0 12px 48px rgba(0,0,0,.55);object-fit:contain;pointer-events:auto}` +
+        `.photo-lightbox-cap{margin-top:10px;color:#fff;font-size:13px;background:rgba(0,0,0,.55);padding:5px 12px;border-radius:8px;pointer-events:auto}` +
+        `.photo-lightbox-close{position:fixed;top:14px;right:18px;z-index:101;width:40px;height:40px;border-radius:50%;border:none;background:rgba(0,0,0,.6);color:#fff;font-size:26px;line-height:38px;text-align:center;cursor:pointer;pointer-events:auto}` +
+        `.plant-photo-thumb{display:block;width:72px;height:72px;border-radius:8px;overflow:hidden;border:1px solid var(--ci-border);background:var(--ci-hover);cursor:zoom-in}` +
         `.plant-photo-thumb img{width:100%;height:100%;object-fit:cover;display:block}` +
         `.plant-photo-empty{margin:0 0 10px;font-size:12px}` +
         `.plant-photo-add{cursor:pointer;display:inline-block}` +

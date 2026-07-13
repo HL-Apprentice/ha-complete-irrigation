@@ -4,6 +4,13 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.40.10 — 2026-07-12 — patch
+
+**Plant photos open in a pop-up lightbox.** Tapping a plant's photo thumbnail now
+opens the full-size image in an in-panel modal (dark backdrop, close button, tap
+outside to dismiss) instead of navigating away to a new browser tab. Cmd/Ctrl-click
+still opens it in a new tab if you prefer.
+
 ## v1.40.9 — 2026-07-12 — minor
 
 **Research a plant's details by name.** When the vision model misidentifies a
