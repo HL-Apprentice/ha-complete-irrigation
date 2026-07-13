@@ -4,6 +4,22 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.41.1 — 2026-07-13 — patch
+
+**Today's plan now shows what actually ran.** A planned run stayed on its
+forward-looking "🟢 On track — run as scheduled" even after it had already
+watered. Each item on the **Today's plan** card now flips to its real outcome
+once the run fires, matched against run history by schedule (then zone) for
+today:
+
+- **✅ Ran on schedule** — the scheduled run completed.
+- **💧 Running now…** — the run is in progress.
+- **🟠 Stopped early** — the run was aborted.
+- **⏭️ Skipped today** — a gate (rain / moisture / wind) skipped it.
+
+The card also refreshes run history whenever you open the Today tab and once a
+minute while it's open, so the state updates without a manual reload.
+
 ## v1.41.0 — 2026-07-13 — minor
 
 **Attach an external AI for plant identification.** The local vision model
