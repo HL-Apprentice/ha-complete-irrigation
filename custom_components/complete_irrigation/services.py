@@ -2584,9 +2584,12 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             return {"ok": False, "detail": "no coordinator"}
         from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-        from .llm_client import call_chat, resolve_targets
+        from .llm_client import call_chat, configured_targets
 
-        targets = resolve_targets(coord.config)
+        # Probe EVERY configured endpoint (local + external), regardless of the
+        # llm_mode — so the user can confirm their external key works before
+        # switching the mode away from local-only.
+        targets = configured_targets(coord.config)
         if not targets:
             return {
                 "ok": False,

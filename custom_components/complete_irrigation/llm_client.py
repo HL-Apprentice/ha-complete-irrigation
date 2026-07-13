@@ -109,6 +109,13 @@ def _external_target(config: dict[str, Any]) -> LlmTarget | None:
     return LlmTarget(label=label, url=url, model=model, api_key=key, kind="external")
 
 
+def configured_targets(config: dict[str, Any]) -> list[LlmTarget]:
+    """Every FULLY-configured endpoint (local and/or external), independent of
+    ``llm_mode`` — for the "Test connection" button, so the user can confirm each
+    endpoint works before choosing a mode. Order: local first, then external."""
+    return [t for t in (_local_target(config), _external_target(config)) if t is not None]
+
+
 def resolve_targets(config: dict[str, Any]) -> list[LlmTarget]:
     """Ordered list of endpoints to try, per ``llm_mode``. PURE + defensive: a
     target that isn't fully configured is silently dropped."""

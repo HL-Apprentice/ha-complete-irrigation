@@ -4,6 +4,25 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.41.2 — 2026-07-13 — patch
+
+**"Test connection" now confirms the external AI too.** Three fixes so the
+Anthropic/Grok/Gemini connection can actually be verified:
+
+- **Test saves the form first**, then probes — so it checks the key/model/
+  provider you just typed, not only the previously-saved endpoint. (Before, you
+  had to Save, then Test; entering a key and hitting Test showed only the local
+  model.)
+- **Test probes every configured endpoint regardless of mode** — so it confirms
+  your external key works even while the mode is still "Local", letting you
+  verify before switching to fallback.
+- **The external provider fields are always visible**, so the key can be
+  entered, saved, and tested without first changing the mode.
+
+Result: pick Anthropic (Claude), paste your key, hit **Test connection**, and you
+get `local: OK … ; Anthropic (Claude): OK …`. The key is still stored only on
+your server and never returned to the browser or logged.
+
 ## v1.41.1 — 2026-07-13 — patch
 
 **Today's plan now shows what actually ran.** A planned run stayed on its

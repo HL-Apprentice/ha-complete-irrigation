@@ -72,7 +72,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.41.1";
+  const PANEL_VERSION = "v1.41.2";
   // v1.41 — external plant-ID providers (mirrors llm_client.PROVIDERS). URL is
   // auto-filled when a provider is picked; model is an editable hint. All speak
   // the same OpenAI /v1/chat/completions shape, so one settings form covers them.
@@ -3599,7 +3599,10 @@
       const provider = d.llm_provider || "custom";
       const preset = LLM_PROVIDERS[provider] || LLM_PROVIDERS.custom;
       const keySaved = !!c.llm_external_api_key_set;
-      const showExternal = mode !== "local";
+      // v1.41.2 — always show the external block so its key can be entered,
+      // SAVED, and tested independent of mode (the mode only controls when the
+      // external model is actually USED for identify/research).
+      const showExternal = true;
       const modeOpts = LLM_MODES.map(
         ([v, lbl]) =>
           `<option value="${v}"${v === mode ? " selected" : ""}>${escapeHtml(lbl)}</option>`
@@ -3735,32 +3738,39 @@
       }
     }
 
-    async _saveVisionEndpoint() {
-      // v1.37/v1.41 — persist plant-ID settings. Only fields present in the DOM
-      // are sent, so saving in "local" mode preserves the external config, and a
-      // blank API key keeps the stored one (Clear key removes it explicitly).
+    async _persistPlantIdConfig() {
+      // v1.41.2 — read the plant-ID form and persist it via set_general_config.
+      // Shared by Save and Test (Test persists FIRST so it probes exactly what
+      // you typed). Reads from the edit DRAFT, not the DOM: the password field is
+      // always rendered blank for security, so a re-render would wipe a typed key
+      // from the DOM — the draft (updated on every keystroke) keeps it. A blank
+      // key keeps the stored one; Clear key removes it explicitly.
       const root = this.shadowRoot;
-      const g = (n) => (root?.querySelector(`[name="${n}"]`)?.value || "").trim();
-      const has = (n) => root?.querySelector(`[name="${n}"]`) != null;
-      const payload = {};
-      for (const n of [
-        "vision_url",
-        "vision_model",
-        "llm_mode",
-        "llm_provider",
-        "llm_external_url",
-        "llm_external_model",
-      ]) {
-        if (has(n)) payload[n] = g(n);
-      }
-      // Only overwrite the stored key when the user typed a NEW one.
-      if (has("llm_external_api_key") && g("llm_external_api_key")) {
-        payload.llm_external_api_key = g("llm_external_api_key");
-      }
+      const draft = this._visionDraft;
+      const domVal = (n) => (root?.querySelector(`[name="${n}"]`)?.value || "").trim();
+      const val = (n) => (draft && n in draft ? String(draft[n] ?? "").trim() : domVal(n));
+      const payload = {
+        vision_url: val("vision_url"),
+        vision_model: val("vision_model"),
+        llm_mode: val("llm_mode") || "local",
+        llm_provider: val("llm_provider") || "custom",
+        llm_external_url: val("llm_external_url"),
+        llm_external_model: val("llm_external_model"),
+      };
+      const key = draft
+        ? String(draft.llm_external_api_key || "").trim()
+        : domVal("llm_external_api_key");
+      if (key) payload.llm_external_api_key = key; // only overwrite when a new key is typed
+      await this._hass.callService("complete_irrigation", "set_general_config", payload);
+      this._visionDraft = null; // re-hydrate from the saved config
+      await this._fetchConfig();
+      return true;
+    }
+
+    async _saveVisionEndpoint() {
+      // v1.37/v1.41 — persist plant-ID settings (local + external + mode).
       try {
-        await this._hass.callService("complete_irrigation", "set_general_config", payload);
-        this._visionDraft = null; // re-hydrate from the saved config
-        await this._fetchConfig();
+        await this._persistPlantIdConfig();
         this._visionSaved = true;
         this._renderNow();
         setTimeout(() => {
@@ -3782,6 +3792,18 @@
       this._visionTestResult = null;
       this._renderNow();
       try {
+        // v1.41.2 — save the current form FIRST so we probe exactly what's typed
+        // (Claude key/model/provider included), then test EVERY configured
+        // endpoint regardless of mode.
+        try {
+          await this._persistPlantIdConfig();
+        } catch (saveErr) {
+          this._visionTestResult = {
+            ok: false,
+            detail: "couldn't save settings before testing: " + String(saveErr?.message || saveErr),
+          };
+          return;
+        }
         const res = await this._hass.callWS({
           type: "call_service",
           domain: "complete_irrigation",

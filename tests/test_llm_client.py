@@ -9,6 +9,7 @@ import pytest
 from custom_components.complete_irrigation.llm_client import (
     PROVIDERS,
     call_chat,
+    configured_targets,
     resolve_targets,
 )
 
@@ -77,6 +78,31 @@ def test_url_override_beats_provider_preset():
 
 def test_unknown_mode_falls_back_to_local():
     assert [t.label for t in resolve_targets({**LOCAL, "llm_mode": "bogus"})] == ["local"]
+
+
+# ── configured_targets (mode-independent, for the Test button) ──────
+
+
+def test_configured_targets_includes_external_even_in_local_mode():
+    # The whole point: Test probes the external endpoint even when the mode is
+    # local, so the user can confirm the key works before switching modes.
+    cfg = {**LOCAL, **EXT, "llm_mode": "local"}
+    labels = [t.label for t in configured_targets(cfg)]
+    assert labels == ["local", "Anthropic (Claude)"]
+    # ...whereas resolve_targets (mode-driven) would NOT include it in local mode.
+    assert [t.label for t in resolve_targets(cfg)] == ["local"]
+
+
+def test_configured_targets_local_only_when_no_external():
+    assert [t.label for t in configured_targets(LOCAL)] == ["local"]
+
+
+def test_configured_targets_external_only_when_no_local():
+    assert [t.kind for t in configured_targets({**EXT})] == ["external"]
+
+
+def test_configured_targets_empty_when_nothing_set():
+    assert configured_targets({}) == []
 
 
 # ── call_chat (fake aiohttp session) ────────────────────────────────
