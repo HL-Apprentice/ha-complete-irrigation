@@ -4,6 +4,26 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.41.0 — 2026-07-13 — minor
+
+**Attach an external AI for plant identification.** The local vision model
+(qwen on your LAN) is private and free but small — it often can't tell species
+apart or returns garbled JSON. You can now attach a stronger **external** model —
+**Anthropic (Claude)**, **xAI (Grok)**, **Google (Gemini)**, or any
+OpenAI-compatible endpoint — and pick how it engages:
+
+- **Local model only** — unchanged default.
+- **Local, with external fallback** — try the local model first; only call the
+  external AI when the local one fails or can't identify the plant. Cheapest.
+- **External model only** — always use the external AI.
+
+Set it up in **Settings → Plant identification**: pick a mode and provider (the
+endpoint URL auto-fills), enter the model and your API key, and hit **Test
+connection** to probe each configured model. The key is stored on your Home
+Assistant server and is **never** sent back to the browser or written to the
+logs. All four providers speak the same OpenAI chat API, so one setting covers
+them; "Custom" lets you point at any other server.
+
 ## v1.40.12 — 2026-07-13 — minor
 
 **Curated care beats the LLM's blind spot.** A small vision model (qwen2.5vl:7b)

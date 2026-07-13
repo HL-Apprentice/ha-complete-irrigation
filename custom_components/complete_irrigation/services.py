@@ -51,6 +51,7 @@ from .light_survey import (
     MIN_SURVEY_MINUTES,
     validate_lux_range,
 )
+from .llm_client import PROVIDERS
 from .manual_run import ManualRun, validate_run_duration
 from .notifications import CATEGORY_CRITICAL  # v1.16: promoted from inline imports
 from .plant import PlantRecord
@@ -421,6 +422,14 @@ _SET_GENERAL_CONFIG_SCHEMA = vol.Schema(
         # (e.g. Ollama/vLLM on a LAN GPU box). Empty string clears it.
         vol.Optional("vision_url"): vol.All(cv.string, vol.Length(max=300)),
         vol.Optional("vision_model"): vol.All(cv.string, vol.Length(max=120)),
+        # v1.41 — pluggable plant-ID model: local + optional EXTERNAL provider
+        # (Claude / Grok / Gemini / custom). Mode picks how the external one
+        # engages; the API key is stored on the box and never logged.
+        vol.Optional("llm_mode"): vol.In(("local", "external", "fallback")),
+        vol.Optional("llm_provider"): vol.In(tuple(PROVIDERS)),
+        vol.Optional("llm_external_url"): vol.All(cv.string, vol.Length(max=300)),
+        vol.Optional("llm_external_model"): vol.All(cv.string, vol.Length(max=120)),
+        vol.Optional("llm_external_api_key"): vol.All(cv.string, vol.Length(max=400)),
         # PRD #81 — snooze the Sunday weekly reminder until this date.
         vol.Optional("weekly_reminder_snoozed_until"): vol.Any(None, cv.date),
         # User-defined zone ordering for the panel (Today + Zones tabs).
@@ -462,6 +471,11 @@ _GENERAL_CONFIG_FIELDS: dict[str, Any] = {
     "verify_switch_seconds": int,  # v1.40 — 0 disables the check-back verify
     "vision_url": lambda v: v.strip(),  # v1.37 — empty string clears
     "vision_model": lambda v: v.strip(),  # v1.37
+    "llm_mode": lambda v: v,  # v1.41 — local | external | fallback
+    "llm_provider": lambda v: v,  # anthropic | xai | google | custom
+    "llm_external_url": lambda v: v.strip(),  # override / custom base URL
+    "llm_external_model": lambda v: v.strip(),
+    "llm_external_api_key": lambda v: v.strip(),  # empty string clears
 }
 
 
@@ -2336,22 +2350,20 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         add_plant_from_photo. Stores the suggestion on the plant and returns it."""
         if not plant.photos:
             raise vol.Invalid("add a photo of the plant first")
-        vision_url = str(coord.config.get("vision_url") or "").strip()
-        if not vision_url.startswith(("http://", "https://")):
-            raise vol.Invalid(
-                "set a vision endpoint first (set_general_config vision_url = an "
-                "OpenAI-compatible /v1/chat/completions URL)"
-            )
-        model = str(coord.config.get("vision_model") or "").strip() or "default"
-
-        import base64
-        import json as _json
-
-        import aiohttp
         from homeassistant.helpers.aiohttp_client import async_get_clientsession
         from homeassistant.util import dt as dt_util
 
+        from .llm_client import call_chat, resolve_targets
         from .species_id import extract_suggestion_json, validate_suggestion
+
+        targets = resolve_targets(coord.config)
+        if not targets:
+            raise vol.Invalid(
+                "set up a plant-ID model first (Settings -> Plant identification): a "
+                "local OpenAI-compatible vision URL and/or an external provider key"
+            )
+
+        import base64
 
         # Newest photo path is server-set "/local/complete_irrigation/plants/<id>/…"
         # (from_dict guarantees the /local/ prefix; the id is slug-safe). Re-guard anyway.
@@ -2378,51 +2390,37 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             raise vol.Invalid(f"could not read the plant photo: {err}") from err
         b64 = base64.b64encode(img).decode("ascii")
 
-        body = _json.dumps(
+        messages = [
             {
-                "model": model,
-                "messages": [
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": _SPECIES_PROMPT},
                     {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": _SPECIES_PROMPT},
-                            {
-                                "type": "image_url",
-                                "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
-                            },
-                        ],
-                    }
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
+                    },
                 ],
-                "temperature": 0.2,
-                "max_tokens": 400,
             }
-        )
+        ]
         session = async_get_clientsession(hass)
-        try:
-            async with session.post(
-                vision_url,
-                data=body,
-                headers={"Content-Type": "application/json"},
-                timeout=aiohttp.ClientTimeout(total=120),
-            ) as resp:
-                if resp.status != 200:
-                    raise vol.Invalid(f"vision endpoint returned HTTP {resp.status}")
-                raw = await resp.content.read(1_000_001)
-                if len(raw) > 1_000_000:
-                    raise vol.Invalid("vision endpoint response too large")
-        except vol.Invalid:
-            raise
-        except Exception as err:
-            raise vol.Invalid(f"vision endpoint unreachable: {err}") from err
-
-        try:
-            text = _json.loads(raw)["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, ValueError, TypeError) as err:
-            raise vol.Invalid("vision endpoint returned an unexpected envelope") from err
+        # accept only a parseable suggestion, so 'fallback' mode pushes a garbled
+        # local reply down to the external provider instead of giving up.
+        result = await call_chat(
+            session,
+            targets,
+            messages,
+            timeout_s=120,
+            max_tokens=400,
+            accept=lambda c: extract_suggestion_json(c) is not None,
+        )
+        if not result.ok:
+            raise vol.Invalid(f"plant-ID model could not be reached ({result.error})")
         # Repair-aware extraction: small vision models wrap the JSON in prose,
         # echo the prompt's inline hints into values, or leave trailing commas.
-        obj = extract_suggestion_json(text)
-        suggestion = validate_suggestion(obj, model=model, now_iso=dt_util.utcnow().isoformat())
+        obj = extract_suggestion_json(result.content)
+        suggestion = validate_suggestion(
+            obj, model=result.model or "llm", now_iso=dt_util.utcnow().isoformat()
+        )
         if suggestion is None:
             raise vol.Invalid("the model could not identify the plant — try a clearer photo")
 
@@ -2478,54 +2476,35 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             )
             if sug:
                 return sug
-        vision_url = str(coord.config.get("vision_url") or "").strip()
-        if not vision_url.startswith(("http://", "https://")):
-            raise vol.Invalid(
-                "set a vision endpoint first (Settings -> Vision endpoint) to research a species"
-            )
-        model = str(coord.config.get("vision_model") or "").strip() or "default"
-
-        import json as _json
-
-        import aiohttp
         from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+        from .llm_client import call_chat, resolve_targets
         from .species_id import extract_suggestion_json
 
+        targets = resolve_targets(coord.config)
+        if not targets:
+            raise vol.Invalid(
+                "set up a plant-ID model first (Settings -> Plant identification) to research a "
+                "species"
+            )
         prompt = _RESEARCH_PROMPT.replace("{SPECIES}", species_name)
-        body = _json.dumps(
-            {
-                "model": model,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.2,
-                "max_tokens": 400,
-            }
-        )
         session = async_get_clientsession(hass)
-        try:
-            async with session.post(
-                vision_url,
-                data=body,
-                headers={"Content-Type": "application/json"},
-                timeout=aiohttp.ClientTimeout(total=120),
-            ) as resp:
-                if resp.status != 200:
-                    raise vol.Invalid(f"vision endpoint returned HTTP {resp.status}")
-                raw = await resp.content.read(1_000_001)
-                if len(raw) > 1_000_000:
-                    raise vol.Invalid("vision endpoint response too large")
-        except vol.Invalid:
-            raise
-        except Exception as err:
-            raise vol.Invalid(f"vision endpoint unreachable: {err}") from err
-        try:
-            text = _json.loads(raw)["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, ValueError, TypeError) as err:
-            raise vol.Invalid("vision endpoint returned an unexpected envelope") from err
-        obj = extract_suggestion_json(text)
+        result = await call_chat(
+            session,
+            targets,
+            [{"role": "user", "content": prompt}],
+            timeout_s=120,
+            max_tokens=400,
+            accept=lambda c: extract_suggestion_json(c) is not None,
+        )
+        if not result.ok:
+            raise vol.Invalid(f"could not research that species ({result.error})")
+        obj = extract_suggestion_json(result.content)
         if isinstance(obj, dict) and not str(obj.get("species") or "").strip():
             obj["species"] = species_name  # the name IS the answer; satisfy the validator
-        suggestion = validate_suggestion(obj, model=model, now_iso=dt_util.utcnow().isoformat())
+        suggestion = validate_suggestion(
+            obj, model=result.model or "llm", now_iso=dt_util.utcnow().isoformat()
+        )
         if suggestion is None:
             raise vol.Invalid("could not research that species -- check the name and try again")
         return suggestion
@@ -2603,41 +2582,36 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         coord = _find_coordinator(hass)
         if coord is None:
             return {"ok": False, "detail": "no coordinator"}
-        vision_url = str(coord.config.get("vision_url") or "").strip()
-        if not vision_url.startswith(("http://", "https://")):
-            return {"ok": False, "detail": "no vision endpoint configured"}
-        model = str(coord.config.get("vision_model") or "").strip() or "default"
-
-        import json as _json
-
-        import aiohttp
         from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-        body = _json.dumps(
-            {
-                "model": model,
-                "messages": [{"role": "user", "content": "Reply with exactly: OK"}],
-                "max_tokens": 5,
+        from .llm_client import call_chat, resolve_targets
+
+        targets = resolve_targets(coord.config)
+        if not targets:
+            return {
+                "ok": False,
+                "detail": "no plant-ID model configured (set a local vision URL or an "
+                "external provider)",
             }
-        )
         session = async_get_clientsession(hass)
-        try:
-            async with session.post(
-                vision_url,
-                data=body,
-                headers={"Content-Type": "application/json"},
-                timeout=aiohttp.ClientTimeout(total=30),
-            ) as resp:
-                if resp.status != 200:
-                    return {"ok": False, "detail": f"HTTP {resp.status} from endpoint"}
-                raw = await resp.content.read(100_000)
-        except Exception as err:
-            return {"ok": False, "detail": f"unreachable: {str(err)[:120]}"}
-        try:
-            reply = _json.loads(raw)["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, ValueError, TypeError):
-            return {"ok": False, "detail": "endpoint reachable but reply not OpenAI-shaped"}
-        return {"ok": True, "detail": f"model {model} replied ({str(reply)[:40].strip()})"}
+        parts: list[str] = []
+        all_ok = True
+        # Probe each configured target on its own so the report shows which of
+        # local / external is reachable (not just the first that answers).
+        for t in targets:
+            r = await call_chat(
+                session,
+                [t],
+                [{"role": "user", "content": "Reply with exactly: OK"}],
+                timeout_s=30,
+                max_tokens=5,
+            )
+            if r.ok:
+                parts.append(f"{t.label}: OK ({t.model} -> {r.content[:20].strip()})")
+            else:
+                all_ok = False
+                parts.append(f"{t.label}: FAILED ({r.error})")
+        return {"ok": all_ok, "detail": "; ".join(parts)}
 
     async def handle_propose_watering_advice(call: ServiceCall) -> None:
         """v1.39 — store the external LLM advisor's proposals (rail-bounded).
@@ -3310,7 +3284,18 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             if key in data:
                 coord.config[key] = transform(data[key])
         await coord.async_save_config()
-        _LOGGER.info("General config updated: %s", data)
+        # Never log credentials. Mask the API key outright, and strip any query
+        # string from the external URL — a "custom"/Google-style endpoint can
+        # carry a key in a `?key=…` param, which must not land in the HA log.
+        safe = {}
+        for k, v in data.items():
+            if k == "llm_external_api_key":
+                safe[k] = "***"
+            elif k == "llm_external_url" and isinstance(v, str) and "?" in v:
+                safe[k] = v.split("?", 1)[0] + "?<redacted>"
+            else:
+                safe[k] = v
+        _LOGGER.info("General config updated: %s", safe)
 
     hass.services.async_register(
         DOMAIN,
