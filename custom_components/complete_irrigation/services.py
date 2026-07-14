@@ -2405,12 +2405,18 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         session = async_get_clientsession(hass)
         # accept only a parseable suggestion, so 'fallback' mode pushes a garbled
         # local reply down to the external provider instead of giving up.
+        # max_tokens 4000, NOT 400: reasoning models (Gemini 2.5, Claude, grok
+        # -reasoning) burn "thinking" tokens from the same budget before emitting —
+        # at 400 the JSON truncates mid-string (finish_reason=length) and the
+        # identify fails even though the model had the right species. Verified
+        # empirically 2026-07-14: gemini-2.5-flash needs ~2500+; 4000 is safe
+        # headroom and costs nothing extra when unused.
         result = await call_chat(
             session,
             targets,
             messages,
             timeout_s=120,
-            max_tokens=400,
+            max_tokens=4000,
             accept=lambda c: extract_suggestion_json(c) is not None,
         )
         if not result.ok:
@@ -2489,12 +2495,13 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             )
         prompt = _RESEARCH_PROMPT.replace("{SPECIES}", species_name)
         session = async_get_clientsession(hass)
+        # 4000 not 400 — reasoning-model thinking budget; see _run_identify.
         result = await call_chat(
             session,
             targets,
             [{"role": "user", "content": prompt}],
             timeout_s=120,
-            max_tokens=400,
+            max_tokens=4000,
             accept=lambda c: extract_suggestion_json(c) is not None,
         )
         if not result.ok:
@@ -2601,13 +2608,17 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         all_ok = True
         # Probe each configured target on its own so the report shows which of
         # local / external is reachable (not just the first that answers).
+        # max_tokens 512 not 5: reasoning models (Gemini 2.5) spend "thinking"
+        # tokens from the same budget — at 5 the reply comes back EMPTY and the
+        # probe falsely reports a working endpoint as failed. Also a slightly
+        # longer timeout for the same reason.
         for t in targets:
             r = await call_chat(
                 session,
                 [t],
                 [{"role": "user", "content": "Reply with exactly: OK"}],
-                timeout_s=30,
-                max_tokens=5,
+                timeout_s=60,
+                max_tokens=512,
             )
             if r.ok:
                 parts.append(f"{t.label}: OK ({t.model} -> {r.content[:20].strip()})")

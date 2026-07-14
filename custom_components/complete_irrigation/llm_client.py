@@ -139,7 +139,10 @@ async def call_chat(
     messages: list[dict],
     *,
     timeout_s: float = 120,
-    max_tokens: int = 400,
+    # Default sized for reasoning models (Gemini 2.5 / Claude / grok-reasoning):
+    # their hidden "thinking" draws from the same completion budget, so a small
+    # cap truncates the visible answer (finish_reason=length). 400 broke Gemini.
+    max_tokens: int = 4000,
     temperature: float = 0.2,
     accept: Callable[[str], bool] | None = None,
 ) -> LlmResult:
