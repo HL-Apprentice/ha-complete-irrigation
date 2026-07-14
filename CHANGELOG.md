@@ -4,6 +4,24 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.41.3 — 2026-07-14 — patch
+
+**Reasoning models no longer truncate (Gemini identify was broken).** Empirical
+testing against real yard photos showed reasoning models (Gemini 2.5, Claude,
+grok reasoning variants) spend hidden "thinking" tokens from the same completion
+budget — with the old `max_tokens: 400`, Gemini's reply cut off mid-JSON
+(`finish_reason: length`) and every identify failed with "could not identify the
+plant", even though the model had the right species at 0.9+ confidence. Raised
+the identify/research budget to 4000 (no extra cost when unused). The **Test
+connection** probe had the same bug worse — `max_tokens: 5` returns an EMPTY
+reply from a reasoning model, falsely reporting a working endpoint as failed;
+now 512 with a longer timeout.
+
+Also verified empirically (6 known-species yard photos, exact-species scoring):
+grok-4.3 and gemini-2.5-flash both identify 5/6 correctly with clean JSON —
+prompt variants (location context, botanist rewrite) did not change accuracy, so
+the production prompt stays.
+
 ## v1.41.2 — 2026-07-13 — patch
 
 **"Test connection" now confirms the external AI too.** Three fixes so the
