@@ -4,6 +4,29 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.41.4 — 2026-07-14 — patch
+
+**Photo uploads can no longer fail silently.** Every rejection path in
+`add_plant_photo` logged a warning and then **returned** — so the service call
+reported success, the panel's error handler never fired, and the photo simply
+vanished with no explanation. All six paths now **raise** with an actionable
+message ("payload is not a recognized image (accepted: JPEG, PNG, GIF, WEBP,
+BMP)", "decoded image is too small (N bytes)", "could not write the image: …"),
+so the panel shows the real reason.
+
+Also fixed on the PNG path:
+
+- **Whitespace-tolerant base64** — `validate=True` hard-rejected line-wrapped
+  base64 (exactly what CLI `base64 file.png` produces), a silent, baffling
+  failure. Whitespace is now stripped before decoding.
+- **The vision request now declares the ACTUAL image type.** Identify hard-coded
+  `data:image/jpeg;base64,…` for every stored photo, so a PNG or WEBP was
+  announced to the provider as JPEG — a mismatch some vision APIs reject
+  outright. New `_image_mime()` reads the magic bytes and labels the data URI
+  correctly (and backs the upload validator, so there's one source of truth).
+- Added a `debug` log line at decode with the plant id, byte count, and header
+  bytes, so any future upload issue leaves a trace.
+
 ## v1.41.3 — 2026-07-14 — patch
 
 **Reasoning models no longer truncate (Gemini identify was broken).** Empirical
