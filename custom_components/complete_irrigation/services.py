@@ -812,18 +812,31 @@ async def _require_admin(hass: HomeAssistant, call) -> bool:
 # We validate decoded upload bytes against these before writing so a crafted
 # SVG/HTML payload can't be stored as a .jpg and served back (content-sniffing /
 # stored-XSS vector). Order: JPEG, PNG, GIF87a/89a, WEBP (RIFF....WEBP), BMP.
-def _looks_like_image(data: bytes) -> bool:
+def _image_mime(data: bytes) -> str | None:
+    """The image type from magic bytes, or None if it isn't a known image.
+
+    v1.41.4 — used both to VALIDATE uploads and to label the data: URI we send to
+    a vision model. Previously the identify path hard-coded image/jpeg, so a
+    stored PNG/WEBP was announced to the API as JPEG (some providers reject the
+    mismatch outright) — the bytes and the declared type must agree.
+    """
     if len(data) < 12:
-        return False
-    if data[:3] == b"\xff\xd8\xff":  # JPEG
-        return True
-    if data[:8] == b"\x89PNG\r\n\x1a\n":  # PNG
-        return True
-    if data[:6] in (b"GIF87a", b"GIF89a"):  # GIF
-        return True
-    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":  # WEBP
-        return True
-    return data[:2] == b"BM"  # BMP
+        return None
+    if data[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data[:2] == b"BM":
+        return "image/bmp"
+    return None
+
+
+def _looks_like_image(data: bytes) -> bool:
+    return _image_mime(data) is not None
 
 
 def _cancel_verify_timer(entry_data: dict[str, Any], entity_id: str) -> None:
@@ -2013,8 +2026,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             return
         existing = coord.plants.get(data["plant_id"])
         if existing is None:
-            _LOGGER.warning("add_plant_photo: no such plant %s", data["plant_id"])
-            return
+            raise vol.Invalid(f"no such plant {data['plant_id']}")
 
         import base64
         import binascii
@@ -2022,22 +2034,33 @@ async def _async_register_services(hass: HomeAssistant) -> None:
 
         from homeassistant.util import dt as dt_util
 
+        # v1.41.4 — every rejection below RAISES (was: _LOGGER.warning + return).
+        # A silent return made the service call succeed while dropping the photo,
+        # so the panel's error path never fired and an upload just "did nothing".
         raw_b64 = data["image_base64"]
         if "," in raw_b64[:64]:  # tolerate a data:image/...;base64, prefix
             raw_b64 = raw_b64.split(",", 1)[1]
+        # Tolerate whitespace/newlines: CLI `base64 file.png` output is line-wrapped
+        # and validate=True rejects it outright — a silent, baffling failure.
+        raw_b64 = "".join(raw_b64.split())
         try:
             image = base64.b64decode(raw_b64, validate=True)
-        except (binascii.Error, ValueError):
-            _LOGGER.warning("add_plant_photo: image_base64 is not valid base64")
-            return
+        except (binascii.Error, ValueError) as err:
+            raise vol.Invalid("image data is not valid base64") from err
+        _LOGGER.debug(
+            "add_plant_photo: plant=%s decoded=%d bytes head=%r",
+            existing.id,
+            len(image),
+            image[:8],
+        )
         if len(image) < 100:
-            _LOGGER.warning("add_plant_photo: decoded image too small")
-            return
+            raise vol.Invalid(f"decoded image is too small ({len(image)} bytes)")
         if not _looks_like_image(image):
             # Reject non-images so a crafted SVG/HTML can't be stored as .jpg and
             # served from /local (content-sniffing / stored-XSS vector).
-            _LOGGER.warning("add_plant_photo: payload is not a recognized image")
-            return
+            raise vol.Invalid(
+                "payload is not a recognized image (accepted: JPEG, PNG, GIF, WEBP, BMP)"
+            )
 
         ts = int(dt_util.utcnow().timestamp())
         plants_root = hass.config.path("www", "complete_irrigation", "plants")
@@ -2051,7 +2074,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             [os.path.realpath(abs_dir), os.path.realpath(plants_root)]
         ) != os.path.realpath(plants_root):
             _LOGGER.error("add_plant_photo: refusing unsafe path for id %r", existing.id)
-            return
+            raise vol.Invalid("refusing an unsafe photo path")
 
         def _save() -> None:
             os.makedirs(abs_dir, exist_ok=True)
@@ -2061,8 +2084,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         try:
             await hass.async_add_executor_job(_save)
         except OSError as err:
-            _LOGGER.warning("add_plant_photo: could not write image: %s", err)
-            return
+            raise vol.Invalid(f"could not write the image: {err}") from err
 
         url_path = f"/local/complete_irrigation/plants/{existing.id}/{fname}"
         photo = {"ts": ts, "path": url_path, "note": data.get("note", "")}
@@ -2388,6 +2410,9 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             img = await hass.async_add_executor_job(_read)
         except OSError as err:
             raise vol.Invalid(f"could not read the plant photo: {err}") from err
+        # Declare the ACTUAL image type — a stored PNG/WEBP announced as JPEG is
+        # rejected by some vision providers (v1.41.4).
+        mime = _image_mime(img) or "image/jpeg"
         b64 = base64.b64encode(img).decode("ascii")
 
         messages = [
@@ -2397,7 +2422,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
                     {"type": "text", "text": _SPECIES_PROMPT},
                     {
                         "type": "image_url",
-                        "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
+                        "image_url": {"url": f"data:{mime};base64,{b64}"},
                     },
                 ],
             }
