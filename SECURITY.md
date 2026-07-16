@@ -76,6 +76,11 @@ only as an `Authorization` header to the provider you configured, is never
 written to logs, and is redacted from `get_config` output — still, please
 redact keys from any logs you share.
 
+**Hardiness-zone lookup (phzmapi).** The **"Look up zone"** action
+(`lookup_hardiness_zone`, admin-only, v1.50) sends only the **ZIP code you typed**
+over HTTPS to phzmapi (`phzmapi.org`, a fixed host — no API key) to fetch your
+USDA hardiness zone for frost planning. Opt-in; no other data is sent.
+
 **Species-name verification (GBIF).** The **"Verify name"** button
 (`verify_species_name`, admin-only, v1.46) sends only the **plant name text you
 typed** over HTTPS to GBIF (`api.gbif.org`, a fixed host — no API key) to look up

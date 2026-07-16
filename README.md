@@ -133,6 +133,7 @@ with **no external connections and no API keys** at all.
 | **Aerial yard map** | Esri World Imagery (`services.arcgisonline.com`), or a custom GIS URL you set | your map's **bounding-box coordinates** (defaults to your HA location) | **No** | when you press *Set up / Refresh aerial* |
 | **Verify plant name** | GBIF (`api.gbif.org`) | the **plant name text** you typed | **No** | when you press *Verify name* |
 | **Auto ET — Open-Meteo** | Open-Meteo (`api.open-meteo.com`) | your **HA latitude/longitude** | **No** | only if you pick Open-Meteo as the ET source |
+| **Hardiness zone** | phzmapi (`phzmapi.org`) | your **ZIP code** | **No** | only when you press *Look up zone* |
 | **Plant identification** | your **local** vision model, *or* an external AI (Anthropic / xAI / Google / custom) you choose | plant **photos** + text prompts | Local: **No**. External: **Yes**, your own key | only if you use photo-ID / research **and** configured a model |
 
 Notes:

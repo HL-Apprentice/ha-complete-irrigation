@@ -72,7 +72,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.49.0";
+  const PANEL_VERSION = "v1.50.0";
   // v1.41 — external plant-ID providers (mirrors llm_client.PROVIDERS). URL is
   // auto-filled when a provider is picked; model is an editable hint. All speak
   // the same OpenAI /v1/chat/completions shape, so one settings form covers them.
@@ -434,6 +434,9 @@
       this._mapBusy = false; // v1.30 — set_yard_map fetch in flight
       this._mapSourceDraft = null; // v1.42 — aerial URL-template edit draft; null = mirror config
       this._mapSourceSaved = false; // v1.42 — transient "✓ Saved" label
+      this._hardinessZip = null; // v1.50 — ZIP edit draft; null = mirror config
+      this._hardinessBusy = false; // v1.50 — lookup in flight
+      this._hardinessMsg = ""; // v1.50 — last lookup error (or "")
       // v1.48 — client-side slippy-map view transform (drag to pan, scroll to
       // zoom). Purely a view aid over the fetched aerial — the stored bbox +
       // normalized marker coords are unchanged; screen<->norm goes through this.
@@ -923,6 +926,7 @@
         if (action === "test-vision") return this._testVisionEndpoint();
         if (action === "clear-llm-key") return this._clearLlmKey();
         if (action === "save-map-source") return this._saveMapSource();
+        if (action === "lookup-hardiness") return this._lookupHardiness();
         // v1.39 — watering advisor.
         if (action === "advice-apply")
           return this._applyAdviceItem(parseInt(node.dataset.idx, 10));
@@ -1158,6 +1162,10 @@
       if (action === "map-source-field") {
         // v1.42 — keep the typed template alive across background re-renders.
         this._mapSourceDraft = t.value;
+        return;
+      }
+      if (action === "hardiness-field") {
+        this._hardinessZip = t.value; // v1.50 — keep typed ZIP alive
         return;
       }
       if (action === "photo-file") {
@@ -3921,6 +3929,8 @@
         this._renderPlantIdCard(c) +
         // v1.42 — custom aerial source for the yard map.
         this._renderMapSourceCard(c) +
+        // v1.50 — USDA hardiness zone (frost planning).
+        this._renderHardinessCard(c) +
         `<section class="settings-card">` +
         `<h3 class="section-title">Calendar feed</h3>` +
         `<p class="section-hint">Subscribe from your phone's calendar app to see the next 30 days of planned runs.</p>` +
@@ -4020,6 +4030,72 @@
         `</div>` +
         `</section>`
       );
+    }
+
+    _renderHardinessCard(c) {
+      // v1.50 — USDA hardiness zone from a ZIP (phzmapi, free, no key). Drives
+      // frost warnings on plants whose cold tolerance is warmer than the zone.
+      const zone = c.hardiness_zone || "";
+      const zlow = c.hardiness_temp_low_f;
+      const zip = this._hardinessZip ?? (c.hardiness_zip || "");
+      return (
+        `<section class="settings-card">` +
+        `<h3 class="section-title">Hardiness zone</h3>` +
+        `<p class="section-hint">Your USDA plant-hardiness zone (from your ZIP, via the free keyless phzmapi service). Used to flag plants that may need winter frost protection here.</p>` +
+        (zone
+          ? `<p style="margin:4px 0"><strong>Zone ${escapeHtml(zone)}</strong>` +
+            (zlow != null ? ` — coldest around ${zlow}&deg;F` : "") +
+            `</p>`
+          : "") +
+        `<div class="weather-form" style="background:transparent;border:none;padding:0;max-width:none">` +
+        `<label>ZIP code</label>` +
+        `<input name="hardiness_zip" data-action="hardiness-field" type="text" inputmode="numeric" maxlength="10" value="${escapeAttr(
+          zip
+        )}" placeholder="e.g. 85295" style="max-width:160px" />` +
+        `<div class="modal-actions">` +
+        `<button type="button" class="btn btn-primary" data-action="lookup-hardiness"${
+          this._hardinessBusy ? " disabled" : ""
+        }>${this._hardinessBusy ? "Looking up…" : "Look up zone"}</button>` +
+        `</div>` +
+        (this._hardinessMsg
+          ? `<span class="vision-test-result vision-test-fail">${escapeHtml(this._hardinessMsg)}</span>`
+          : "") +
+        `</div>` +
+        `</section>`
+      );
+    }
+
+    async _lookupHardiness() {
+      if (this._hardinessBusy || !this._hass?.callWS) return;
+      const root = this.shadowRoot;
+      const zip = (root?.querySelector('[name="hardiness_zip"]')?.value || "").trim();
+      if (!zip) {
+        alert("Enter your ZIP code first.");
+        return;
+      }
+      this._hardinessBusy = true;
+      this._hardinessMsg = "";
+      this._renderNow();
+      try {
+        const res = await this._hass.callWS({
+          type: "call_service",
+          domain: "complete_irrigation",
+          service: "lookup_hardiness_zone",
+          service_data: { zip },
+          return_response: true,
+        });
+        const out = res?.response;
+        if (!out || !out.matched) {
+          this._hardinessMsg = (out && out.note) || "no zone found for that ZIP";
+        }
+        await this._fetchConfig();
+      } catch (err) {
+        this._hardinessMsg = String(err?.message || err);
+      } finally {
+        this._hardinessBusy = false;
+        this._hardinessZip = null;
+        this._renderNow();
+      }
     }
 
     _renderMapSourceCard(c) {
@@ -7317,13 +7393,27 @@
       }
       // Responsive cards (not a table) so every plant's Edit/Delete stays on
       // screen on a phone — a wide table pushed the actions off-screen.
+      // v1.50 — frost flag: plant's cold tolerance warmer than the zone's coldest.
+      const zoneLow = this._config?.hardiness_temp_low_f;
       const cards = this._plants
         .map((p) => {
           const species = (p.species || "").trim();
+          const frost =
+            zoneLow != null && p.temp_low_f != null && Number(p.temp_low_f) > Number(zoneLow);
           return (
             `<div class="plant-row">` +
             `<div class="plant-row-main">` +
-            `<div class="plant-row-name">${escapeHtml(p.name)}</div>` +
+            `<div class="plant-row-name">${escapeHtml(p.name)}${
+              frost
+                ? ` <span class="frost-badge" title="Hardy only to ${escapeAttr(
+                    String(p.temp_low_f)
+                  )}°F, but zone ${escapeAttr(
+                    String(this._config?.hardiness_zone || "")
+                  )} can reach ${escapeAttr(
+                    String(zoneLow)
+                  )}°F — may need winter frost protection">❄️</span>`
+                : ""
+            }</div>` +
             `<div class="plant-row-meta">` +
             (species
               ? `<span>${escapeHtml(species)}</span>`
@@ -8403,6 +8493,7 @@
         `.plant-research-btn{margin-top:6px}` +
         `.plant-research-hint{font-size:11px;margin-top:4px}` +
         // v1.46 — GBIF name-verify result line.
+        `.frost-badge{font-size:0.85em;cursor:help}` +
         `.species-verify{font-size:12px;margin-top:6px;line-height:1.5}` +
         `.species-verify-ok{color:#2e7d32}` +
         `.species-verify-warn{color:#b26a00}` +
