@@ -4,6 +4,21 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.49.0 — 2026-07-16 — minor
+
+**Keyless auto reference-ET via Open-Meteo.** Auto ET no longer needs a Home
+Assistant weather entity. On the Yard tab, when *Auto reference ET* is on, pick
+the **ET source**: your HA weather entity (the previous behaviour, FAO-56 computed
+locally) or **Open-Meteo** -- a free, **keyless** API that returns FAO ET0
+directly for your Home Assistant location. No weather entity, no API key, no
+setup. It also supplies the near-term daily high used for the hot-weather / rain-
+lockout heat signal.
+
+Same safety as before: the value passes the same sane-range guard, so a bad or
+missing fetch keeps your previous / manual figure -- it never waters on a guess.
+Disclosed in the README privacy table and SECURITY.md as a new opt-in outbound
+connection (sends only your latitude/longitude; nothing else).
+
 ## v1.48.0 — 2026-07-16 — minor
 
 **The yard map now pans and zooms like a real map.** The old edge chevrons

@@ -333,6 +333,10 @@ _SET_WEATHER_CONFIG_SCHEMA = vol.Schema(
         vol.Optional("eto_in_week"): vol.All(vol.Coerce(float), vol.Range(min=0.1, max=10)),
         vol.Optional("eto_auto"): cv.boolean,
         vol.Optional("weather_entity"): cv.entity_id,
+        # v1.49 — where auto-ETo comes from: "ha" = a Home Assistant weather
+        # entity (FAO-56 computed locally); "open_meteo" = the keyless Open-Meteo
+        # API (returns FAO ET0 directly, uses your HA lat/lon, no entity needed).
+        vol.Optional("eto_provider"): vol.In(("ha", "open_meteo")),
         vol.Optional("drip_efficiency"): vol.All(vol.Coerce(float), vol.Range(min=0.5, max=1.0)),
     }
 )
@@ -3311,6 +3315,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             "eto_in_week",
             "eto_auto",
             "weather_entity",
+            "eto_provider",
             "drip_efficiency",
         ):
             if key in data:
@@ -3327,7 +3332,9 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         # daily 03:00 refresh. Await it (don't fire-and-forget) so the service
         # only returns once the new value is stored — the Yard UI's refetch
         # right after this call then sees the fresh figure with no timing race.
-        if coord.config.get("eto_auto") and (not eto_was_auto or "weather_entity" in data):
+        if coord.config.get("eto_auto") and (
+            not eto_was_auto or "weather_entity" in data or "eto_provider" in data
+        ):
             await coord._refresh_auto_eto()
         _LOGGER.info("Weather config updated: %s", data)
 

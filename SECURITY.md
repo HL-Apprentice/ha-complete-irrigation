@@ -87,8 +87,14 @@ Photos you add are otherwise local under `www/complete_irrigation/` (only the
 LLM features above ever transmit them); EXIF GPS is read in your browser only
 to place a marker and is stripped from the stored image.
 
-**Weather is not an outbound connection from this integration.** It reads
-forecast/rain data from Home Assistant *weather entities* you already have
-(Tempest, OpenWeather, the built-in forecast, etc.); those integrations make
-their own network calls under HA's control — this one does not contact any
-weather service directly.
+**Weather from HA entities is not an outbound connection from this integration.**
+By default it reads forecast/rain data from Home Assistant *weather entities* you
+already have (Tempest, OpenWeather, the built-in forecast, etc.); those
+integrations make their own network calls under HA's control.
+
+**Auto-ET via Open-Meteo (opt-in, v1.49).** If you switch the auto reference-ET
+source to **Open-Meteo** (Yard tab), the integration fetches a daily forecast
+over HTTPS from `api.open-meteo.com` (a fixed host — no API key), sending only
+your **Home Assistant latitude/longitude**. It is opt-in (the default source is a
+local HA weather entity), times out after 20 s, and applies the same sane-range
+guard as the entity path (a bad value keeps your previous / manual figure).

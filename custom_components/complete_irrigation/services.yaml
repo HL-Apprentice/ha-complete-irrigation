@@ -509,11 +509,23 @@ set_weather_config:
         boolean:
     weather_entity:
       name: Weather entity (for auto ET)
-      description: The weather.* entity to pull the daily forecast from for auto ET. If omitted, the first available weather entity is used.
+      description: The weather.* entity to pull the daily forecast from for auto ET. If omitted, the first available weather entity is used. Only used when eto_provider is "ha".
       required: false
       selector:
         entity:
           domain: weather
+    eto_provider:
+      name: Auto-ET source
+      description: >
+        Where auto reference ET comes from. "ha" (default) computes FAO-56 from a
+        Home Assistant weather entity. "open_meteo" fetches FAO ET0 directly from
+        the free, keyless Open-Meteo API using your Home Assistant latitude /
+        longitude - no weather entity and no API key required.
+      required: false
+      default: ha
+      selector:
+        select:
+          options: ["ha", "open_meteo"]
     drip_efficiency:
       name: Drip efficiency
       description: Irrigation application efficiency (0.5-1.0) used by the plant water calculator. Drip is typically ~0.9.
