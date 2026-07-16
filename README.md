@@ -204,14 +204,15 @@ water need, canopy, and your loop runtime, using real emitter sizes (0.5 / 1 / 2
 **Set up yard map** fetches an aerial of your property (centered on your HA
 latitude/longitude); drag markers onto each plant.
 
-- **Zoom** — pick how much ground the map covers (20–120 m). Markers are
-  re-projected through real lat/lon, so **plants keep their true ground position**
-  when you zoom. Anything that falls outside a tighter view is un-placed (with a
-  notification) rather than pinned to the edge.
-- **Pan** — chevron buttons on the map edges shift the view 30% of the span per
-  tap (N/S/E/W); a ⌂ button re-centers on your HA home location. Markers are
-  re-projected so plants keep their true ground position, and **Refresh aerial**
-  keeps both your zoom and your panned center.
+- **Pan & zoom like a map** — **drag the aerial** to pan in fine increments and
+  **scroll / pinch / the +− buttons** to zoom right in, so you can place each
+  marker precisely on its plant. This is a smooth client-side view (no re-fetch),
+  and the markers move with it. **⤢** resets to fit.
+- **Detail level** — the *Zoom* dropdown picks how much ground the base image
+  covers (20–120 m; smaller = sharper). Markers are re-projected through real
+  lat/lon so **plants keep their true ground position** when you change it; a
+  plant that falls outside a tighter view is un-placed (with a notification)
+  rather than pinned to the edge.
 - **Sharper imagery** — the default Esri World Imagery is coarse at yard scale (it
   won't render sharper than ~0.3 m/px, so a 60 m yard is fetched at ~200 px and
   upscaled). Many **county assessors / city GIS offices** publish far sharper
