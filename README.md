@@ -120,6 +120,35 @@ are tunable via `set_general_config` (`controller_max_run_minutes`,
 
 > **Upgrading?** The panel JS URL is version-stamped (`?v=<version>`), so browsers will auto-fetch the new file after a HACS upgrade — no hard refresh needed.
 
+## Privacy & external connections
+
+**This integration runs fully local by default.** It has **no analytics, no
+telemetry, and no background "phone-home."** It reaches the internet only for the
+three **opt-in** features below, and only while you actively use them — each one
+exists to gather plant / irrigation data *for you*. You can run the whole thing
+with **no external connections and no API keys** at all.
+
+| Feature | Connects to | What is sent | API key? | When |
+|---|---|---|---|---|
+| **Aerial yard map** | Esri World Imagery (`services.arcgisonline.com`), or a custom GIS URL you set | your map's **bounding-box coordinates** (defaults to your HA location) | **No** | when you press *Set up / Refresh aerial* |
+| **Verify plant name** | GBIF (`api.gbif.org`) | the **plant name text** you typed | **No** | when you press *Verify name* |
+| **Plant identification** | your **local** vision model, *or* an external AI (Anthropic / xAI / Google / custom) you choose | plant **photos** + text prompts | Local: **No**. External: **Yes**, your own key | only if you use photo-ID / research **and** configured a model |
+
+Notes:
+- **Nothing is sent unless you use that feature.** Skip them and the integration
+  never contacts the internet.
+- **Your external-LLM API key** (if you add one) is stored only on your Home
+  Assistant server, sent only as an `Authorization` header to the provider you
+  picked, is **never returned to the browser or written to the logs**, and can be
+  cleared any time.
+- **Weather is *not* a connection this integration makes.** It reads
+  forecast/rain from Home Assistant *weather entities* you already have (Tempest,
+  OpenWeather, the built-in forecast…); those make their own calls under HA's
+  control.
+- Plant photos live locally under `www/complete_irrigation/`; their EXIF GPS is
+  read in your browser only to place a map marker and is stripped from the stored
+  file. Full detail in [SECURITY.md](SECURITY.md).
+
 ## Quick start
 
 Almost everything is configurable from the panel — no Developer Tools required.

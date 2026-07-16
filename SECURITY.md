@@ -52,7 +52,8 @@ treated as configuration, never logged as secrets. Please keep secrets out of an
 logs or screenshots you share.
 
 **Outbound requests are opt-in and feature-scoped.** Nothing is sent off-box
-unless you configure and use one of the two features below.
+unless you configure and use one of the three features below. There are no
+analytics, telemetry, or background "phone-home" connections of any kind.
 
 **Yard map aerial fetch.** The **"Set up yard map"** action (`set_yard_map`,
 admin-only) fetches an aerial backdrop image over HTTPS from Esri World Imagery
@@ -75,6 +76,19 @@ only as an `Authorization` header to the provider you configured, is never
 written to logs, and is redacted from `get_config` output — still, please
 redact keys from any logs you share.
 
+**Species-name verification (GBIF).** The **"Verify name"** button
+(`verify_species_name`, admin-only, v1.46) sends only the **plant name text you
+typed** over HTTPS to GBIF (`api.gbif.org`, a fixed host — no API key) to look up
+the accepted scientific name and catch typos. It is opt-in (nothing is sent
+unless you press the button), times out after 15 s, and is restricted to the
+plant kingdom. No photos, location, or personal data are sent — just the name.
+
 Photos you add are otherwise local under `www/complete_irrigation/` (only the
 LLM features above ever transmit them); EXIF GPS is read in your browser only
 to place a marker and is stripped from the stored image.
+
+**Weather is not an outbound connection from this integration.** It reads
+forecast/rain data from Home Assistant *weather entities* you already have
+(Tempest, OpenWeather, the built-in forecast, etc.); those integrations make
+their own network calls under HA's control — this one does not contact any
+weather service directly.
