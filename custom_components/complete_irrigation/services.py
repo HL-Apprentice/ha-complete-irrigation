@@ -2004,6 +2004,35 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             )
             if k in data
         }
+        # v1.45 — auto-apply curated care when the species is CHANGED to one our
+        # offline table covers, so "correct the name -> care follows" works with
+        # NO LLM. Only fills the derived care fields (water-use/sun/temps/cadence),
+        # and only ones this same call didn't set explicitly (an explicit
+        # wucols_category wins). Never touches name / canopy / zone / emitters /
+        # map / lux — those are the user's.
+        new_species = overrides.get("species")
+        if new_species and new_species.strip() and new_species != (existing.species or ""):
+            from .plant_care_db import lookup_care
+
+            curated = lookup_care(new_species)
+            if curated:
+                derived = {
+                    "wucols_category": curated["wucols"],
+                    "sunlight_class": curated["sun"],
+                    "temp_low_f": curated["temp_low"],
+                    "temp_high_f": curated["temp_high"],
+                    "care_plan_preset": curated["preset"],
+                    "water_every_days": curated["water_days"],
+                    "fertilize_every_days": curated["fert_days"],
+                    "common_name": curated["common"],
+                    "id_note": curated["note"],
+                    "id_model": "curated care (species edit)",
+                }
+                for k, v in derived.items():
+                    overrides.setdefault(k, v)  # explicit same-call value wins
+                _LOGGER.info(
+                    "update_plant: applied curated care for %r (offline table)", new_species
+                )
         # v1.38 — a one-sided emitter pair is a user error, not an unknown_error:
         # check against the MERGED values (either field may already be set).
         if data.get("clear_emitters"):
