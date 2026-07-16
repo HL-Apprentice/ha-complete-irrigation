@@ -129,6 +129,24 @@ def remap_norm(x: float, y: float, old: Bbox, new: Bbox) -> tuple[float, float] 
     return None
 
 
+_SQFT_PER_SQM = 10.7639
+
+
+def canopy_sqft_from_box(dx_norm: float, dy_norm: float, span_m: float) -> float:
+    """Canopy footprint in ft² for a box drawn on the aerial map — a no-LLM way to
+    measure canopy straight off the top-down image.
+
+    ``dx_norm`` / ``dy_norm`` are the box width / height as a FRACTION of the map
+    (0-1); ``span_m`` is the map's ground span (the bbox is square-ground, so both
+    axes scale by span_m from normalized to metres). The canopy is modelled as the
+    ellipse inscribed in the box (canopies are round-ish): area = pi/4 * W * H.
+    """
+    w_m = abs(float(dx_norm)) * float(span_m)
+    h_m = abs(float(dy_norm)) * float(span_m)
+    area_m2 = math.pi / 4.0 * w_m * h_m
+    return round(area_m2 * _SQFT_PER_SQM, 1)
+
+
 def bbox_from_cfg(cfg: Any) -> Bbox | None:
     """Bbox from a stored yard_map config dict, or None if absent/malformed."""
     if not isinstance(cfg, dict):

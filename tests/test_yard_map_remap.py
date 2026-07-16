@@ -13,6 +13,7 @@ from custom_components.complete_irrigation.yard_map import (
     Bbox,
     bbox_from_center,
     bbox_from_cfg,
+    canopy_sqft_from_box,
     latlon_to_norm,
     latlon_to_norm_raw,
     norm_to_latlon,
@@ -94,6 +95,25 @@ def test_bbox_from_cfg_roundtrip():
         }
     }
     assert bbox_from_cfg(cfg) == WIDE
+
+
+def test_canopy_area_from_box_matches_ellipse_formula():
+    # A 0.1 x 0.1 box on a 60 m map = a 6 x 6 m box -> inscribed ellipse
+    # pi/4 * 36 = 28.27 m^2 -> * 10.7639 = ~304.4 ft^2.
+    assert canopy_sqft_from_box(0.1, 0.1, 60.0) == pytest.approx(304.4, abs=0.5)
+
+
+def test_canopy_area_scales_with_span():
+    # Same box fraction, double the span -> 4x the ground area.
+    small = canopy_sqft_from_box(0.2, 0.15, 30.0)
+    big = canopy_sqft_from_box(0.2, 0.15, 60.0)
+    # ~4x, within the 0.1-ft rounding of each result.
+    assert big == pytest.approx(small * 4, abs=0.3)
+
+
+def test_canopy_area_is_orientation_agnostic():
+    assert canopy_sqft_from_box(-0.1, 0.1, 40.0) == canopy_sqft_from_box(0.1, -0.1, 40.0)
+    assert canopy_sqft_from_box(0.0, 0.1, 40.0) == 0.0
 
 
 def test_bbox_from_cfg_rejects_malformed():
