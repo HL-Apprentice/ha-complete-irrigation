@@ -47,3 +47,40 @@ def test_every_curated_record_is_valid():
         assert c["wucols"] in WUCOLS_FACTORS, key
         assert c["preset"] in CARE_PLAN_PRESETS, key
         assert c["temp_low"] < c["temp_high"], key
+
+
+def test_every_key_resolves_to_itself_no_substring_hijack():
+    # v1.45 — with many genus-level keys, a longest-first match must never let a
+    # SHORTER unrelated key win. Looking up each key must return that key's own
+    # record, unless a legitimately MORE-specific key contains it.
+    for key, rec in CURATED_CARE.items():
+        got = lookup_care(key)
+        assert got is not None, key
+        if got["common"] != rec["common"]:
+            # only acceptable when a longer key literally contains this one
+            assert any(key in longer and longer != key for longer in CURATED_CARE), (
+                key,
+                got["common"],
+            )
+
+
+def test_v145_expansion_covers_tonights_fallbacks_and_desert_natives():
+    # The 3 species that were fallback-only when the yard was imported:
+    assert lookup_care("Fig (Ficus carica)")["preset"] == "tree"
+    assert lookup_care("Scarlet Sage (Salvia splendens)")["preset"] == "flower"
+    assert lookup_care("Mexican Heather (Cuphea hyssopifolia)")["wucols"] == "low"
+    # Desert natives must read very_low / low, never "moderate".
+    for name, band in (
+        ("Larrea tridentata", "very_low"),
+        ("Carnegiea gigantea (Saguaro)", "very_low"),
+        ("Palo Verde (Parkinsonia)", "low"),
+        ("Agave americana", "very_low"),
+    ):
+        assert lookup_care(name)["wucols"] == band, name
+
+
+def test_unrelated_plants_do_not_false_match_a_genus_key():
+    # Guard the classic substring traps (e.g. "pinus" hiding in "lupinus" — which
+    # is exactly why no bare "pinus" key exists).
+    for name in ("Lupinus texensis", "Delphinium elatum", "Clematis armandii"):
+        assert lookup_care(name) is None, name

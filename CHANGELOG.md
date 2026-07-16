@@ -4,6 +4,32 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.45.0 — 2026-07-16 — minor
+
+**Correct a species → its care follows, with no LLM.** Editing a plant's species
+to one the built-in care table covers now **auto-applies** that species'
+water-use (WUCOLS), sun, frost/heat range, and watering/fertilizing cadence. It
+only fills the derived care fields — your **name, canopy, zone, emitters, and map
+position are never touched** — and an explicit water-use you set in the same edit
+still wins. Purely the offline table; no model, no network. (Before, you had to
+hit the separate "Research details" button.)
+
+**Much bigger care table — 37 → ~82 species.** Added the three species that were
+only fallback-guesses when your yard was imported (**Fig**, **Scarlet Sage**,
+**Mexican Heather**) plus a broad set of common Southwest / low-desert landscape
+plants: palo verde, mesquite, desert willow, creosote, brittlebush, ocotillo,
+saguaro, prickly pear, agave, aloe, red yucca, desert spoon, desert marigold,
+fairy duster, penstemon, bougainvillea, trailing lantana, lavender, olive,
+pomegranate, grape, crepe myrtle, heavenly bamboo, photinia, juniper, boxwood,
+gardenia, hydrangea, marigold, petunia, geranium, impatiens, begonia, sunflower,
+plumbago, hopseed bush, jojoba, Arizona rosewood, fan palm, date palm.
+
+This is **our own compilation** (water-use categories are facts; the plant list
+and values are ours) — deliberately **not** the WUCOLS® dataset, which is
+copyright the Regents of the University of California and not licensed for
+redistribution in an open-source project. The genus-level keys are guarded
+against substring mis-matches and tested.
+
 ## v1.44.0 — 2026-07-16 — minor
 
 **Pan the yard map.** Chevron buttons on the map edges (▲▼◀▶) shift the view by
