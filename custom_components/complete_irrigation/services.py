@@ -437,6 +437,10 @@ _SET_GENERAL_CONFIG_SCHEMA = vol.Schema(
         vol.Optional("llm_external_url"): vol.All(cv.string, vol.Length(max=300)),
         vol.Optional("llm_external_model"): vol.All(cv.string, vol.Length(max=120)),
         vol.Optional("llm_external_api_key"): vol.All(cv.string, vol.Length(max=400)),
+        # v1.51 — photo-ID engine: "llm" (vision model) or "plantnet" (no-LLM,
+        # Pl@ntNet API, needs a free key).
+        vol.Optional("plantid_engine"): vol.In(("llm", "plantnet")),
+        vol.Optional("plantnet_api_key"): vol.All(cv.string, vol.Length(max=200)),
         # v1.42 — custom aerial source for the yard map. An ArcGIS-style export URL
         # template; tokens {bbox} (or {west}/{south}/{east}/{north}) + {width},
         # {height}. Empty string restores the default Esri World Imagery.
@@ -487,6 +491,8 @@ _GENERAL_CONFIG_FIELDS: dict[str, Any] = {
     "llm_external_url": lambda v: v.strip(),  # override / custom base URL
     "llm_external_model": lambda v: v.strip(),
     "llm_external_api_key": lambda v: v.strip(),  # empty string clears
+    "plantid_engine": lambda v: v,  # v1.51 — llm | plantnet
+    "plantnet_api_key": lambda v: v.strip(),  # v1.51 — empty string clears
     "map_export_url_template": lambda v: _clean_map_template(v),  # v1.42
 }
 
@@ -2413,20 +2419,13 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         add_plant_from_photo. Stores the suggestion on the plant and returns it."""
         if not plant.photos:
             raise vol.Invalid("add a photo of the plant first")
+        import base64
+
         from homeassistant.helpers.aiohttp_client import async_get_clientsession
         from homeassistant.util import dt as dt_util
 
         from .llm_client import call_chat, resolve_targets
         from .species_id import extract_suggestion_json, validate_suggestion
-
-        targets = resolve_targets(coord.config)
-        if not targets:
-            raise vol.Invalid(
-                "set up a plant-ID model first (Settings -> Plant identification): a "
-                "local OpenAI-compatible vision URL and/or an external provider key"
-            )
-
-        import base64
 
         # Newest photo path is server-set "/local/complete_irrigation/plants/<id>/…"
         # (from_dict guarantees the /local/ prefix; the id is slug-safe). Re-guard anyway.
@@ -2456,6 +2455,89 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         mime = _image_mime(img) or "image/jpeg"
         b64 = base64.b64encode(img).decode("ascii")
 
+        # v1.51 — Pl@ntNet engine: a no-LLM, plant-specific identifier. Uploads the
+        # photo (multipart) and returns species candidates; the curated table then
+        # fills water-use/care, the same as the LLM apply path.
+        engine = str(coord.config.get("plantid_engine") or "llm")
+        if engine == "plantnet":
+            import json as _json
+
+            import aiohttp
+
+            from .plant_care_db import lookup_care
+            from .plantnet import parse_plantnet, plantnet_url
+
+            key = str(coord.config.get("plantnet_api_key") or "").strip()
+            if not key:
+                raise vol.Invalid(
+                    "add your Pl@ntNet API key first (Settings -> Plant identification)"
+                )
+            form = aiohttp.FormData()
+            form.add_field("organs", "auto")
+            form.add_field("images", img, filename="plant.jpg", content_type=mime)
+            session = async_get_clientsession(hass)
+            try:
+                async with session.post(
+                    plantnet_url(key), data=form, timeout=aiohttp.ClientTimeout(total=60)
+                ) as resp:
+                    if resp.status in (401, 403):
+                        raise vol.Invalid("Pl@ntNet rejected the API key")
+                    if resp.status == 429:
+                        raise vol.Invalid("Pl@ntNet daily limit reached — try again tomorrow")
+                    if resp.status != 200:
+                        raise vol.Invalid(f"Pl@ntNet returned HTTP {resp.status}")
+                    raw = await resp.content.read(1_000_001)
+            except vol.Invalid:
+                raise
+            except Exception as err:
+                raise vol.Invalid(f"Pl@ntNet unreachable: {err}") from err
+            try:
+                pn = parse_plantnet(_json.loads(raw))
+            except ValueError as err:
+                raise vol.Invalid("Pl@ntNet returned an unexpected response") from err
+            if not pn["matched"]:
+                raise vol.Invalid("Pl@ntNet could not identify the plant — try a clearer photo")
+            raw_sug = {
+                "species": pn["species"],
+                "common_name": pn["common_name"],
+                "confidence": pn["confidence"],
+            }
+            curated = lookup_care(pn["species"])
+            if curated:
+                raw_sug.update(
+                    {
+                        "wucols_category": curated["wucols"],
+                        "sunlight_class": curated["sun"],
+                        "temp_low_f": curated["temp_low"],
+                        "temp_high_f": curated["temp_high"],
+                        "care_plan_preset": curated["preset"],
+                        "water_every_days": curated["water_days"],
+                        "fertilize_every_days": curated["fert_days"],
+                        "note": curated["note"],
+                    }
+                )
+            suggestion = validate_suggestion(
+                raw_sug, model="plantnet", now_iso=dt_util.utcnow().isoformat()
+            )
+            if suggestion is None:
+                raise vol.Invalid("Pl@ntNet's result could not be used — try a clearer photo")
+            coord.plants.upsert(replace(plant, species_suggestion=suggestion))
+            await coord.async_save_plants()
+            _LOGGER.info(
+                "Species suggestion (Pl@ntNet) for %s: %s (%.0f%%)",
+                plant.name,
+                suggestion["species"],
+                suggestion["confidence"] * 100,
+            )
+            return suggestion
+
+        # LLM engine (default).
+        targets = resolve_targets(coord.config)
+        if not targets:
+            raise vol.Invalid(
+                "set up a plant-ID model first (Settings -> Plant identification): a "
+                "local OpenAI-compatible vision URL and/or an external provider key"
+            )
         messages = [
             {
                 "role": "user",
@@ -3516,7 +3598,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         # carry a key in a `?key=…` param, which must not land in the HA log.
         safe = {}
         for k, v in data.items():
-            if k == "llm_external_api_key":
+            if k in ("llm_external_api_key", "plantnet_api_key"):
                 safe[k] = "***"
             elif k == "llm_external_url" and isinstance(v, str) and "?" in v:
                 safe[k] = v.split("?", 1)[0] + "?<redacted>"

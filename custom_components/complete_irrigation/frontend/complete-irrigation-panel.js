@@ -72,7 +72,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.50.0";
+  const PANEL_VERSION = "v1.51.0";
   // v1.41 — external plant-ID providers (mirrors llm_client.PROVIDERS). URL is
   // auto-filled when a provider is picked; model is an editable hint. All speak
   // the same OpenAI /v1/chat/completions shape, so one settings form covers them.
@@ -925,6 +925,7 @@
         if (action === "save-vision-endpoint") return this._saveVisionEndpoint();
         if (action === "test-vision") return this._testVisionEndpoint();
         if (action === "clear-llm-key") return this._clearLlmKey();
+        if (action === "clear-plantnet-key") return this._clearPlantnetKey();
         if (action === "save-map-source") return this._saveMapSource();
         if (action === "lookup-hardiness") return this._lookupHardiness();
         // v1.39 — watering advisor.
@@ -1388,6 +1389,10 @@
       }
       // v1.41 — plant-ID mode / provider selects re-render (reveal external
       // block, auto-fill the provider's endpoint URL + model).
+      if (t.dataset?.action === "plantid-engine-change") {
+        this._onPlantIdEngineChange(t.value);
+        return;
+      }
       if (t.dataset?.action === "llm-mode-change") {
         this._onLlmModeChange(t.value);
         return;
@@ -3970,24 +3975,45 @@
             `<option value="${v}"${v === provider ? " selected" : ""}>${escapeHtml(p.label)}</option>`
         )
         .join("");
+      const engine = d.plantid_engine || "llm"; // v1.51
+      const pnKeySaved = !!c.plantnet_api_key_set;
       return (
         `<section class="settings-card">` +
         `<h3 class="section-title">Plant identification</h3>` +
-        `<p class="section-hint">Identify a plant from a photo and research its care. Use a local vision model, an external AI (Claude / Grok / Gemini), or both.</p>` +
+        `<p class="section-hint">Identify a plant from a photo and research its care.</p>` +
         `<div class="weather-form" style="background:transparent;border:none;padding:0;max-width:none">` +
-        `<label>Mode</label>` +
-        `<select name="llm_mode" data-action="llm-mode-change">${modeOpts}</select>` +
-        `<p class="section-hint" style="margin-top:4px">Fallback tries the local model first and only calls the external AI when the local one fails or can't identify the plant.</p>` +
-        `<label style="margin-top:10px">Local endpoint URL</label>` +
-        `<input name="vision_url" data-action="vision-field" type="text" value="${escapeAttr(
-          d.vision_url || ""
-        )}" placeholder="http://192.168.1.10:11434/v1/chat/completions" />` +
-        `<label style="margin-top:8px">Local model name</label>` +
-        `<input name="vision_model" data-action="vision-field" type="text" value="${escapeAttr(
-          d.vision_model || ""
-        )}" placeholder="e.g. qwen2.5-vl" />` +
-        (showExternal
-          ? `<label style="margin-top:14px">External provider</label>` +
+        // v1.51 — engine: an AI vision model, or Pl@ntNet (plant-specific, no LLM).
+        `<label>Identify engine</label>` +
+        `<select name="plantid_engine" data-action="plantid-engine-change">` +
+        `<option value="llm"${
+          engine === "llm" ? " selected" : ""
+        }>AI vision model (local or cloud)</option>` +
+        `<option value="plantnet"${
+          engine === "plantnet" ? " selected" : ""
+        }>Pl@ntNet — plant-specific, no LLM</option>` +
+        `</select>` +
+        (engine === "plantnet"
+          ? `<label style="margin-top:10px">Pl@ntNet API key</label>` +
+            `<input name="plantnet_api_key" data-action="vision-field" type="password" autocomplete="off" value="" placeholder="${
+              pnKeySaved ? "key saved — leave blank to keep it" : "paste your Pl@ntNet API key"
+            }" />` +
+            `<p class="section-hint" style="margin-top:4px">Free for non-commercial use (up to 500 IDs/day), stored only on your server. ${
+              pnKeySaved
+                ? `A key is saved. <button type="button" class="btn btn-small" data-action="clear-plantnet-key">Clear key</button>`
+                : `Get one free at <a href="https://my.plantnet.org/" target="_blank" rel="noopener noreferrer">my.plantnet.org</a> — see the README for step-by-step.`
+            }</p>`
+          : `<p class="section-hint" style="margin-top:4px">Fallback tries the local model first and only calls the external AI when the local one fails or can't identify the plant.</p>` +
+            `<label style="margin-top:10px">Mode</label>` +
+            `<select name="llm_mode" data-action="llm-mode-change">${modeOpts}</select>` +
+            `<label style="margin-top:10px">Local endpoint URL</label>` +
+            `<input name="vision_url" data-action="vision-field" type="text" value="${escapeAttr(
+              d.vision_url || ""
+            )}" placeholder="http://192.168.1.10:11434/v1/chat/completions" />` +
+            `<label style="margin-top:8px">Local model name</label>` +
+            `<input name="vision_model" data-action="vision-field" type="text" value="${escapeAttr(
+              d.vision_model || ""
+            )}" placeholder="e.g. qwen2.5-vl" />` +
+            `<label style="margin-top:14px">External provider</label>` +
             `<select name="llm_provider" data-action="llm-provider-change">${provOpts}</select>` +
             `<label style="margin-top:8px">External endpoint URL</label>` +
             `<input name="llm_external_url" data-action="vision-field" type="text" value="${escapeAttr(
@@ -4009,15 +4035,16 @@
               keySaved
                 ? `<button type="button" class="btn btn-small" data-action="clear-llm-key">Clear key</button>`
                 : ""
-            }</p>`
-          : "") +
+            }</p>`) +
         `<div class="modal-actions">` +
         `<button type="button" class="btn btn-primary" data-action="save-vision-endpoint">${
           this._visionSaved ? "✓ Saved" : "Save"
         }</button>` +
-        `<button type="button" class="btn" data-action="test-vision"${
-          this._visionTestBusy ? " disabled" : ""
-        }>${this._visionTestBusy ? "Testing…" : "Test connection"}</button>` +
+        (engine === "llm"
+          ? `<button type="button" class="btn" data-action="test-vision"${
+              this._visionTestBusy ? " disabled" : ""
+            }>${this._visionTestBusy ? "Testing…" : "Test connection"}</button>`
+          : "") +
         `</div>` +
         (this._visionTestResult
           ? `<span class="vision-test-result vision-test-${
@@ -4162,7 +4189,28 @@
         llm_external_url: c.llm_external_url || "",
         llm_external_model: c.llm_external_model || "",
         llm_external_api_key: "",
+        plantid_engine: c.plantid_engine || "llm", // v1.51
+        plantnet_api_key: "", // v1.51 — never seeded (redacted)
       };
+    }
+
+    _onPlantIdEngineChange(value) {
+      this._seedVisionDraft();
+      this._visionDraft.plantid_engine = value === "plantnet" ? "plantnet" : "llm";
+      this._renderNow(); // reveal the Pl@ntNet key vs the LLM block
+    }
+
+    async _clearPlantnetKey() {
+      try {
+        await this._hass.callService("complete_irrigation", "set_general_config", {
+          plantnet_api_key: "",
+        });
+        if (this._visionDraft) this._visionDraft.plantnet_api_key = "";
+        await this._fetchConfig();
+        this._renderNow();
+      } catch (err) {
+        alert("Failed to clear the Pl@ntNet key: " + (err?.message || err));
+      }
     }
 
     _onLlmModeChange(value) {
@@ -4229,11 +4277,17 @@
         llm_provider: val("llm_provider") || "custom",
         llm_external_url: val("llm_external_url"),
         llm_external_model: val("llm_external_model"),
+        plantid_engine: val("plantid_engine") || "llm", // v1.51
       };
       const key = draft
         ? String(draft.llm_external_api_key || "").trim()
         : domVal("llm_external_api_key");
       if (key) payload.llm_external_api_key = key; // only overwrite when a new key is typed
+      // v1.51 — Pl@ntNet key: same "blank keeps stored" rule as the LLM key.
+      const pnKey = draft
+        ? String(draft.plantnet_api_key || "").trim()
+        : domVal("plantnet_api_key");
+      if (pnKey) payload.plantnet_api_key = pnKey;
       await this._hass.callService("complete_irrigation", "set_general_config", payload);
       this._visionDraft = null; // re-hydrate from the saved config
       await this._fetchConfig();

@@ -76,6 +76,14 @@ only as an `Authorization` header to the provider you configured, is never
 written to logs, and is redacted from `get_config` output — still, please
 redact keys from any logs you share.
 
+**Pl@ntNet photo identification (opt-in, v1.51).** If you set the plant-ID engine
+to **Pl@ntNet**, identifying a photo uploads that **image** over HTTPS to
+`my-api.plantnet.org` with your Pl@ntNet API key as a query parameter. It's an
+alternative to the vision-model path (no LLM), opt-in, and only runs when you
+identify a plant. The Pl@ntNet key is stored on your Home Assistant server, never
+returned to the browser (`get_config` exposes only whether one is set), and never
+written to the logs; it can be cleared any time.
+
 **Hardiness-zone lookup (phzmapi).** The **"Look up zone"** action
 (`lookup_hardiness_zone`, admin-only, v1.50) sends only the **ZIP code you typed**
 over HTTPS to phzmapi (`phzmapi.org`, a fixed host — no API key) to fetch your
