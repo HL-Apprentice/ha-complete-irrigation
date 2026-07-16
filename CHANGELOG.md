@@ -4,6 +4,21 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.42.1 — 2026-07-15 — patch
+
+**Accept an aerial template copied from a browser.** `{` and `}` aren't legal URL
+characters (RFC 3986), so anything that treats the template as a real URL — a
+browser address bar, a linkified URL in a chat or doc, most "copy link" buttons —
+hands back `%7Bbbox%7D` instead of `{bbox}`. v1.42.0 rejected that outright with
+"must be an http(s) URL containing {bbox}…", which was maddening because the
+template *looked* perfectly correct. Since that's the overwhelmingly common way
+you get the string, it's now accepted: the token braces are percent-decoded
+before validating and substituting, and config stores the clean form.
+
+The decoding is deliberately narrow — **only** `%7B`/`%7D` (either case), never a
+blanket unquote, so a legitimately-encoded query value (e.g. a `%26` meant to
+stay data rather than become a parameter separator) is preserved untouched.
+
 ## v1.42.0 — 2026-07-15 — minor
 
 **Use a sharper aerial for the yard map.** The default Esri World Imagery is

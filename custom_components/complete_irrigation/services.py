@@ -488,9 +488,12 @@ def _clean_map_template(value: str) -> str:
     """Validate a custom aerial export template before it reaches config. An empty
     string clears it (back to Esri); anything non-empty must be a usable template,
     otherwise set_yard_map would silently fetch the wrong ground area."""
-    from .yard_map import valid_export_template
+    from .yard_map import normalize_export_template, valid_export_template
 
-    t = (value or "").strip()
+    # Normalize FIRST: a template copied from a browser address bar / linkified URL
+    # comes back with the braces percent-encoded (%7Bbbox%7D). Store the clean form
+    # so the rest of the system only ever sees real tokens.
+    t = normalize_export_template(value or "")
     if not t:
         return ""
     if not valid_export_template(t):
