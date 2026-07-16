@@ -2,3 +2,8 @@
 pytest>=8.0
 pytest-asyncio>=0.23
 ruff>=0.5
+# llm_client.call_chat builds an aiohttp.ClientTimeout, so the (fake-session)
+# tests for provider fallback + auth headers need aiohttp importable. It ships
+# with HA core at runtime; listing it here is what lets those tests RUN in CI
+# instead of erroring on import. NOT a new runtime dependency.
+aiohttp>=3.9

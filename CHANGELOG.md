@@ -4,6 +4,29 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.43.1 — 2026-07-16 — patch
+
+**Fix red CI.** The test suite had been failing on GitHub since v1.41.0 while
+`scripts/check.sh` reported green locally — because a developer machine has
+`homeassistant` / `voluptuous` / `aiohttp` installed and **CI deliberately does
+not** (the tests are pure-logic; HA-dependent ones `importorskip`). Two tests
+imported modules that only resolved locally, and an import error at collection
+is a hard failure, not a skip:
+
+- `test_image_mime` imported `services` → `voluptuous`. Magic-byte image
+  detection is *pure logic*, so it moved to a new HA-free **`image_type`**
+  module (`services` re-exports it). The test now runs in CI instead of erroring.
+- `test_llm_client` needed `aiohttp`, which `call_chat` imports for its
+  `ClientTimeout`. Added to `requirements-dev.txt` — it ships with HA core at
+  runtime, so this is a test dependency only, and those provider-fallback tests
+  now actually run in CI rather than being skipped.
+
+**And a guard so this can't recur:** `check.sh` gained a **CI-parity** step that
+re-runs the whole suite in a throwaway venv built from `requirements-dev.txt`
+alone. It catches any import that only resolves because the dev machine happens
+to have the package. Result: **637 passed, 10 skipped, 0 failed** with no HA
+installed.
+
 ## v1.43.0 — 2026-07-15 — minor
 
 **Zoom the yard map.** The map defaulted to 60 m across, which on a typical

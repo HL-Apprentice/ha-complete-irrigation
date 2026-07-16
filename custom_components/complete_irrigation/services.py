@@ -45,6 +45,7 @@ from .chunked_run import (
 )
 from .const import DEFAULT_MANUAL_RUN_MINUTES, DOMAIN, MAX_SCHEDULE_DURATION_MIN
 from .hydraulics import WUCOLS_FACTORS
+from .image_type import image_mime, looks_like_image
 from .light_survey import (
     DEFAULT_SURVEY_MINUTES,
     MAX_SURVEY_MINUTES,
@@ -833,35 +834,11 @@ async def _require_admin(hass: HomeAssistant, call) -> bool:
     return False
 
 
-# Magic-byte signatures for the image formats a browser will render from /local.
-# We validate decoded upload bytes against these before writing so a crafted
-# SVG/HTML payload can't be stored as a .jpg and served back (content-sniffing /
-# stored-XSS vector). Order: JPEG, PNG, GIF87a/89a, WEBP (RIFF....WEBP), BMP.
-def _image_mime(data: bytes) -> str | None:
-    """The image type from magic bytes, or None if it isn't a known image.
-
-    v1.41.4 — used both to VALIDATE uploads and to label the data: URI we send to
-    a vision model. Previously the identify path hard-coded image/jpeg, so a
-    stored PNG/WEBP was announced to the API as JPEG (some providers reject the
-    mismatch outright) — the bytes and the declared type must agree.
-    """
-    if len(data) < 12:
-        return None
-    if data[:3] == b"\xff\xd8\xff":
-        return "image/jpeg"
-    if data[:8] == b"\x89PNG\r\n\x1a\n":
-        return "image/png"
-    if data[:6] in (b"GIF87a", b"GIF89a"):
-        return "image/gif"
-    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
-        return "image/webp"
-    if data[:2] == b"BM":
-        return "image/bmp"
-    return None
-
-
-def _looks_like_image(data: bytes) -> bool:
-    return _image_mime(data) is not None
+# Magic-byte image detection lives in the HA-free image_type module so it stays
+# importable (and CI-testable) without Home Assistant/voluptuous. Re-exported
+# under the historical private names used by the call sites + existing tests.
+_image_mime = image_mime
+_looks_like_image = looks_like_image
 
 
 def _cancel_verify_timer(entry_data: dict[str, Any], entity_id: str) -> None:

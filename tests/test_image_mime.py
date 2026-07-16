@@ -1,10 +1,20 @@
-"""Image magic-byte detection (upload validation + vision data: URI labelling)."""
+"""Image magic-byte detection (upload validation + vision data: URI labelling).
+
+Imports the PURE image_type module, not services: services pulls in voluptuous /
+Home Assistant, which CI deliberately does not install — importing it here made
+the whole module fail collection rather than skip.
+"""
 
 from __future__ import annotations
 
 import base64
 
-from custom_components.complete_irrigation.services import _image_mime, _looks_like_image
+from custom_components.complete_irrigation.image_type import (
+    image_mime as _image_mime,
+)
+from custom_components.complete_irrigation.image_type import (
+    looks_like_image as _looks_like_image,
+)
 
 JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 16
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
