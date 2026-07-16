@@ -4,6 +4,26 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.52.0 — 2026-07-16 — minor
+
+**Optional cloud care lookup — Perenual.** "Research details" (research a plant
+by name) gained an optional middle step: when the built-in curated care table
+doesn't cover a species, and you've added a **free Perenual API key**, it asks
+Perenual (perenual.com) for that plant's water-use and sun before falling back to
+the AI. Perenual's watering/sunlight classes are mapped onto the same bounded
+enums the validation rail enforces, so nothing it returns can push an
+out-of-range value into a plant record. Only the species NAME is sent -- never a
+photo or your location, and Perenual only wins when it actually carried care data
+(a bare name match still falls through to the LLM).
+
+Entirely optional: the curated table always wins first, and with no key Perenual
+is never contacted. Getting the key is documented step-by-step in the README
+(sign up at perenual.com/docs/api, copy the key, paste it in). Free tier is 100
+lookups/day. The key is stored only on your server -- never returned to the
+browser (get_config exposes only whether one is set) or written to the logs, and
+Clear key removes it. Disclosed as a new opt-in outbound connection in the README
+privacy table and SECURITY.md.
+
 ## v1.51.0 — 2026-07-16 — minor
 
 **Identify plants without an LLM — Pl@ntNet.** Plant identification now has an

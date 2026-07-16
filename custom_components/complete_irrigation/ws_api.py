@@ -86,6 +86,9 @@ async def get_config(hass, connection, msg):
     # v1.51 — same for the Pl@ntNet key.
     payload["plantnet_api_key_set"] = bool(payload.get("plantnet_api_key"))
     payload.pop("plantnet_api_key", None)
+    # v1.52 — same for the Perenual key.
+    payload["perenual_api_key_set"] = bool(payload.get("perenual_api_key"))
+    payload.pop("perenual_api_key", None)
     connection.send_result(msg["id"], payload)
 
 

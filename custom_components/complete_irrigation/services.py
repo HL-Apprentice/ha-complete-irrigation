@@ -441,6 +441,9 @@ _SET_GENERAL_CONFIG_SCHEMA = vol.Schema(
         # Pl@ntNet API, needs a free key).
         vol.Optional("plantid_engine"): vol.In(("llm", "plantnet")),
         vol.Optional("plantnet_api_key"): vol.All(cv.string, vol.Length(max=200)),
+        # v1.52 — Perenual cloud care lookup (optional): consulted by "Research
+        # details" when the curated table misses, before the LLM. Needs a free key.
+        vol.Optional("perenual_api_key"): vol.All(cv.string, vol.Length(max=200)),
         # v1.42 — custom aerial source for the yard map. An ArcGIS-style export URL
         # template; tokens {bbox} (or {west}/{south}/{east}/{north}) + {width},
         # {height}. Empty string restores the default Esri World Imagery.
@@ -493,6 +496,7 @@ _GENERAL_CONFIG_FIELDS: dict[str, Any] = {
     "llm_external_api_key": lambda v: v.strip(),  # empty string clears
     "plantid_engine": lambda v: v,  # v1.51 — llm | plantnet
     "plantnet_api_key": lambda v: v.strip(),  # v1.51 — empty string clears
+    "perenual_api_key": lambda v: v.strip(),  # v1.52 — empty string clears
     "map_export_url_template": lambda v: _clean_map_template(v),  # v1.42
 }
 
@@ -2630,6 +2634,49 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             )
             if sug:
                 return sug
+
+        # v1.52 — cloud care lookup (Perenual) before the LLM, when a key is set.
+        # Opt-in; the curated table above always wins first.
+        perenual_key = str(coord.config.get("perenual_api_key") or "").strip()
+        if perenual_key:
+            import aiohttp
+            from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
+            from .perenual import parse_perenual_search, perenual_search_url
+
+            pdata: dict = {"matched": False}
+            try:
+                session = async_get_clientsession(hass)
+                async with session.get(
+                    perenual_search_url(perenual_key, species_name),
+                    timeout=aiohttp.ClientTimeout(total=20),
+                ) as resp:
+                    if resp.status == 200:
+                        pdata = parse_perenual_search(await resp.json(content_type=None))
+            except (aiohttp.ClientError, TimeoutError, ValueError):
+                pdata = {"matched": False}
+            # Only let Perenual win when it actually contributed CARE data — a
+            # bare name match (no water-use, no sun) shouldn't short-circuit the
+            # richer LLM path, since the user already typed the species.
+            if pdata.get("matched") and (
+                pdata.get("wucols_category") or pdata.get("sunlight_class")
+            ):
+                sug = validate_suggestion(
+                    {
+                        "species": pdata["species"],
+                        "common_name": pdata.get("common_name") or "",
+                        "confidence": pdata.get("confidence", 0.6),
+                        "sunlight_class": pdata.get("sunlight_class"),
+                        "wucols_category": pdata.get("wucols_category"),
+                        "water_every_days": pdata.get("water_every_days"),
+                        "note": pdata.get("note"),
+                    },
+                    model="perenual",
+                    now_iso=dt_util.utcnow().isoformat(),
+                )
+                if sug:
+                    return sug
+
         from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
         from .llm_client import call_chat, resolve_targets
@@ -3598,7 +3645,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         # carry a key in a `?key=…` param, which must not land in the HA log.
         safe = {}
         for k, v in data.items():
-            if k in ("llm_external_api_key", "plantnet_api_key"):
+            if k in ("llm_external_api_key", "plantnet_api_key", "perenual_api_key"):
                 safe[k] = "***"
             elif k == "llm_external_url" and isinstance(v, str) and "?" in v:
                 safe[k] = v.split("?", 1)[0] + "?<redacted>"

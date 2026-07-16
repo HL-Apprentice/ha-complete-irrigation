@@ -72,7 +72,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.51.0";
+  const PANEL_VERSION = "v1.52.0";
   // v1.41 — external plant-ID providers (mirrors llm_client.PROVIDERS). URL is
   // auto-filled when a provider is picked; model is an editable hint. All speak
   // the same OpenAI /v1/chat/completions shape, so one settings form covers them.
@@ -926,6 +926,7 @@
         if (action === "test-vision") return this._testVisionEndpoint();
         if (action === "clear-llm-key") return this._clearLlmKey();
         if (action === "clear-plantnet-key") return this._clearPlantnetKey();
+        if (action === "clear-perenual-key") return this._clearPerenualKey();
         if (action === "save-map-source") return this._saveMapSource();
         if (action === "lookup-hardiness") return this._lookupHardiness();
         // v1.39 — watering advisor.
@@ -3977,6 +3978,7 @@
         .join("");
       const engine = d.plantid_engine || "llm"; // v1.51
       const pnKeySaved = !!c.plantnet_api_key_set;
+      const peKeySaved = !!c.perenual_api_key_set; // v1.52
       return (
         `<section class="settings-card">` +
         `<h3 class="section-title">Plant identification</h3>` +
@@ -4036,6 +4038,17 @@
                 ? `<button type="button" class="btn btn-small" data-action="clear-llm-key">Clear key</button>`
                 : ""
             }</p>`) +
+        // v1.52 — optional Perenual cloud care lookup. Consulted by "Research
+        // details" when the built-in table doesn't cover a species, before the AI.
+        `<label style="margin-top:14px">Perenual care lookup (optional)</label>` +
+        `<input name="perenual_api_key" data-action="vision-field" type="password" autocomplete="off" value="" placeholder="${
+          peKeySaved ? "key saved — leave blank to keep it" : "paste your Perenual API key"
+        }" />` +
+        `<p class="section-hint" style="margin-top:4px">When set, &ldquo;Research details&rdquo; checks Perenual for a species the built-in care table doesn&rsquo;t cover, before asking the AI. Free (100 lookups/day), stored only on your server. ${
+          peKeySaved
+            ? `A key is saved. <button type="button" class="btn btn-small" data-action="clear-perenual-key">Clear key</button>`
+            : `Get one free at <a href="https://perenual.com/docs/api" target="_blank" rel="noopener noreferrer">perenual.com</a> &mdash; see the README for step-by-step.`
+        }</p>` +
         `<div class="modal-actions">` +
         `<button type="button" class="btn btn-primary" data-action="save-vision-endpoint">${
           this._visionSaved ? "✓ Saved" : "Save"
@@ -4191,6 +4204,7 @@
         llm_external_api_key: "",
         plantid_engine: c.plantid_engine || "llm", // v1.51
         plantnet_api_key: "", // v1.51 — never seeded (redacted)
+        perenual_api_key: "", // v1.52 — never seeded (redacted)
       };
     }
 
@@ -4210,6 +4224,19 @@
         this._renderNow();
       } catch (err) {
         alert("Failed to clear the Pl@ntNet key: " + (err?.message || err));
+      }
+    }
+
+    async _clearPerenualKey() {
+      try {
+        await this._hass.callService("complete_irrigation", "set_general_config", {
+          perenual_api_key: "",
+        });
+        if (this._visionDraft) this._visionDraft.perenual_api_key = "";
+        await this._fetchConfig();
+        this._renderNow();
+      } catch (err) {
+        alert("Failed to clear the Perenual key: " + (err?.message || err));
       }
     }
 
@@ -4288,6 +4315,11 @@
         ? String(draft.plantnet_api_key || "").trim()
         : domVal("plantnet_api_key");
       if (pnKey) payload.plantnet_api_key = pnKey;
+      // v1.52 — Perenual key: same "blank keeps stored" rule.
+      const peKey = draft
+        ? String(draft.perenual_api_key || "").trim()
+        : domVal("perenual_api_key");
+      if (peKey) payload.perenual_api_key = peKey;
       await this._hass.callService("complete_irrigation", "set_general_config", payload);
       this._visionDraft = null; // re-hydrate from the saved config
       await this._fetchConfig();
