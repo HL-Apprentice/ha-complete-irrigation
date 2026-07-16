@@ -135,6 +135,7 @@ with **no external connections and no API keys** at all.
 | **Auto ET — Open-Meteo** | Open-Meteo (`api.open-meteo.com`) | your **HA latitude/longitude** | **No** | only if you pick Open-Meteo as the ET source |
 | **Hardiness zone** | phzmapi (`phzmapi.org`) | your **ZIP code** | **No** | only when you press *Look up zone* |
 | **Plant identification** | your **local** vision model, *or* an external AI (Anthropic / xAI / Google / custom) you choose | plant **photos** + text prompts | Local: **No**. External: **Yes**, your own key | only if you use photo-ID / research **and** configured a model |
+| **Plant ID — Pl@ntNet** | Pl@ntNet (`my-api.plantnet.org`) | a plant **photo** | **Yes**, your own free key | only if you pick Pl@ntNet as the ID engine |
 
 Notes:
 - **Nothing is sent unless you use that feature.** Skip them and the integration
@@ -250,8 +251,26 @@ A small vision model is decent at *naming* a plant but reliably bad at
 one value that drives the irrigation math). So the model only has to get the **name**
 right; the table supplies the care. Uncovered species fall back to the model.
 
-### Choose your plant-ID model — Settings → Plant identification
-Pick a **mode**:
+### Choose your identify engine — Settings → Plant identification
+First pick an **engine**:
+
+- **AI vision model** — a local model and/or a cloud AI (below). Also powers the
+  by-name *Research details* button.
+- **Pl@ntNet — no LLM** — a purpose-built plant-ID service. Great, keyless of any
+  *language model*, but needs a **free Pl@ntNet API key** (see below).
+
+#### Getting a free Pl@ntNet API key
+1. Go to **[my.plantnet.org](https://my.plantnet.org/)** and **sign up** (free).
+2. Confirm your email and log in.
+3. Open your account → **API key** — a key is generated for you.
+4. Copy it, and in HA paste it into **Settings → Plant identification → Pl@ntNet
+   API key**, then **Save**.
+
+Free non-commercial tier is **500 identifications/day** — far more than a home
+yard needs. The key is stored only on your server (never shown to the browser or
+logged); **Clear key** removes it.
+
+#### AI vision model — pick a **mode**:
 
 | Mode | Behavior |
 |---|---|

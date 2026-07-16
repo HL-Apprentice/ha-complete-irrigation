@@ -83,6 +83,9 @@ async def get_config(hass, connection, msg):
     # its placeholder without the secret ever leaving the box.
     payload["llm_external_api_key_set"] = bool(payload.get("llm_external_api_key"))
     payload.pop("llm_external_api_key", None)
+    # v1.51 — same for the Pl@ntNet key.
+    payload["plantnet_api_key_set"] = bool(payload.get("plantnet_api_key"))
+    payload.pop("plantnet_api_key", None)
     connection.send_result(msg["id"], payload)
 
 

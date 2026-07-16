@@ -4,6 +4,22 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.51.0 — 2026-07-16 — minor
+
+**Identify plants without an LLM — Pl@ntNet.** Plant identification now has an
+**engine** choice in Settings: the AI vision model (as before), or **Pl@ntNet** --
+a purpose-built plant-ID service that needs no language model at all, just a
+**free Pl@ntNet API key**. Pick Pl@ntNet, paste your key, and photo identification
+uploads the picture to Pl@ntNet and returns the species; the curated care table
+then fills water-use/care exactly as the LLM path does. Free non-commercial tier
+is 500 IDs/day.
+
+Getting the key is documented step-by-step in the README (sign up at
+my.plantnet.org, copy your API key, paste it in). The key is stored only on your
+server -- never returned to the browser (get_config exposes only whether one is
+set) or written to the logs, and Clear key removes it. Disclosed as a new opt-in
+outbound connection in the README privacy table and SECURITY.md.
+
 ## v1.50.0 — 2026-07-16 — minor
 
 **Know your frost risk — USDA hardiness zone.** In **Settings -> Hardiness zone**,
