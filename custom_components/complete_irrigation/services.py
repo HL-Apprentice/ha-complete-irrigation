@@ -2945,8 +2945,10 @@ async def _async_register_services(hass: HomeAssistant) -> None:
 
         from .yard_map import (
             bbox_from_center,
+            bbox_from_cfg,
             export_url,
             image_size_for_bbox,
+            remap_norm,
             safe_export_size,
         )
 
@@ -3035,6 +3037,36 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             _LOGGER.warning("set_yard_map: could not write image: %s", err)
             return
 
+        # v1.43 — MIGRATE plant markers to the new frame before adopting it.
+        # Markers are stored normalized to whatever bbox was current when placed,
+        # so re-fetching at a different zoom/centre would slide every plant across
+        # the yard. Round-trip each through lat/lon: same ground position, new
+        # frame. A plant now outside the view (zoomed past it) is UN-placed rather
+        # than clamped to the border — an edge-pinned marker is a confident lie.
+        old_bbox = bbox_from_cfg(coord.config.get("yard_map"))
+        moved = dropped = 0
+        if old_bbox is not None and (
+            old_bbox.as_tuple() != bbox.as_tuple()
+        ):  # only when the frame actually changed
+            for plant in list(coord.plants.all()):
+                if plant.map_x is None or plant.map_y is None:
+                    continue
+                new_xy = remap_norm(float(plant.map_x), float(plant.map_y), old_bbox, bbox)
+                if new_xy is None:
+                    coord.plants.upsert(replace(plant, map_x=None, map_y=None))
+                    dropped += 1
+                else:
+                    coord.plants.upsert(replace(plant, map_x=new_xy[0], map_y=new_xy[1]))
+                    moved += 1
+            if moved or dropped:
+                await coord.async_save_plants()
+                _LOGGER.info(
+                    "set_yard_map: re-projected %d marker(s) to the new view; "
+                    "%d now outside it were un-placed",
+                    moved,
+                    dropped,
+                )
+
         version = dt_util.utcnow().strftime("%Y%m%d%H%M%S")
         coord.config["yard_map"] = {
             "center_lat": float(lat),
@@ -3055,6 +3087,15 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         _LOGGER.info(
             "Yard map updated (%dx%d) centered %.5f,%.5f span %.0fm", width, height, lat, lon, span
         )
+        # Tell the user when zooming pushed plants out of view — otherwise they'd
+        # just silently vanish from the map with no explanation.
+        if dropped and coord.notifier is not None:
+            await coord.notifier.notify(
+                f"Yard map is now {span:.0f} m across. {dropped} plant marker(s) fell outside "
+                "the new view and were un-placed — zoom back out, or drag them on again.",
+                title="Yard map zoomed",
+                event_type="yard_map_zoom",
+            )
 
     hass.services.async_register(DOMAIN, SERVICE_RUN_ZONE, handle_run_zone, schema=_RUN_ZONE_SCHEMA)
     hass.services.async_register(

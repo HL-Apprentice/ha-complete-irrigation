@@ -72,7 +72,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.42.1";
+  const PANEL_VERSION = "v1.43.0";
   // v1.41 — external plant-ID providers (mirrors llm_client.PROVIDERS). URL is
   // auto-filled when a provider is picked; model is an editable hint. All speak
   // the same OpenAI /v1/chat/completions shape, so one settings form covers them.
@@ -1333,6 +1333,13 @@
       // v1.37 — vision-endpoint inputs: same keep-typing-alive treatment.
       if (t.dataset?.action === "vision-field") {
         this._syncVisionField(t);
+        return;
+      }
+      // v1.43 — yard-map zoom: re-fetch the aerial at the chosen span. The
+      // backend re-projects plant markers so they keep their ground position.
+      if (t.dataset?.action === "map-span-change") {
+        const span = parseFloat(t.value);
+        if (Number.isFinite(span)) this._setupYardMap(span);
         return;
       }
       // v1.41 — plant-ID mode / provider selects re-render (reveal external
@@ -3001,13 +3008,19 @@
       }
     }
 
-    async _setupYardMap() {
+    async _setupYardMap(spanM) {
       // v1.30 — fetch + cache the aerial backdrop (centered on the HA location).
+      // v1.43 — spanM zooms. When it's omitted (plain "Refresh aerial") KEEP the
+      // current span: sending {} would fall back to the service default and
+      // silently undo the user's zoom.
       if (this._mapBusy) return;
+      const cur = Number(this._yardMap?.span_m);
+      const span = Number.isFinite(spanM) ? spanM : Number.isFinite(cur) ? cur : null;
       this._mapBusy = true;
       this._renderNow();
       try {
-        await this._hass.callService("complete_irrigation", "set_yard_map", {});
+        const data = span ? { span_m: span } : {};
+        await this._hass.callService("complete_irrigation", "set_yard_map", data);
       } catch (err) {
         alert("Failed to fetch the aerial image: " + (err?.message || err));
       } finally {
@@ -6257,6 +6270,27 @@
         : `<button class="btn" data-action="setup-yard-map">${
             m && m.image_path ? "Refresh aerial" : "Set up yard map"
           }</button>`;
+      // v1.43 — zoom. Changing the span re-fetches at a tighter/wider view; the
+      // backend re-projects markers through lat/lon so plants keep their real
+      // ground position (any that fall outside the new view are un-placed).
+      const zoomSel = (() => {
+        if (!m || !m.image_path || this._mapBusy) return "";
+        const cur = Math.round(Number(m.span_m) || 60);
+        const spans = [20, 30, 40, 60, 80, 120];
+        if (!spans.includes(cur)) spans.push(cur);
+        spans.sort((a, b) => a - b);
+        return (
+          `<label class="map-zoom"><span>Zoom</span>` +
+          `<select data-action="map-span-change" title="How much ground the map covers — smaller is more zoomed in">` +
+          spans
+            .map(
+              (s) =>
+                `<option value="${s}"${s === cur ? " selected" : ""}>${s} m across</option>`
+            )
+            .join("") +
+          `</select></label>`
+        );
+      })();
       if (!m || !m.image_path) {
         return (
           `<div class="card yard-map-card">` +
@@ -6292,7 +6326,8 @@
         .join("");
       return (
         `<div class="card yard-map-card">` +
-        `<div class="yard-map-head"><strong>🗺️ Yard map</strong>${setupBtn}</div>` +
+        `<div class="yard-map-head"><strong>🗺️ Yard map</strong>` +
+        `<span class="yard-map-actions">${zoomSel}${setupBtn}</span></div>` +
         `<div class="yard-map-wrap" style="aspect-ratio:${m.width} / ${m.height}">` +
         `<img class="yard-map-img" src="${escapeAttr(m.image_path)}" alt="Aerial view of the yard" draggable="false" />` +
         markers +
@@ -7978,6 +8013,10 @@
         // v1.30 — yard map
         `.yard-map-card{padding:14px 16px}` +
         `.yard-map-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}` +
+        // v1.43 — zoom control sits beside Refresh in the map head.
+        `.yard-map-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}` +
+        `.map-zoom{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--ci-text-2)}` +
+        `.map-zoom select{font-size:13px;padding:4px 6px}` +
         `.yard-map-wrap{position:relative;width:100%;border-radius:8px;overflow:hidden;background:#1b1b1b;touch-action:none;user-select:none}` +
         `.yard-map-img{display:block;width:100%;height:100%;object-fit:cover;pointer-events:none}` +
         `.yard-map-marker{position:absolute;transform:translate(-50%,-50%);background:none;border:none;padding:0;cursor:grab;display:flex;flex-direction:column;align-items:center;gap:2px;z-index:2}` +
