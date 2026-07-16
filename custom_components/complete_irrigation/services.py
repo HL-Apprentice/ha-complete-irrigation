@@ -123,6 +123,7 @@ SERVICE_ADD_PLANT_FROM_PHOTO = "add_plant_from_photo"  # v1.38 — photo-first c
 SERVICE_PROPOSE_WATERING_ADVICE = "propose_watering_advice"  # v1.39 — LLM advisor
 SERVICE_DISMISS_WATERING_ADVICE = "dismiss_watering_advice"
 SERVICE_TEST_VISION_ENDPOINT = "test_vision_endpoint"  # v1.39.1 — connectivity probe
+SERVICE_VERIFY_SPECIES_NAME = "verify_species_name"  # v1.46 — GBIF name check (no key)
 SERVICE_APPLY_SPECIES_SUGGESTION = "apply_species_suggestion"
 SERVICE_DISMISS_SPECIES_SUGGESTION = "dismiss_species_suggestion"
 
@@ -703,6 +704,9 @@ _PROPOSE_ADVICE_SCHEMA = vol.Schema(
 )
 _DISMISS_ADVICE_SCHEMA = vol.Schema({})
 _TEST_VISION_SCHEMA = vol.Schema({})
+_VERIFY_SPECIES_SCHEMA = vol.Schema(
+    {vol.Required("name"): vol.All(cv.string, vol.Length(min=1, max=120))}
+)
 
 _SPECIES_PROMPT = (
     "You are a botanist. Identify the plant in the photo. Reply with ONLY a single "
@@ -2683,6 +2687,39 @@ async def _async_register_services(hass: HomeAssistant) -> None:
                 parts.append(f"{t.label}: FAILED ({r.error})")
         return {"ok": all_ok, "detail": "; ".join(parts)}
 
+    async def handle_verify_species_name(call: ServiceCall) -> ServiceResponse:
+        """v1.46 — verify a typed species name against GBIF's open taxonomy (no API
+        key, no LLM). Returns the accepted scientific name + typo corrections /
+        suggestions, so a manual plant add can confirm the name is right."""
+        if not await _require_admin(hass, call):  # outbound fetch — admin only
+            return {"matched": False, "note": "admin required"}
+        data = _VERIFY_SPECIES_SCHEMA(dict(call.data))
+
+        import json as _json
+
+        import aiohttp
+        from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
+        from .species_name import gbif_match_url, parse_gbif_match
+
+        session = async_get_clientsession(hass)
+        try:
+            async with session.get(
+                gbif_match_url(data["name"]),
+                headers={"Accept": "application/json"},
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as resp:
+                if resp.status != 200:
+                    return {"matched": False, "note": f"GBIF returned HTTP {resp.status}"}
+                raw = await resp.content.read(200_000)
+        except Exception as err:  # network error -> graceful, name check is optional
+            return {"matched": False, "note": f"could not reach GBIF: {str(err)[:80]}"}
+        try:
+            payload = _json.loads(raw)
+        except ValueError:
+            return {"matched": False, "note": "GBIF reply was not valid JSON"}
+        return parse_gbif_match(payload)
+
     async def handle_propose_watering_advice(call: ServiceCall) -> None:
         """v1.39 — store the external LLM advisor's proposals (rail-bounded).
         ADVISORY ONLY: each item is applied later by the USER via the existing
@@ -3230,6 +3267,13 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         SERVICE_TEST_VISION_ENDPOINT,
         handle_test_vision_endpoint,
         schema=_TEST_VISION_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_VERIFY_SPECIES_NAME,
+        handle_verify_species_name,
+        schema=_VERIFY_SPECIES_SCHEMA,
         supports_response=SupportsResponse.ONLY,
     )
     hass.services.async_register(

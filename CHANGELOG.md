@@ -4,6 +4,19 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.46.0 — 2026-07-16 — minor
+
+**Verify a plant name — free, no API key, no LLM.** The plant editor has a new
+**✓ Verify name** button next to the species field. It checks what you typed
+against **GBIF** (the open Global Biodiversity Information Facility taxonomy) and
+tells you the accepted scientific name — catching typos ("Leucophylum" →
+*Leucophyllum frutescens*), resolving common names, and offering a one-tap **Use
+"…"** to accept the corrected name. Restricted to the plant kingdom so an animal
+homonym can't hijack a match. Purely a name check — water-use still comes from
+the curated care table, and if GBIF is unreachable it just says so and you carry
+on. Another piece of the no-LLM path: type a name → verify it → (offline)
+curated care fills the rest.
+
 ## v1.45.0 — 2026-07-16 — minor
 
 **Correct a species → its care follows, with no LLM.** Editing a plant's species
