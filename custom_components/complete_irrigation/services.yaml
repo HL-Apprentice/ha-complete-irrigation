@@ -994,6 +994,22 @@ dismiss_watering_advice:
   name: Dismiss watering advice
   description: Clear all stored watering-advisor proposals from the panel.
 
+verify_species_name:
+  name: Verify a species name (GBIF)
+  description: >
+    Check a typed plant name against GBIF's open taxonomy (no API key, no LLM)
+    and return the accepted scientific name plus typo corrections / suggestions.
+    Used by the "Verify" button in the plant editor so a manual add can confirm
+    the name. Name only - water-use still comes from the curated care table.
+  fields:
+    name:
+      name: Plant name
+      description: The species (scientific or common) to verify.
+      required: true
+      example: "Leucophyllum frutescens"
+      selector:
+        text:
+
 set_conflict_policy:
   name: Set schedule-conflict policy
   description: >

@@ -72,7 +72,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.45.0";
+  const PANEL_VERSION = "v1.46.0";
   // v1.41 — external plant-ID providers (mirrors llm_client.PROVIDERS). URL is
   // auto-filled when a provider is picked; model is an editable hint. All speak
   // the same OpenAI /v1/chat/completions shape, so one settings form covers them.
@@ -454,6 +454,8 @@
       // v1.37 — species identification (vision) state.
       this._identifyBusy = false; // identify_plant_species call in flight
       this._researchBusy = false; // research_plant_species (by-name) call in flight
+      this._speciesVerify = null; // v1.46 — last GBIF name-check result (or null)
+      this._speciesVerifyBusy = false; // v1.46 — verify_species_name call in flight
       this._duplicateBusy = false; // duplicate_plant call in flight
       this._visionDraft = null; // {vision_url, vision_model} edit draft; null = mirror config
       // v1.40 — vision-endpoint connection test state.
@@ -892,6 +894,8 @@
           return this._identifySpecies(node.dataset.plantId);
         if (action === "research-species")
           return this._researchSpecies(node.dataset.plantId);
+        if (action === "verify-species") return this._verifySpeciesName();
+        if (action === "use-verified-name") return this._useVerifiedName(node.dataset.name);
         if (action === "photo-lightbox") {
           if (e.metaKey || e.ctrlKey || e.shiftKey) return; // let cmd/ctrl-click use the href (new tab)
           e.preventDefault(); // otherwise open the in-panel lightbox instead
@@ -1326,6 +1330,11 @@
       if (t.dataset?.action === "plant-field") {
         if (this._plantEditor && t.name in this._plantEditor) {
           this._plantEditor[t.name] = t.value;
+        }
+        // v1.46 — editing the species invalidates a shown GBIF verify result.
+        if (t.name === "species" && this._speciesVerify) {
+          this._speciesVerify = null;
+          this.shadowRoot?.querySelector(".species-verify")?.remove();
         }
         return;
       }
@@ -2557,6 +2566,7 @@
     // ── v2 Yard: plant CRUD + ETo ──────────────────────────────────
     _editPlant(plantId) {
       // Open the plant editor populated from the (fresh) plant record.
+      this._speciesVerify = null; // v1.46 — drop any prior name-check result
       const p = (this._plants || []).find((x) => x.id === plantId);
       if (p) {
         this._plantEditor = {
@@ -2904,6 +2914,65 @@
         this._researchBusy = false;
         this._renderNow();
       }
+    }
+
+    _renderSpeciesVerify() {
+      // v1.46 — GBIF name-check result line (no LLM). Offers a one-tap "use" of
+      // the accepted / corrected name.
+      const v = this._speciesVerify;
+      if (!v) return "";
+      const cls = v.matched ? (v.exact ? "ok" : "warn") : "fail";
+      const icon = v.matched ? (v.exact ? "✓" : "≈") : "✗";
+      let use = "";
+      if (v.canonical && v.canonical !== ((this._plantEditor && this._plantEditor.species) || ""))
+        use =
+          ` <button class="btn btn-small" type="button" data-action="use-verified-name" data-name="${escapeAttr(
+            v.canonical
+          )}">Use “${escapeHtml(v.canonical)}”</button>`;
+      return (
+        `<div class="species-verify species-verify-${cls}">` +
+        `${icon} ${escapeHtml(String(v.note || ""))}` +
+        (v.family ? ` <span class="muted">· ${escapeHtml(v.family)}</span>` : "") +
+        use +
+        `</div>`
+      );
+    }
+
+    async _verifySpeciesName() {
+      // v1.46 — verify the DRAFT species name against GBIF (works before Save).
+      if (this._speciesVerifyBusy || !this._hass?.callWS) return;
+      const e = this._plantEditor;
+      const name = ((e && e.species) || "").trim();
+      if (!name) {
+        alert("Enter the plant species first, then verify it.");
+        return;
+      }
+      this._speciesVerifyBusy = true;
+      this._speciesVerify = null;
+      this._renderNow();
+      try {
+        const res = await this._hass.callWS({
+          type: "call_service",
+          domain: "complete_irrigation",
+          service: "verify_species_name",
+          service_data: { name },
+          return_response: true,
+        });
+        this._speciesVerify = (res && res.response) || { matched: false, note: "no response" };
+      } catch (err) {
+        this._speciesVerify = { matched: false, note: String(err?.message || err) };
+      } finally {
+        this._speciesVerifyBusy = false;
+        this._renderNow();
+      }
+    }
+
+    _useVerifiedName(name) {
+      // v1.46 — accept GBIF's canonical name into the species field.
+      if (!name || !this._plantEditor) return;
+      this._plantEditor.species = name;
+      this._speciesVerify = null;
+      this._renderNow();
     }
 
     async _applySpeciesSuggestion(plantId) {
@@ -6527,6 +6596,12 @@
         `<input name="species" data-action="plant-field" type="text" maxlength="120" value="${escapeAttr(
           e.species || ""
         )}" placeholder="e.g. Citrus limon" />` +
+        // v1.46 — verify the typed name against GBIF (free, no key, no LLM):
+        // catches typos, returns the accepted scientific name.
+        ` <button class="btn btn-small" type="button" data-action="verify-species"${
+          this._speciesVerifyBusy ? " disabled" : ""
+        }>${this._speciesVerifyBusy ? "Checking…" : "✓ Verify name"}</button>` +
+        this._renderSpeciesVerify() +
         // v1.40.9 — research the typed species by NAME (no photo): the LLM fills
         // sun / temp / water-use / cadence / care plan for that species.
         (e.id
@@ -8066,6 +8141,14 @@
         `.plant-attr-prov{margin-top:6px;font-size:11px;color:var(--ci-text-2)}` +
         `.plant-research-btn{margin-top:6px}` +
         `.plant-research-hint{font-size:11px;margin-top:4px}` +
+        // v1.46 — GBIF name-verify result line.
+        `.species-verify{font-size:12px;margin-top:6px;line-height:1.5}` +
+        `.species-verify-ok{color:#2e7d32}` +
+        `.species-verify-warn{color:#b26a00}` +
+        `.species-verify-fail{color:#c62828}` +
+        `:host([data-theme="dark"]) .species-verify-ok{color:#a5d6a7}` +
+        `:host([data-theme="dark"]) .species-verify-warn{color:#ffb74d}` +
+        `:host([data-theme="dark"]) .species-verify-fail{color:#ef9a9a}` +
         `.yard-loop-card{padding:14px 16px}` +
         `.yard-loop-head{display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:8px}` +
         `.yard-loop-head strong{font-size:14px}` +
