@@ -52,7 +52,7 @@ treated as configuration, never logged as secrets. Please keep secrets out of an
 logs or screenshots you share.
 
 **Outbound requests are opt-in and feature-scoped.** Nothing is sent off-box
-unless you configure and use one of the three features below. There are no
+unless you configure and use one of the opt-in features below. There are no
 analytics, telemetry, or background "phone-home" connections of any kind.
 
 **Yard map aerial fetch.** The **"Set up yard map"** action (`set_yard_map`,
@@ -83,6 +83,16 @@ alternative to the vision-model path (no LLM), opt-in, and only runs when you
 identify a plant. The Pl@ntNet key is stored on your Home Assistant server, never
 returned to the browser (`get_config` exposes only whether one is set), and never
 written to the logs; it can be cleared any time.
+
+**Perenual care lookup (opt-in, v1.52).** If you add a **Perenual API key**,
+the **"Research details"** action may send only the **species name text** over
+HTTPS to `perenual.com` to fetch that plant's water-use and sun, as a fallback
+when the built-in curated table doesn't cover the species (and before any LLM).
+It is opt-in (no key → never contacted), times out after 20 s, sends no photo or
+location, and its result is bounded by the same validation rail as every other
+source. The Perenual key is stored on your Home Assistant server, never returned
+to the browser (`get_config` exposes only whether one is set), and never written
+to the logs; it can be cleared any time.
 
 **Hardiness-zone lookup (phzmapi).** The **"Look up zone"** action
 (`lookup_hardiness_zone`, admin-only, v1.50) sends only the **ZIP code you typed**

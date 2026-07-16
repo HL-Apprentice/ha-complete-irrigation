@@ -124,7 +124,7 @@ are tunable via `set_general_config` (`controller_max_run_minutes`,
 
 **This integration runs fully local by default.** It has **no analytics, no
 telemetry, and no background "phone-home."** It reaches the internet only for the
-three **opt-in** features below, and only while you actively use them — each one
+**opt-in** features below, and only while you actively use them — each one
 exists to gather plant / irrigation data *for you*. You can run the whole thing
 with **no external connections and no API keys** at all.
 
@@ -136,6 +136,7 @@ with **no external connections and no API keys** at all.
 | **Hardiness zone** | phzmapi (`phzmapi.org`) | your **ZIP code** | **No** | only when you press *Look up zone* |
 | **Plant identification** | your **local** vision model, *or* an external AI (Anthropic / xAI / Google / custom) you choose | plant **photos** + text prompts | Local: **No**. External: **Yes**, your own key | only if you use photo-ID / research **and** configured a model |
 | **Plant ID — Pl@ntNet** | Pl@ntNet (`my-api.plantnet.org`) | a plant **photo** | **Yes**, your own free key | only if you pick Pl@ntNet as the ID engine |
+| **Care lookup — Perenual** | Perenual (`perenual.com`) | the **species name** text | **Yes**, your own free key | only during *Research details*, and only for a species the built-in table doesn't cover |
 
 Notes:
 - **Nothing is sent unless you use that feature.** Skip them and the integration
@@ -301,6 +302,28 @@ local: OK (qwen2.5vl:7b -> OK); xAI (Grok): OK (grok-4.3 -> OK)
 > "thinking" tokens from the same budget, so the completion budget is 4000 — a
 > smaller cap truncates the JSON mid-answer and the identify fails even though the
 > model had the right species.
+
+### Optional: cloud care lookup (Perenual)
+The by-name **Research details** button already tries the curated table first,
+then (if configured) your AI. You can add **Perenual** — a cloud plant database —
+as a middle step: when the built-in table doesn't cover a species, *Research
+details* asks Perenual for its water-use and sun before falling back to the AI.
+It's entirely optional; the curated table and your AI cover the job without it.
+
+#### Getting a free Perenual API key
+1. Go to **[perenual.com/docs/api](https://perenual.com/docs/api)** and click
+   **Get API Key** (top of the page).
+2. **Sign up** for a free account and confirm your email.
+3. Your **API key** is shown on the docs / account page — copy it.
+4. In HA, paste it into **Settings → Plant identification → Perenual care lookup**,
+   then **Save**.
+
+Free tier is **100 lookups/day** — plenty for adding a few plants. Only the
+**species name** is sent (never a photo or your location). The key is stored only
+on your server (never shown to the browser or logged); **Clear key** removes it.
+Perenual's watering/sun classes are mapped onto the same bounded enums the
+validation rail enforces, so — like every other source — nothing it returns can
+push an out-of-range value into a plant record.
 
 ### Vision health checks (external job)
 `tools/vision_health_job.py` compares each plant's photos over time (~biannual
