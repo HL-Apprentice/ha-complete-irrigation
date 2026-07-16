@@ -4,6 +4,28 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.43.0 — 2026-07-15 — minor
+
+**Zoom the yard map.** The map defaulted to 60 m across, which on a typical
+suburban lot (~20 × 36 m) means most of the picture is your neighbours. The Yard
+tab now has a **Zoom** control (20 / 30 / 40 / 60 / 80 / 120 m across) that
+re-fetches the aerial at that span.
+
+**Plant markers survive the zoom** — and that's the important part. Markers are
+stored *normalized to the bbox they were placed against*, so changing the span
+without re-projecting them would slide every plant across the yard. Each marker
+is now round-tripped through real lat/lon: old frame → ground position → new
+frame. Same physical spot, new view, nothing to re-place by hand.
+
+- **This also fixes a latent bug**: `set_yard_map` already accepted `span_m` and
+  wrote the new bbox, but never touched marker positions — so anyone who changed
+  the span (or the centre) silently had every plant misplaced.
+- **"Refresh aerial" now keeps your zoom.** It used to send no span, so a refresh
+  quietly reset the view to 60 m.
+- A plant that falls **outside** a tighter view is **un-placed**, not clamped to
+  the border — an edge-pinned marker would be a confident lie about where the
+  plant is. You get a notification saying how many, so they don't just vanish.
+
 ## v1.42.1 — 2026-07-15 — patch
 
 **Accept an aerial template copied from a browser.** `{` and `}` aren't legal URL
