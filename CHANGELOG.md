@@ -4,6 +4,16 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.50.0 — 2026-07-16 — minor
+
+**Know your frost risk — USDA hardiness zone.** In **Settings -> Hardiness zone**,
+enter your ZIP and press *Look up zone*. It fetches your USDA plant-hardiness zone
+from the free, **keyless** phzmapi service (e.g. 9b for the low desert) and stores
+it. Any plant whose cold tolerance is warmer than the zone's coldest temperature
+then shows a **snowflake badge** in the plant list, so you know at a glance which
+plants may need winter frost protection. Sends only the ZIP; disclosed in the
+README privacy table and SECURITY.md.
+
 ## v1.49.0 — 2026-07-16 — minor
 
 **Keyless auto reference-ET via Open-Meteo.** Auto ET no longer needs a Home

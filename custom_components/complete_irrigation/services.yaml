@@ -1006,6 +1006,21 @@ dismiss_watering_advice:
   name: Dismiss watering advice
   description: Clear all stored watering-advisor proposals from the panel.
 
+lookup_hardiness_zone:
+  name: Look up USDA hardiness zone (phzmapi)
+  description: >
+    Look up the USDA plant-hardiness zone for a US ZIP code via phzmapi.org
+    (no API key, no LLM). Stores the zone + its frost temperature so the Yard tab
+    can show it and flag frost-tender plants. Sends only the ZIP.
+  fields:
+    zip:
+      name: ZIP code
+      description: US 5-digit ZIP code.
+      required: true
+      example: "85295"
+      selector:
+        text:
+
 verify_species_name:
   name: Verify a species name (GBIF)
   description: >

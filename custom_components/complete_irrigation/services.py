@@ -124,6 +124,7 @@ SERVICE_PROPOSE_WATERING_ADVICE = "propose_watering_advice"  # v1.39 — LLM adv
 SERVICE_DISMISS_WATERING_ADVICE = "dismiss_watering_advice"
 SERVICE_TEST_VISION_ENDPOINT = "test_vision_endpoint"  # v1.39.1 — connectivity probe
 SERVICE_VERIFY_SPECIES_NAME = "verify_species_name"  # v1.46 — GBIF name check (no key)
+SERVICE_LOOKUP_HARDINESS_ZONE = "lookup_hardiness_zone"  # v1.50 — phzmapi (no key)
 SERVICE_APPLY_SPECIES_SUGGESTION = "apply_species_suggestion"
 SERVICE_DISMISS_SPECIES_SUGGESTION = "dismiss_species_suggestion"
 
@@ -711,6 +712,7 @@ _TEST_VISION_SCHEMA = vol.Schema({})
 _VERIFY_SPECIES_SCHEMA = vol.Schema(
     {vol.Required("name"): vol.All(cv.string, vol.Length(min=1, max=120))}
 )
+_HARDINESS_SCHEMA = vol.Schema({vol.Required("zip"): vol.All(cv.string, vol.Length(min=3, max=10))})
 
 _SPECIES_PROMPT = (
     "You are a botanist. Identify the plant in the photo. Reply with ONLY a single "
@@ -2724,6 +2726,53 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             return {"matched": False, "note": "GBIF reply was not valid JSON"}
         return parse_gbif_match(payload)
 
+    async def handle_lookup_hardiness_zone(call: ServiceCall) -> ServiceResponse:
+        """v1.50 — look up the USDA plant-hardiness zone for a US ZIP via phzmapi
+        (no key, no LLM). Stores the zone + its frost temperature on the config so
+        the panel can show it and flag frost-tender plants, and returns it."""
+        if not await _require_admin(hass, call):  # outbound fetch + config write
+            return {"matched": False, "note": "admin required"}
+        data = _HARDINESS_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None:
+            return {"matched": False, "note": "no coordinator"}
+
+        import json as _json
+
+        import aiohttp
+        from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
+        from .hardiness import parse_phzm, phzm_url
+
+        session = async_get_clientsession(hass)
+        try:
+            async with session.get(
+                phzm_url(data["zip"]),
+                headers={"Accept": "application/json"},
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as resp:
+                if resp.status == 404:
+                    return {"matched": False, "note": "no zone found for that ZIP"}
+                if resp.status != 200:
+                    return {"matched": False, "note": f"phzmapi returned HTTP {resp.status}"}
+                raw = await resp.content.read(100_000)
+        except Exception as err:
+            return {"matched": False, "note": f"could not reach phzmapi: {str(err)[:80]}"}
+        try:
+            result = parse_phzm(_json.loads(raw))
+        except ValueError:
+            return {"matched": False, "note": "phzmapi reply was not valid JSON"}
+        if result["matched"]:
+            import re as _re
+
+            coord.config["hardiness_zip"] = _re.sub(r"\D", "", data["zip"])[:5]
+            coord.config["hardiness_zone"] = result["zone"]
+            coord.config["hardiness_temp_low_f"] = result["temp_low_f"]
+            coord.config["hardiness_temp_high_f"] = result["temp_high_f"]
+            await coord.async_save_config()
+            _LOGGER.info("Hardiness zone set to %s", result["zone"])
+        return result
+
     async def handle_propose_watering_advice(call: ServiceCall) -> None:
         """v1.39 — store the external LLM advisor's proposals (rail-bounded).
         ADVISORY ONLY: each item is applied later by the USER via the existing
@@ -3278,6 +3327,13 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         SERVICE_VERIFY_SPECIES_NAME,
         handle_verify_species_name,
         schema=_VERIFY_SPECIES_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_LOOKUP_HARDINESS_ZONE,
+        handle_lookup_hardiness_zone,
+        schema=_HARDINESS_SCHEMA,
         supports_response=SupportsResponse.ONLY,
     )
     hass.services.async_register(
