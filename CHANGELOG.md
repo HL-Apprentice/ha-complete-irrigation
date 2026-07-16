@@ -4,6 +4,39 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.42.0 — 2026-07-15 — minor
+
+**Use a sharper aerial for the yard map.** The default Esri World Imagery is
+poor at yard scale — it refuses to render sharper than ~0.3 m/px, so a 60 m yard
+is fetched at only ~200 px and upscaled to 1536 px. The result is soft and
+blocky. Many **county assessors and city GIS offices publish far sharper
+orthophotos** as a keyless ArcGIS `export` endpoint (often ~0.04 m/px — sharp
+enough to see individual tree canopies and drip lines).
+
+**Settings → Yard map imagery** now takes an **aerial export URL template**:
+
+```
+https://…/MapServer/export?bbox={bbox}&bboxSR=4326&imageSR=4326&size={width},{height}&format=jpg&f=image
+```
+
+Tokens: `{bbox}` (or `{west}`/`{south}`/`{east}`/`{north}`) plus `{width}` and
+`{height}`. Leave it blank for the default Esri imagery, then press **Refresh
+aerial** on the Yard tab. It's a generic template, so any ArcGIS-style service
+works — nothing region-specific is baked in.
+
+Details that matter:
+
+- **The Esri sharpness cap is now Esri-only.** A custom source is fetched at
+  full display resolution instead of being downscaled and upscaled back, which
+  would have thrown away exactly the detail you switched for.
+- **The bbox is unchanged**, so swapping imagery does **not** move your plant
+  markers.
+- **Bad templates are rejected at the config boundary** (must be http(s), must
+  place the bbox, must carry `{width}`/`{height}`) with an actionable error —
+  otherwise the map would silently fetch the wrong ground area.
+- Substitution uses `str.replace`, not `str.format`, so a template can't reach
+  attributes (`{width.__class__…}`) — no format-string surface.
+
 ## v1.41.4 — 2026-07-14 — patch
 
 **Photo uploads can no longer fail silently.** Every rejection path in

@@ -430,6 +430,10 @@ _SET_GENERAL_CONFIG_SCHEMA = vol.Schema(
         vol.Optional("llm_external_url"): vol.All(cv.string, vol.Length(max=300)),
         vol.Optional("llm_external_model"): vol.All(cv.string, vol.Length(max=120)),
         vol.Optional("llm_external_api_key"): vol.All(cv.string, vol.Length(max=400)),
+        # v1.42 — custom aerial source for the yard map. An ArcGIS-style export URL
+        # template; tokens {bbox} (or {west}/{south}/{east}/{north}) + {width},
+        # {height}. Empty string restores the default Esri World Imagery.
+        vol.Optional("map_export_url_template"): vol.All(cv.string, vol.Length(max=500)),
         # PRD #81 — snooze the Sunday weekly reminder until this date.
         vol.Optional("weekly_reminder_snoozed_until"): vol.Any(None, cv.date),
         # User-defined zone ordering for the panel (Today + Zones tabs).
@@ -476,7 +480,25 @@ _GENERAL_CONFIG_FIELDS: dict[str, Any] = {
     "llm_external_url": lambda v: v.strip(),  # override / custom base URL
     "llm_external_model": lambda v: v.strip(),
     "llm_external_api_key": lambda v: v.strip(),  # empty string clears
+    "map_export_url_template": lambda v: _clean_map_template(v),  # v1.42
 }
+
+
+def _clean_map_template(value: str) -> str:
+    """Validate a custom aerial export template before it reaches config. An empty
+    string clears it (back to Esri); anything non-empty must be a usable template,
+    otherwise set_yard_map would silently fetch the wrong ground area."""
+    from .yard_map import valid_export_template
+
+    t = (value or "").strip()
+    if not t:
+        return ""
+    if not valid_export_template(t):
+        raise vol.Invalid(
+            "map_export_url_template must be an http(s) URL containing {bbox} "
+            "(or {west}/{south}/{east}/{north}) plus {width} and {height}"
+        )
+    return t
 
 
 _SET_CONFLICT_POLICY_SCHEMA = vol.Schema(
@@ -2920,7 +2942,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
 
         from .yard_map import (
             bbox_from_center,
-            esri_export_url,
+            export_url,
             image_size_for_bbox,
             safe_export_size,
         )
@@ -2934,11 +2956,20 @@ async def _async_register_services(hass: HomeAssistant) -> None:
 
         bbox = bbox_from_center(float(lat), float(lon), span)
         width, height = image_size_for_bbox(bbox)
-        # Esri's export now HTTP-500s on requests sharper than its imagery cache
-        # (~0.3 m/px) — fetch at the sharpest scale it will serve, then upscale
-        # locally back to the display size (same bbox, marker math untouched).
-        fetch_w, fetch_h = safe_export_size(span, width, height)
-        url = esri_export_url(bbox, fetch_w, fetch_h)
+        # v1.42 — a custom aerial source (e.g. a county assessor's orthophoto
+        # MapServer) is usually far sharper than Esri's global layer, and has no
+        # 0.3 m/px cache floor. So the downscale-then-upscale dance below is
+        # ESRI-ONLY: applying it to a custom source would blur good imagery back
+        # to Esri quality for no reason.
+        template = str(coord.config.get("map_export_url_template") or "").strip()
+        if template:
+            fetch_w, fetch_h = width, height
+        else:
+            # Esri's export HTTP-500s on requests sharper than its imagery cache
+            # (~0.3 m/px) — fetch at the sharpest scale it will serve, then upscale
+            # locally back to the display size (same bbox, marker math untouched).
+            fetch_w, fetch_h = safe_export_size(span, width, height)
+        url = export_url(bbox, fetch_w, fetch_h, template or None)
 
         session = async_get_clientsession(hass)
         try:

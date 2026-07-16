@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Any
 
 # Metres per degree of latitude (mean); longitude scales by cos(latitude).
 _M_PER_DEG_LAT = 111_320.0
@@ -118,6 +119,56 @@ def esri_export_url(bbox: Bbox, width: int, height: int) -> str:
         f"{_ESRI_EXPORT}?bbox={w:.8f},{s:.8f},{e:.8f},{n:.8f}"
         f"&bboxSR=4326&imageSR=4326&size={width},{height}&format=jpg&f=image"
     )
+
+
+# v1.42 — a CUSTOM aerial source. Esri's global World Imagery is coarse at yard
+# scale (it refuses to render sharper than ~0.3 m/px, so a 60 m yard is fetched
+# at ~200 px and upscaled — soft and blocky). Many county assessors/GIS offices
+# publish far sharper orthophotos as a keyless ArcGIS MapServer `export`. Rather
+# than hardcode any one county, the user supplies a URL TEMPLATE.
+#
+# Substitution is plain str.replace, NOT str.format: a user-supplied format
+# string could reach attributes ("{width.__class__…}") — replace has no such
+# surface, and an unknown "{foo}" is simply left alone instead of raising.
+_TEMPLATE_TOKENS = ("{bbox}", "{west}", "{south}", "{east}", "{north}", "{width}", "{height}")
+
+
+def format_export_template(template: str, bbox: Bbox, width: int, height: int) -> str:
+    """Fill an export URL template. Supported tokens: {bbox} (w,s,e,n), the four
+    edges individually ({west}/{south}/{east}/{north}), {width}, {height}."""
+    w, s, e, n = bbox.as_tuple()
+    out = template
+    for token, value in (
+        ("{bbox}", f"{w:.8f},{s:.8f},{e:.8f},{n:.8f}"),
+        ("{west}", f"{w:.8f}"),
+        ("{south}", f"{s:.8f}"),
+        ("{east}", f"{e:.8f}"),
+        ("{north}", f"{n:.8f}"),
+        ("{width}", str(int(width))),
+        ("{height}", str(int(height))),
+    ):
+        out = out.replace(token, value)
+    return out
+
+
+def valid_export_template(template: Any) -> bool:
+    """True when a template is usable: http(s), places the bbox (either {bbox} or
+    all four edges), and carries both {width} and {height}. Anything else would
+    silently fetch the wrong ground area — reject it at the config boundary."""
+    if not isinstance(template, str) or not template.strip():
+        return False
+    t = template.strip()
+    if not t.startswith(("http://", "https://")):
+        return False
+    has_bbox = "{bbox}" in t or all(k in t for k in ("{west}", "{south}", "{east}", "{north}"))
+    return has_bbox and "{width}" in t and "{height}" in t
+
+
+def export_url(bbox: Bbox, width: int, height: int, template: str | None = None) -> str:
+    """The aerial export URL: the user's template when set, else keyless Esri."""
+    if template and template.strip():
+        return format_export_template(template.strip(), bbox, width, height)
+    return esri_export_url(bbox, width, height)
 
 
 def norm_from_yard_map(lat, lon, yard_map_cfg) -> tuple[float, float] | None:
