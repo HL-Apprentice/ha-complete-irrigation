@@ -15,14 +15,18 @@ run_zone:
           domain: switch
     minutes:
       name: Duration (minutes)
-      description: How long to run the zone. Default 10 min. Hard cap 60 min.
+      description: >
+        How long to run the zone. Default 10 min. Hard cap 480 min (8 hours).
+        Runs longer than the controller's per-activation cap
+        (controller_max_run_minutes, default 58) are delivered automatically
+        as back-to-back blocks with a short gap between them.
       required: false
       default: 10
       example: 15
       selector:
         number:
           min: 1
-          max: 60
+          max: 480
           step: 1
           mode: box
           unit_of_measurement: min
@@ -159,8 +163,9 @@ add_schedule:
       description: >
         Optional list of {zone_entity_id, duration_minutes} dicts. If
         provided, the schedule fires zones in order, back-to-back at
-        run time (each waits for the previous to finish + 30s valve
-        buffer). The first entry must match `zone_entity_id` +
+        run time (each waits for the previous to finish plus the
+        configured inter-zone buffer - zone_buffer_seconds, default
+        30 s). The first entry must match `zone_entity_id` +
         `duration_minutes`. Per-zone moisture gating still applies, so
         any sensor-saturated zone in the sequence is skipped.
       required: false
@@ -195,6 +200,49 @@ add_schedule:
           options:
             - start
             - finish
+    interval_end_time:
+      name: Daily window end (interval_hours mode)
+      description: >
+        Optional daily-window cap, interval_hours mode only. When set, the
+        schedule fires every N hours from start_time ON EACH DAY
+        (re-anchored daily, not continuous across midnight); the last
+        firing of a day is the latest one starting at or before this
+        time. Must be after start_time. Omit for the continuous-from-
+        anchor behavior.
+      required: false
+      example: "18:00"
+      selector:
+        time:
+    ignore_wind:
+      name: Ignore wind defer
+      description: This schedule runs even when the wind-defer gate would skip it (default false).
+      required: false
+      default: false
+      selector:
+        boolean:
+    ignore_hot_weather:
+      name: Ignore hot-weather boost
+      description: Skip the hot-weather runtime boost for this schedule (default false).
+      required: false
+      default: false
+      selector:
+        boolean:
+    ignore_rain_lockout:
+      name: Ignore rain lockout
+      description: This schedule runs even during a rain lockout (default false).
+      required: false
+      default: false
+      selector:
+        boolean:
+    color:
+      name: Color
+      description: >
+        Display color for this schedule in the panel and calendar, as a
+        "#rrggbb" hex string. Empty/null = no color.
+      required: false
+      example: "#4caf50"
+      selector:
+        text:
 
 update_schedule:
   name: Update schedule
@@ -305,6 +353,43 @@ update_schedule:
           options:
             - start
             - finish
+    interval_end_time:
+      name: Daily window end (interval_hours mode)
+      description: >
+        Optional daily-window cap, interval_hours mode only. Firings
+        re-anchor from start_time each day; the last firing of a day
+        starts at or before this time. Must be after start_time.
+      required: false
+      example: "18:00"
+      selector:
+        time:
+    ignore_wind:
+      name: Ignore wind defer
+      description: This schedule runs even when the wind-defer gate would skip it.
+      required: false
+      selector:
+        boolean:
+    ignore_hot_weather:
+      name: Ignore hot-weather boost
+      description: Skip the hot-weather runtime boost for this schedule.
+      required: false
+      selector:
+        boolean:
+    ignore_rain_lockout:
+      name: Ignore rain lockout
+      description: This schedule runs even during a rain lockout.
+      required: false
+      selector:
+        boolean:
+    color:
+      name: Color
+      description: >
+        Display color for this schedule in the panel and calendar, as a
+        "#rrggbb" hex string. Empty/null = no color.
+      required: false
+      example: "#4caf50"
+      selector:
+        text:
 
 delete_schedule:
   name: Delete schedule
@@ -361,9 +446,12 @@ set_weather_config:
           domain: sensor
     hot_threshold_f:
       name: Hot weather threshold (°F)
-      description: Boost runtime when temperature meets or exceeds this value.
+      description: >
+        Boost runtime when the forecast high meets or exceeds this value.
+        No default - leaving it unset disables the hot-weather boost
+        entirely.
       required: false
-      default: 100
+      example: 100
       selector:
         number:
           min: 50
@@ -372,9 +460,11 @@ set_weather_config:
           mode: box
     boost_percent:
       name: Hot weather boost (%)
-      description: Increase runtime by this percent on hot days.
+      description: >
+        Increase runtime by this percent on hot days. No default - when
+        unset it is treated as 0 (no boost applied).
       required: false
-      default: 25
+      example: 25
       selector:
         number:
           min: 0
@@ -453,6 +543,10 @@ set_zone_moisture:
   description: >
     Bind moisture sensor(s) to a zone with min / target / max thresholds
     and a combine mode. Required for sensor-driven runtime adjustment.
+    WARNING - each call REPLACES the zone's entire moisture config (it
+    does not merge): re-running with only some fields silently resets the
+    omitted ones (fail-closed, auto-soak, exclusions, ...), so pass every
+    setting you want to keep on every call.
   fields:
     zone_entity_id:
       name: Zone switch
@@ -527,6 +621,80 @@ set_zone_moisture:
       example: "['sensor.front_yard_humidity']"
       selector:
         object:
+    require_moisture_reading:
+      name: Require moisture reading (fail-closed)
+      description: >
+        Skip a scheduled run when NO moisture reading is available for
+        this zone (all sensors offline / unavailable). Default off =
+        legacy fail-open (water anyway).
+      required: false
+      selector:
+        boolean:
+    moisture_disabled:
+      name: Moisture disabled
+      description: >
+        Ignore moisture entirely for watering decisions on this zone.
+        Sensors stay bound for display (chips / tile stats) but the
+        moisture gate becomes a no-op - no saturated-skip, no runtime
+        adjustment. Default off.
+      required: false
+      selector:
+        boolean:
+    moisture_excluded:
+      name: Moisture sensors excluded from analysis
+      description: >
+        Sensors listed here stay bound for DISPLAY but are excluded from
+        the combine/average used by the moisture gate and auto-soak. For
+        sensors that consistently read wrong and skew the math.
+      required: false
+      example: "['sensor.front_yard_moisture_2']"
+      selector:
+        object:
+    auto_soak_enabled:
+      name: Auto-soak recovery
+      description: >
+        When the zone's effective moisture drops below min_pct - run
+        soak_run_minutes, wait soak_wait_minutes for absorption, re-read,
+        repeat until moisture recovers or soak_max_cycles is hit (then
+        notify + cooldown so a stuck-low sensor can't water forever).
+      required: false
+      selector:
+        boolean:
+    soak_run_minutes:
+      name: Soak run (minutes)
+      description: Length of each auto-soak watering cycle.
+      required: false
+      example: 10
+      selector:
+        number:
+          min: 1
+          max: 60
+          step: 1
+          mode: box
+          unit_of_measurement: min
+    soak_wait_minutes:
+      name: Soak wait (minutes)
+      description: Absorption wait between auto-soak cycles before re-reading moisture.
+      required: false
+      example: 30
+      selector:
+        number:
+          min: 5
+          max: 240
+          step: 1
+          mode: box
+          unit_of_measurement: min
+    soak_max_cycles:
+      name: Soak max cycles
+      description: Stop auto-soak after this many cycles even if moisture stays low.
+      required: false
+      example: 3
+      selector:
+        number:
+          min: 1
+          max: 10
+          step: 1
+          mode: box
 
 clear_rain_lockout:
   name: Clear rain lockout
@@ -580,6 +748,127 @@ set_general_config:
       example: "https://gis.example.gov/arcgis/rest/services/Imagery/Aerials2026/MapServer/export?bbox={bbox}&bboxSR=4326&imageSR=4326&size={width},{height}&format=jpg&f=image"
       selector:
         text:
+    vision_url:
+      name: Vision endpoint URL (local)
+      description: >
+        OpenAI-compatible chat-completions endpoint for the LOCAL plant-ID
+        vision model (e.g. Ollama / vLLM on a LAN GPU box). Empty string
+        clears it.
+      required: false
+      example: "http://192.168.1.10:8000/v1/chat/completions"
+      selector:
+        text:
+    vision_model:
+      name: Vision model (local)
+      description: Model name the local vision endpoint should run.
+      required: false
+      example: "qwen2.5vl:7b"
+      selector:
+        text:
+    llm_mode:
+      name: Plant-ID model mode
+      description: >
+        Which endpoint(s) plant identification uses. local = local vision
+        endpoint only; external = external provider only; fallback = try
+        local first, then the external provider as the safety net. An
+        endpoint that isn't fully configured is skipped.
+      required: false
+      example: "local"
+      selector:
+        select:
+          options: ["local", "external", "fallback"]
+    llm_provider:
+      name: External LLM provider
+      description: >
+        Preset for the external plant-ID provider. Picking one supplies the
+        base URL automatically; custom = any other OpenAI-compatible server
+        (you supply llm_external_url + llm_external_model yourself).
+      required: false
+      example: "anthropic"
+      selector:
+        select:
+          options: ["anthropic", "xai", "google", "custom"]
+    llm_external_url:
+      name: External LLM URL
+      description: >
+        Base URL of the external provider's OpenAI-compatible
+        chat-completions endpoint. An explicit value overrides the
+        provider preset; leave blank to use the preset's URL. Required
+        for provider = custom.
+      required: false
+      example: "https://api.anthropic.com/v1/chat/completions"
+      selector:
+        text:
+    llm_external_model:
+      name: External LLM model
+      description: Model id to request from the external provider.
+      required: false
+      example: "claude-sonnet-5"
+      selector:
+        text:
+    llm_external_api_key:
+      name: External LLM API key
+      description: >
+        API key for the external provider. Stored on the Home Assistant
+        server only - it is never returned to the browser and never
+        logged. Empty string clears it.
+      required: false
+      selector:
+        text:
+    admin_only_services:
+      name: Admin-only services
+      description: >
+        When true, every data-mutating / hardware-actuating service call
+        (run_zone, stop_zone, add/update/delete_schedule, etc.) requires
+        the calling user to be an HA admin. Default false.
+      required: false
+      selector:
+        boolean:
+    controller_max_run_minutes:
+      name: Controller max run (minutes)
+      description: >
+        Controller per-activation cap = the block size for long-run
+        chunking. Default 58 (two minutes under Rachio's 60-min manual-run
+        limit); tune only if your controller's limit differs.
+      required: false
+      example: 58
+      selector:
+        number:
+          min: 5
+          max: 480
+          step: 1
+          mode: box
+          unit_of_measurement: min
+    block_gap_seconds:
+      name: Block gap (seconds)
+      description: >
+        Gap between back-to-back blocks of a chunked long run - long
+        enough for the controller to register the off and reset. Default 30.
+      required: false
+      example: 30
+      selector:
+        number:
+          min: 5
+          max: 600
+          step: 1
+          mode: box
+          unit_of_measurement: s
+    verify_switch_seconds:
+      name: Verify switch (seconds)
+      description: >
+        "Check back" window for valve-actuation verification: after
+        commanding a zone switch on/off, re-read its state this many
+        seconds later and retry/alert if the command didn't take.
+        0 disables the check. Default 30.
+      required: false
+      example: 30
+      selector:
+        number:
+          min: 0
+          max: 300
+          step: 1
+          mode: box
+          unit_of_measurement: s
 
 start_establishment:
   name: Start "new grass" establishment mode
@@ -768,6 +1057,25 @@ set_notification_config:
       default: true
       selector:
         boolean:
+    notify_on_missed:
+      name: Missed-run notifications
+      description: >
+        When a scheduled run is dropped (conflict resolver, moisture /
+        wind / rain gate, or missed due to an HA restart), send a
+        notification with a "Run now" action so the run can be recovered
+        with one tap. Default on.
+      required: false
+      selector:
+        boolean:
+    notify_on_aborted:
+      name: Aborted-run notifications
+      description: >
+        When a scheduled run is cut short by an external actor (something
+        other than the integration's auto-stop turns the switch off),
+        notify with "Run remainder" + "Open Logbook" actions. Default on.
+      required: false
+      selector:
+        boolean:
 
 test_notification:
   name: Test notification
@@ -844,6 +1152,13 @@ add_plant:
       selector:
         entity:
           domain: switch
+    species:
+      name: Species
+      description: Optional scientific or common species name (free text).
+      required: false
+      example: "Leucophyllum frutescens"
+      selector:
+        text:
 
 update_plant:
   name: Update plant
@@ -905,6 +1220,46 @@ update_plant:
           max: 1
           step: any
           mode: box
+    species:
+      name: Species
+      description: Scientific or common species name (free text).
+      required: false
+      example: "Leucophyllum frutescens"
+      selector:
+        text:
+    emitter_count:
+      name: Drip count
+      description: >
+        Number of drip emitters on this plant. Set together with
+        emitter_gph - a one-sided pair is rejected.
+      required: false
+      example: 2
+      selector:
+        number:
+          min: 1
+          max: 100
+          step: 1
+          mode: box
+    emitter_gph:
+      name: Drip size (GPH)
+      description: >
+        Gallons per hour of each emitter. Set together with
+        emitter_count - a one-sided pair is rejected.
+      required: false
+      example: 2
+      selector:
+        number:
+          min: 0.1
+          max: 50
+          step: any
+          mode: box
+    clear_emitters:
+      name: Clear emitters
+      description: Set true to remove the plant's installed drip emitters (both fields unset).
+      required: false
+      default: false
+      selector:
+        boolean:
 
 delete_plant:
   name: Delete plant
@@ -1290,6 +1645,17 @@ apply_species_suggestion:
       default: true
       selector:
         boolean:
+    apply_canopy:
+      name: Apply estimated canopy
+      description: >
+        Also apply the photo-estimated canopy area (photo-first flow
+        only). Off by default so accepting a suggestion never clobbers a
+        user-entered canopy - this is the only way to accept the
+        estimate.
+      required: false
+      default: false
+      selector:
+        boolean:
 
 dismiss_species_suggestion:
   name: Dismiss species suggestion
@@ -1347,6 +1713,16 @@ add_plant_from_photo:
       name: Name
       description: Optional name override (defaults to the identified common name).
       required: false
+      selector:
+        text:
+    species:
+      name: Species
+      description: >
+        Optional user-entered species (scientific or common name). Kept
+        over the vision model's guess when provided, and survives an
+        identify failure. Blank = the vision model fills it in.
+      required: false
+      example: "Leucophyllum frutescens"
       selector:
         text:
     emitter_count:

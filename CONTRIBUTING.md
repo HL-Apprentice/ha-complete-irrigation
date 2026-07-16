@@ -1,6 +1,6 @@
 # Contributing — Pre-push Checklist
 
-Every change to this integration must pass **three independent checks** before it touches a user's Home Assistant. Two are automated and one is manual. This document defines them.
+Every change to this integration must pass **three independent checks** before it touches a user's Home Assistant. All three are automated — two run on every commit, the third (`scripts/smoke-test.sh` against a real HA container) before every release. This document defines them.
 
 ## Why this exists
 
@@ -16,11 +16,13 @@ Run on your machine before every commit:
 scripts/check.sh
 ```
 
-This verifies:
-- **Ruff lint** passes on `custom_components/`, `tests/`, `scripts/`
-- **Ruff formatter** check passes (no unformatted files)
-- **Unit tests** pass (`pytest tests/`)
-- **Manifest sanity**: required keys present, ordering valid (`domain`, `name`, then alphabetical)
+This runs four steps, in order:
+1. **Ruff lint + format** — `ruff check` and `ruff format --check` pass on `custom_components/`, `tests/`, `scripts/`
+2. **Unit tests** — `pytest tests/` in your own venv (which has HA installed, so the HA-dependent tests actually run)
+3. **CI parity** — re-runs pytest in a throwaway venv built from ONLY `requirements-dev.txt`, mirroring CI — catches imports that resolve only because your machine has HA installed; cached at `~/.cache/irrigation-CI-mirror` (~8 s warm). Set `SKIP_CI_PARITY=1` to skip it in a pinch.
+4. **Manifest sanity** — required keys present, ordering valid (`domain`, `name`, then alphabetical)
+
+Test-time dependencies live in `requirements-dev.txt` (pytest, pytest-asyncio, ruff, aiohttp — aiohttp is test-only; HA core ships it at runtime).
 
 If anything fails, fix it before committing. Most issues are one-liners (`ruff check --fix ...` handles auto-fixable ones).
 
@@ -29,15 +31,15 @@ If anything fails, fix it before committing. Most issues are one-liners (`ruff c
 Pushing to GitHub triggers `.github/workflows/validate.yml`, which runs:
 
 - **HA Hassfest** — validates the integration against HA's strict standards
-- **HACS validation** — validates the integration is HACS-installable
 - **Ruff lint** (mirror of Check 1, in case someone pushed without running locally)
 - **Unit tests** (mirror of Check 1, run on Python 3.12 like real HA)
+- **HACS validation** — advisory only (`continue-on-error`): the HACS store check can't read a private repo's files, so it effectively always fails while this repo is private, and it's skipped entirely on PRs and feature-branch pushes. Kept so it just works if the repo ever goes public.
 
-All four must be green before tagging a release. Don't merge or tag a release while any are red.
+Hassfest, ruff, and pytest must be green before tagging a release. Don't merge or tag a release while any of those three are red.
 
 ### Check 3 — Real Home Assistant smoke test
 
-Before tagging any release (`v0.x.y`), the integration must load cleanly in a real Home Assistant. Automated via:
+Before tagging any release (`vX.Y.Z`), the integration must load cleanly in a real Home Assistant. Automated via:
 
 ```bash
 scripts/smoke-test.sh
@@ -62,11 +64,11 @@ For manual UI exploration (config flow walkthrough, panel rendering, etc.), use 
 ## When to bump the version
 
 Use [Semantic Versioning](https://semver.org/):
-- **Patch** (`0.2.1`): bug fixes, lint fixes, docs, refactors that don't change behavior
-- **Minor** (`0.3.0`): new features, breaking config-flow changes, new entities
-- **Major** (`1.0.0`): first stable release; thereafter, breaking changes to entities/services
+- **Patch** (`1.43.3`): bug fixes, lint fixes, docs, refactors that don't change behavior
+- **Minor** (`1.44.0`): new features, breaking config-flow changes, new entities
+- **Major** (`2.0.0`): breaking changes to entities/services
 
-Bump in both `manifest.json` AND `pyproject.toml`. Then publish with `scripts/release.sh vX.Y.Z` — that script tags, pushes, **and creates the GitHub Release**. HACS only reads GitHub Releases, not raw tags, so the Release step is non-negotiable.
+Bump all **three** version strings: `manifest.json`, `pyproject.toml`, AND `PANEL_VERSION` in `custom_components/complete_irrigation/frontend/complete-irrigation-panel.js` — `scripts/release.sh` hard-fails unless all three match the tag. Then publish with `scripts/release.sh vX.Y.Z` — that script tags, pushes, **and creates the GitHub Release**. HACS only reads GitHub Releases, not raw tags, so the Release step is non-negotiable.
 
 ## Workflow for a typical change
 
@@ -90,10 +92,11 @@ gh run watch
 # 6. If this is a release:
 #    a. Smoke-test in real HA (Check 3)
 scripts/smoke-test.sh
-#    b. Bump version in manifest.json + pyproject.toml
+#    b. Bump version in manifest.json + pyproject.toml + PANEL_VERSION
+#       (frontend/complete-irrigation-panel.js) — release.sh checks all three
 #    c. Commit + push the bump
 #    d. Publish — tag + push + create GitHub Release in one step:
-scripts/release.sh v0.2.1
+scripts/release.sh v1.43.3
 #    HACS picks the new Release up within ~15 min.
 ```
 
@@ -107,9 +110,11 @@ scripts/release.sh v0.2.1
 Two layers:
 
 1. **Pure-logic modules** (no HA dependency, TDD-friendly):
-   `helpers.py`, future `RunPlanner`, `ConflictResolver`, `MoistureGate`, `WeatherGate`, `ScheduleStore`
+   `helpers.py`, `run_planner.py`, `conflict_resolver.py`, `moisture_gate.py`, `weather_gate.py`, `schedule.py`, `et_calc.py`, `vision_health.py`, and most of the rest
 2. **HA-coupled adapters** (orchestrate the pure modules, glue to HA):
-   `__init__.py`, `config_flow.py`, `coordinator.py` (future), `sensor.py` (future), `calendar.py` (future)
+   `__init__.py`, `config_flow.py`, `coordinator.py`, `calendar.py`, `binary_sensor.py`, `services.py`, `ws_api.py`
+
+(A dedicated `sensor.py` never materialized — `binary_sensor.py` landed instead.)
 
 Push as much logic as possible into the pure-logic layer. Tests cover it directly. The HA-coupled layer should be thin and mostly delegation.
 
@@ -127,7 +132,7 @@ See the test suite in `tests/test_helpers.py` for the pattern.
 ## Style
 
 - Python: ruff (config in `pyproject.toml`) — 100-char line limit, isort+pyupgrade+bugbear+naming-N+simplify enabled
-- JS/CSS: no formatter required at v0.x; just keep things readable
+- JS/CSS: no formatter required; just keep things readable
 - Commit messages: conventional commits style (`feat:`, `fix:`, `docs:`, `chore:`, `refactor:`, `test:`)
 
 ## Filing issues

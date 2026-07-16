@@ -1,8 +1,9 @@
 """HA Calendar platform for upcoming irrigation runs.
 
-Single entity `calendar.complete_irrigation` that materializes the next
-N days of scheduled runs from the per-entry ScheduleCoordinator's
-ScheduleStore, using the pure-logic `RunPlanner.next_runs`.
+Single entity (`calendar.irrigation` on a fresh install — has_entity_name +
+name "Irrigation") that materializes the next N days of scheduled runs from
+the per-entry ScheduleCoordinator's ScheduleStore, using the pure-logic
+`RunPlanner.next_runs`.
 
 v1.1 — Slice 15: `async_create_event` allows adding a one-off run from
 HA's Calendar dashboard. Delete/update are deferred to v1.2.
