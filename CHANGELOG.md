@@ -4,6 +4,45 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.44.0 — 2026-07-16 — minor
+
+**Pan the yard map.** Chevron buttons on the map edges (▲▼◀▶) shift the view by
+30% of the span per tap, and a **⌂** button re-centres on your Home Assistant
+location — so you can line the view up exactly before fine-placing plant
+markers. Markers are re-projected through real lat/lon on every move (same
+machinery as zoom), so plants keep their true ground position; **Refresh
+aerial** now preserves both your zoom *and* your panned centre.
+
+**Documentation trued up against the code** — a 5-lane audit of every doc
+surface (48 review agents, findings adversarially verified) produced 37
+confirmed fixes:
+
+- **Functional:** `run_zone`'s Developer Tools form still enforced the 60-min
+  cap that v1.24 removed — the selector blocked valid 61–480 min runs. Now 480.
+- **SECURITY.md told the truth of an older version:** "photos you add stay
+  local" / "Esri is the only external call" predate the external-LLM providers
+  (v1.41) and custom aerial sources (v1.42). The data-flow section now
+  accurately describes what the opt-in plant-brain features send where, plus
+  how the external API key is stored/redacted.
+- **README:** the retired three-policy conflict resolver replaced with the real
+  serialize-and-compress behaviour; correct calendar entity id
+  (`calendar.irrigation`); ET-scaled rain-lockout description; Smart Irrigation
+  added to auto-detect (ESPHome moved to manual, matching the code); true tab
+  order; sun-anchored/seasonal/every-N-hours schedule features surfaced; valve
+  verification and chunked long-runs get their own bullets; Rachio guidance
+  rewritten around the block-size mechanics; screenshots reorganized with
+  accurate alt text; ~740 test count.
+- **services.yaml:** ~30 previously-undocumented fields added across
+  `set_general_config` (all 11 plant-ID/LLM + controller knobs),
+  `set_zone_moisture` (fail-closed, auto-soak set — plus a replace-not-merge
+  warning), `add_schedule`/`update_schedule` (sun anchors, seasonal windows,
+  weather-gate opt-outs, colour), `set_notification_config`
+  (missed/aborted-run toggles), `update_plant` (emitters), and more. Removed
+  yaml defaults that don't exist in the schemas (they could silently enable
+  hot-weather boost from a pre-filled form).
+- **CONTRIBUTING.md** matches the current 4-step check.sh (incl. CI parity) and
+  release protocol; **PRD docs** clearly marked historical.
+
 ## v1.43.2 — 2026-07-16 — patch (docs)
 
 **Everything is documented now.** Five services were registered in code but

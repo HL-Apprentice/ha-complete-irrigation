@@ -51,13 +51,30 @@ Home Assistant's local `.storage`. Notification targets and sensor entity ids ar
 treated as configuration, never logged as secrets. Please keep secrets out of any
 logs or screenshots you share.
 
-**One optional outbound request.** The only time the integration contacts an
-external service is the **"Set up yard map"** action (`set_yard_map`, admin-only):
-it fetches an aerial backdrop image over HTTPS from Esri World Imagery
-(`services.arcgisonline.com`, a fixed host — no API key), sending only the map
+**Outbound requests are opt-in and feature-scoped.** Nothing is sent off-box
+unless you configure and use one of the two features below.
+
+**Yard map aerial fetch.** The **"Set up yard map"** action (`set_yard_map`,
+admin-only) fetches an aerial backdrop image over HTTPS from Esri World Imagery
+(`services.arcgisonline.com`, a fixed host — no API key) — or, since v1.42, from
+a custom ArcGIS-compatible export URL you configure — sending only the map
 center **latitude/longitude** (defaulting to your Home Assistant location) and a
 span. It is opt-in (nothing is sent unless you run that action), times out after
 30 s, fails closed (the previous map is kept on any error), and validates the
-response is a real image before saving. No other feature transmits data off-box.
-Photos you add stay local under `www/complete_irrigation/`; EXIF GPS is read in
-your browser only to place a marker and is stripped from the stored image.
+response is a real image before saving.
+
+**Plant-brain LLM features.** The opt-in plant features — species identify /
+research (v1.37) and vision health checks (v1.33) — send plant photos and text
+prompts over HTTPS to the OpenAI-compatible endpoint you configure. Since v1.41
+that endpoint can be a third-party cloud provider (Anthropic, xAI, Google, or a
+custom URL) when `llm_mode` is `external` or `fallback`; in the default `local`
+mode requests go only to your own local server, and if you never configure or
+use these features nothing is sent at all. The optional external-LLM API key is
+stored in the integration's config store on your Home Assistant box, is sent
+only as an `Authorization` header to the provider you configured, is never
+written to logs, and is redacted from `get_config` output — still, please
+redact keys from any logs you share.
+
+Photos you add are otherwise local under `www/complete_irrigation/` (only the
+LLM features above ever transmit them); EXIF GPS is read in your browser only
+to place a marker and is stripped from the stored image.

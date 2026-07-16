@@ -1,10 +1,3 @@
-<img width="1160" height="1284" alt="Screenshot 2026-05-23 at 11 56 42 AM" src="https://raw.githubusercontent.com/HL-Apprentice/ha-complete-irrigation/main/assets/screenshots/panel-1.png" />
-<img width="1168" height="437" alt="Screenshot 2026-05-23 at 11 56 19 AM" src="https://raw.githubusercontent.com/HL-Apprentice/ha-complete-irrigation/main/assets/screenshots/panel-2.png" />
-<img width="1163" height="498" alt="Screenshot 2026-05-23 at 11 56 11 AM" src="https://raw.githubusercontent.com/HL-Apprentice/ha-complete-irrigation/main/assets/screenshots/panel-3.png" />
-<img width="1168" height="459" alt="Screenshot 2026-05-23 at 11 55 59 AM" src="https://raw.githubusercontent.com/HL-Apprentice/ha-complete-irrigation/main/assets/screenshots/panel-4.png" />
-<img width="1163" height="651" alt="Screenshot 2026-05-23 at 11 55 52 AM" src="https://raw.githubusercontent.com/HL-Apprentice/ha-complete-irrigation/main/assets/screenshots/panel-5.png" />
-<img width="1164" height="999" alt="Screenshot 2026-05-23 at 11 55 41 AM" src="https://raw.githubusercontent.com/HL-Apprentice/ha-complete-irrigation/main/assets/screenshots/panel-6.png" />
-<img width="900" height="1284" alt="Screenshot 2026-05-23 at 11 53 47 AM" src="https://raw.githubusercontent.com/HL-Apprentice/ha-complete-irrigation/main/assets/screenshots/panel-7.png" />
 <p align="center">
   <img src="https://raw.githubusercontent.com/HL-Apprentice/ha-complete-irrigation/main/assets/icon.png" alt="Complete Irrigation" width="160" height="160" />
 </p>
@@ -13,16 +6,32 @@
 
 A Home Assistant custom integration for complete, sensor-driven irrigation control. Works with any controller that exposes zone switches.
 
-> **Smoke-tested against a real HA container per the 3-check protocol every release.** Back up your HA before installing; report bugs at the [issues page](https://github.com/HL-Apprentice/ha-complete-irrigation/issues). Security issues: see [SECURITY.md](SECURITY.md). See [CHANGELOG.md](CHANGELOG.md) for what's new.
+> **Smoke-tested against a real HA container per the [3-check protocol](CONTRIBUTING.md) every release.** Back up your HA before installing; report bugs at the [issues page](https://github.com/HL-Apprentice/ha-complete-irrigation/issues). Security issues: see [SECURITY.md](SECURITY.md). See [CHANGELOG.md](CHANGELOG.md) for what's new.
+
+<img width="1160" height="1284" alt="Today tab: weather banner, per-zone Run Now tiles, and the today/tomorrow run timeline" src="https://raw.githubusercontent.com/HL-Apprentice/ha-complete-irrigation/main/assets/screenshots/panel-1.png" />
+
+<details>
+<summary>More screenshots</summary>
+
+<img width="1168" height="437" alt="Schedules tab: schedule list with recurrence, duration, and enable/edit/delete controls" src="https://raw.githubusercontent.com/HL-Apprentice/ha-complete-irrigation/main/assets/screenshots/panel-2.png" />
+<img width="1163" height="498" alt="Zones tab: per-zone week-at-a-glance run dots with New Planting and Hide from Today buttons" src="https://raw.githubusercontent.com/HL-Apprentice/ha-complete-irrigation/main/assets/screenshots/panel-3.png" />
+<img width="1168" height="459" alt="History tab: run history filtered by zone, schedule, status, and date range" src="https://raw.githubusercontent.com/HL-Apprentice/ha-complete-irrigation/main/assets/screenshots/panel-4.png" />
+<img width="1163" height="651" alt="Sensors tab: per-zone moisture sensors with live readings and the combined value used for decisions" src="https://raw.githubusercontent.com/HL-Apprentice/ha-complete-irrigation/main/assets/screenshots/panel-5.png" />
+<img width="1164" height="999" alt="Weather tab: 3-day forecast, rain-lockout sensor picker, hot weather boost, and wind defer" src="https://raw.githubusercontent.com/HL-Apprentice/ha-complete-irrigation/main/assets/screenshots/panel-6.png" />
+<img width="900" height="1284" alt="Settings tab: theme, schedule conflicts, inter-zone buffer, manual run default, and calendar feed" src="https://raw.githubusercontent.com/HL-Apprentice/ha-complete-irrigation/main/assets/screenshots/panel-7.png" />
+
+</details>
 
 ## What it does
 
-- **Hardware-agnostic** — auto-detects Rachio, Hydrawise, RainMachine, B-Hyve, OpenSprinkler, ESPHome relays, and any switch-based controller via HA's entity registry.
-- **Schedules** with weekday OR "every N days" recurrence, hours+minutes duration up to 8h, enable/disable. Persisted across restarts.
+- **Hardware-agnostic** — auto-detects Rachio, Hydrawise, RainMachine, B-Hyve, OpenSprinkler, and Smart Irrigation via HA's entity registry; ESPHome/DIY relays and any other switch-based controller work via manual switch selection.
+- **Schedules** with weekday, every-N-days, or every-N-hours recurrence, hours+minutes duration up to 8h, sunrise/sunset-anchored start or finish times, seasonal month windows, enable/disable. Persisted across restarts.
 - **Manual Run-Now** per zone with duration popup and Stop button. Tile shows "Running — 4:52 left of 10 min" — hydrates after page reload via WS so external runs (Developer Tools, automations) also show the countdown.
-- **Calendar entity** (`calendar.complete_irrigation`) + **iCal feed** at `/api/complete_irrigation/calendar.ics` for phone calendar subscription.
-- **Conflict resolver** with three policies (defer / shift earlier / split difference) — picker in the Settings tab. 2-min auto-buffer + 2-hour cascade cap.
-- **Rain lockout** — Tempest (or any rainfall sensor) triggers tiered system-wide lockout. **Multi-rain** support: bind several rain sensors; first is primary for lockout, all show on the banner.
+- **Valve verification (check-back)** — re-reads the physical switch after every on/off command; retries once and raises a CRITICAL alert if the valve didn't actuate.
+- **Calendar entity** (`calendar.irrigation` on a fresh install; existing installs keep their registered id) + **iCal feed** at `/api/complete_irrigation/calendar.ics` for phone calendar subscription.
+- **Conflict resolver** — serializes runs one zone at a time with a 2-min auto-buffer. Overlapping runs are deferred (never moved earlier); past the 2-hour cascade cap, the runs ahead are compressed (down to a 70% floor) to make room — a scheduled run is never dropped.
+- **Long runs on capped controllers (v1.25)** — a run longer than the controller's block size (default 58 min) is auto-delivered as back-to-back blocks with a 30-s gap; tune via `controller_max_run_minutes` / `block_gap_seconds`.
+- **Rain lockout** — Tempest (or any rainfall sensor) triggers an ET-scaled system-wide lockout: lockout length = effective rain divided by the live daily ETo, so it lasts as many days as the rain actually replaced — hotter forecast, shorter lockout (heat-graduated ceiling), with a configurable rain floor. **Multi-rain** support: bind several rain sensors; first is primary for lockout, all show on the banner.
 - **Hot weather boost** — temp threshold + runtime % boost.
 - **Moisture-driven runtime** — per-zone min/target/max with 4-band controller (saturated → skip; light → reduced; normal → base; urgent → +50%).
 - **Multi-sensor combine modes** per zone: average / lowest / highest / primary. Each sensor's reading + the combined value display side-by-side.
@@ -33,11 +42,11 @@ A Home Assistant custom integration for complete, sensor-driven irrigation contr
 - **Plant records + yard map** — per-plant WUCOLS water-need math, need-vs-delivered per loop, photo history with EXIF-GPS placement, and an aerial yard map with draggable markers. **Zoomable** (20–120 m) with markers re-projected through real lat/lon so they keep their true ground position.
 - **Sharper aerials** — point the map at any keyless ArcGIS export (e.g. your county assessor's orthophotos, often ~10× sharper than the default global imagery) via a URL template.
 - **Plant identification** — photo → species → care. A **curated care table** for ~37 common Southwest/low-desert species supplies the water-use/sun/cadence (small vision models name plants well but can't differentiate water-use). Runs on a **local** model, an **external** one (Claude / Grok / Gemini / any OpenAI-compatible), or local-with-fallback. Keys stay on your server.
-- **Vision health checks** — an external local vision model (e.g. on a home GPU) compares each plant's photos over time; verdicts are bounded by a safety rail and shown on the plant. Advisory only.
+- **Vision health checks** — a scheduled external job runs a local vision model (e.g. on a home GPU) to compare each plant's photos over time; verdicts are bounded by a safety rail and shown on the plant. Advisory only.
 - **Light surveys (v1.35)** — give a plant an optimal lux range, place a roaming illuminance sensor at it, and a timed survey stores min/avg/max + a too-little/optimal/too-much verdict.
 - **Care-task reminders (v1.35)** — recurring fertilize/prune/mulch/inspect reminders per plant or zone with last-done tracking; due tasks notify and re-nag weekly.
 - **Watering diagnosis (v1.35)** — 🩺 per zone: cross-checks moisture, 14-day run history, and vision concerns into a Signs → Confirm → Suggestions card. Advisory only.
-- **Custom sidebar panel** with Today / Schedules / Zones / Yard / Sensors / Weather / Notifications / History / Settings.
+- **Custom sidebar panel** with Today / Schedules / Zones / Yard / History / Sensors / Weather / Notifications / Settings.
 - **Light + Dark themes** — Auto follows HA/OS preference; ☀️/🌙 toggle on Today cycles Light → Dark → Auto. All text WCAG AA contrast verified.
 - **User-arrangeable weather banner** — ⚙️ gear opens a modal to show/hide and reorder cells (condition, temp, humidity, wind, UV, sunrise/sunset, etc.). Layout persists in browser.
 - **Modern 3-day forecast** — uses `weather.get_forecasts` service (HA 2024+ API) instead of the deprecated forecast attribute.
@@ -52,10 +61,11 @@ A Home Assistant custom integration for complete, sensor-driven irrigation contr
 | RainMachine | ✅ | — |
 | Orbit B-Hyve | ✅ | — |
 | OpenSprinkler | ✅ | — |
+| Smart Irrigation | ✅ | — |
 | ESPHome / DIY relay boards | ✅ via manual switch selection | — |
 | Any HA-installed irrigation integration | ✅ via manual switch selection | — |
 
-### ⚠️ Rachio: set the manual run-time ≥ your longest schedule
+### ⚠️ Rachio: set the manual run-time to 60 minutes
 
 **If you use Rachio, do this once or your runs will be cut short.**
 
@@ -66,22 +76,25 @@ the HA Rachio integration starts that zone for its configured
 that duration elapses. The HA Rachio integration **defaults this to 10
 minutes** (`DEFAULT_MANUAL_RUN_MINS = 10`).
 
-If your Complete Irrigation schedule is longer than Rachio's manual
-duration, **Rachio stops the zone first** — and the run shows in
-History as *"aborted — switch turned off externally"* at exactly the
-Rachio cap (e.g. 10 min) regardless of your schedule's duration.
+If a run block is longer than Rachio's manual duration, **Rachio stops
+the zone first** — and the run shows in History as *"aborted — switch
+turned off externally"* at exactly the Rachio cap (e.g. 10 min).
 
 **Fix:**
 
 1. Settings → Devices & Services → **Rachio** integration card → **Configure**
-2. Set **"Run time"** (manual zone run duration, minutes) to a value
-   **≥ your longest Complete Irrigation schedule** — e.g. `60`.
+2. Set **"Run time"** (manual zone run duration, minutes) to at least
+   the **controller block size** — the default block is 58 min, so `60`
+   covers **any** schedule length. You do *not* need to match your
+   longest schedule: since v1.25, a run longer than the block size is
+   auto-delivered as back-to-back blocks with a 30-s gap between them.
 3. Submit.
 
-Once Rachio's manual duration is longer than every schedule, **this
-integration's own auto-stop timer always fires first** and stops each
-zone at its scheduled duration. Rachio just acts as the relay; this
-integration is the authoritative timekeeper.
+The integration's own auto-stop timer fires per block, ending each
+block at its planned length; Rachio just acts as the relay and this
+integration stays the authoritative timekeeper. The block size and gap
+are tunable via `set_general_config` (`controller_max_run_minutes`,
+`block_gap_seconds`).
 
 > This is *not* related to Rachio's own schedules — deleting or
 > disabling those does **not** change the manual run duration. The two
@@ -112,7 +125,7 @@ integration is the authoritative timekeeper.
 Almost everything is configurable from the panel — no Developer Tools required.
 
 ### Schedules (Schedules tab)
-**+ Add Schedule** → name, zone, start time, hours + minutes duration, recurrence (weekdays OR every-N-days), enable. Save fires it on the configured cadence.
+**+ Add Schedule** → name, zone, start time, hours + minutes duration, recurrence (weekdays, every-N-days, or every-N-hours), enable. Save fires it on the configured cadence.
 
 ### Moisture sensors per zone (Sensors tab)
 Click **Configure** on a zone card to bind moisture sensors. If you pick more than one, the modal requires a combine mode (Average / Lowest / Highest / Primary — no silent default). The card shows each sensor's live reading and the combined value used for irrigation decisions; min-violations show red.
@@ -126,11 +139,11 @@ Multi-pick rainfall sensors (first checked = primary for the lockout calc; all b
 ### Notifications (Notifications tab)
 Set notify target, master enable, quiet hours window, and toggle the daily low-moisture summary. **Send test** button verifies routing.
 
-### "New grass" establishment mode (Zones tab)
-Click **🌱 New Grass** on the zone you reseeded. Modal sets cycles per day, minutes per cycle, total days, start hour. The integration creates an auto-expiring schedule.
+### New-planting establishment mode (Zones tab)
+Click **🌱 New Planting** on the zone you replanted — new grass seed, shrubs, trees, anything getting established. Modal sets cycles per day, minutes per cycle, total days, start hour. The integration creates an auto-expiring schedule.
 
-### Schedule conflict policy (Settings tab)
-When two schedules' run windows overlap, pick one of: defer new (safest, default), shift existing earlier, or split the difference.
+### Schedule conflicts (automatic)
+When two schedules' run windows overlap, runs are serialized one zone at a time with a 2-min buffer: the overlapping run is deferred, and past the 2-hour cascade cap the runs ahead of it are compressed (down to a 70% floor of their requested minutes) so nothing is ever dropped. The Settings-tab policy picker (defer / shift / split) is retained for backward compatibility only — it no longer changes behavior.
 
 ### Calendar feed (Settings tab → Copy)
 Subscribe to `/api/complete_irrigation/calendar.ics` from your phone calendar app for the next 30 days of planned runs.
@@ -159,13 +172,17 @@ water need, canopy, and your loop runtime, using real emitter sizes (0.5 / 1 / 2
 4 GPH).
 
 ### Yard map
-**Set up yard map** fetches an aerial of your property (centred on your HA
+**Set up yard map** fetches an aerial of your property (centered on your HA
 latitude/longitude); drag markers onto each plant.
 
 - **Zoom** — pick how much ground the map covers (20–120 m). Markers are
   re-projected through real lat/lon, so **plants keep their true ground position**
   when you zoom. Anything that falls outside a tighter view is un-placed (with a
   notification) rather than pinned to the edge.
+- **Pan** — chevron buttons on the map edges shift the view 30% of the span per
+  tap (N/S/E/W); a ⌂ button re-centers on your HA home location. Markers are
+  re-projected so plants keep their true ground position, and **Refresh aerial**
+  keeps both your zoom and your panned center.
 - **Sharper imagery** — the default Esri World Imagery is coarse at yard scale (it
   won't render sharper than ~0.3 m/px, so a 60 m yard is fetched at ~200 px and
   upscaled). Many **county assessors / city GIS offices** publish far sharper
@@ -183,8 +200,9 @@ latitude/longitude); drag markers onto each plant.
 
 ### Care tasks
 Recurring fertilize / prune / mulch / inspect reminders per plant, with last-done
-tracking. **Seed care plan** creates a sensible set from the plant type (tree /
-shrub / flower / cactus-succulent / grass) in one tap.
+tracking. The **Seed a starter plan** row (button: **Seed plan**) creates a
+sensible set from the plant type (tree / shrub / flower / cactus-succulent /
+grass) in one tap.
 
 ## Plant identification & AI (all optional, all advisory-only)
 
@@ -203,10 +221,10 @@ right; the table supplies the care. Uncovered species fall back to the model.
 ### Choose your plant-ID model — Settings → Plant identification
 Pick a **mode**:
 
-| Mode | Behaviour |
+| Mode | Behavior |
 |---|---|
 | **Local model only** | Default. Private + free. |
-| **Local, with external fallback** | Try local first; only call the external AI when local fails or can't identify. Cheapest of the two-model setups. |
+| **Local, with external fallback** | Try local first; only call the external AI when local fails or can't identify. Cheapest way to use an external model. |
 | **External model only** | Always use the external AI. |
 
 - **Local** — any OpenAI-compatible **vision** model, e.g. Ollama with
@@ -228,7 +246,7 @@ the form first, so you can paste a key and hit Test in one go:
 local: OK (qwen2.5vl:7b -> OK); xAI (Grok): OK (grok-4.3 -> OK)
 ```
 
-> Reasoning models (Gemini 2.5, Claude, grok reasoning variants) spend hidden
+> Reasoning models (Gemini 2.5, Claude, Grok reasoning variants) spend hidden
 > "thinking" tokens from the same budget, so the completion budget is 4000 — a
 > smaller cap truncates the JSON mid-answer and the identify fails even though the
 > model had the right species.
@@ -307,7 +325,7 @@ Verified on HA Container in Docker. ~50 MB RAM, <1% CPU steady state on a Pi 4 4
 
 Two layers:
 
-- **Pure-logic deep modules** — zero HA dependency, ~640 unit tests. They import
+- **Pure-logic deep modules** — zero HA dependency, ~740 unit tests. They import
   nothing from Home Assistant, so they're testable in CI without it:
   - *Watering*: `schedule`, `run_planner`, `conflict_resolver`, `moisture_gate`,
     `weather_gate`, `manual_run`, `run_guard`, `chunked_run`, `gap_insertion`,
@@ -319,6 +337,8 @@ Two layers:
   - *Map & media*: `yard_map` (georeferencing + marker re-projection),
     `image_type` (magic-byte detection)
   - *AI*: `llm_client` (provider resolution + fallback), `watering_advisor`
+  - *Setup & helpers*: `helpers` (entity-descriptor zone filtering),
+    `category_match` (zone-name → plant-category keyword matching)
 - **HA-coupled adapters**: `coordinator.py`, `config_flow.py`, `services.py`,
   `calendar.py`, `binary_sensor.py`, `ws_api.py`, `ical_view.py`,
   `health_view.py`, `__init__.py`
@@ -328,14 +348,15 @@ anything genuinely pure gets tested for real there, while HA-coupled tests
 `importorskip`. If a test needs `voluptuous`/`homeassistant` to import, the logic
 under test probably belongs in a pure module.
 
-Every release runs:
-1. `scripts/check.sh` — ruff lint + format, pytest, **CI parity** (re-runs the
+Every release runs (items 1, 2, and 5 are Checks 1, 3, and 2 of the
+[3-check protocol](CONTRIBUTING.md); the other two are extra release steps):
+1. `scripts/check.sh` (**Check 1**) — ruff lint + format, pytest, **CI parity** (re-runs the
    suite in a throwaway venv built from `requirements-dev.txt` alone, so an import
    that only resolves on the dev machine can't sneak past), manifest sanity
-2. `scripts/smoke-test.sh` — disposable HA in Docker, verifies no integration errors
+2. `scripts/smoke-test.sh` (**Check 3**) — disposable HA in Docker, verifies no integration errors
 3. Puppeteer click-tests in `dev/ui-test/` — actually exercise the panel UI in a real browser
 4. `scripts/release.sh` — tags, pushes, creates the GitHub Release (HACS reads Releases, not tags)
-5. **Check CI is green** — `gh run list` after the push. A green local script is
+5. **Check CI is green** (**Check 2**) — `gh run list` after the push. A green local script is
    not a green CI.
 
 See [`docs/PRD.md`](docs/PRD.md) for the original v1.0 spec, [`docs/ADRs/`](docs/ADRs/) for design decisions, and [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full pre-push protocol.

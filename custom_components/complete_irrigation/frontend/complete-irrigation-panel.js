@@ -72,7 +72,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.43.2";
+  const PANEL_VERSION = "v1.44.0";
   // v1.41 — external plant-ID providers (mirrors llm_client.PROVIDERS). URL is
   // auto-filled when a provider is picked; model is an editable hint. All speak
   // the same OpenAI /v1/chat/completions shape, so one settings form covers them.
@@ -854,6 +854,12 @@
           return this._deletePlant(node.dataset.plantId, node.dataset.plantName);
         if (action === "apply-eto") return this._applyEto();
         if (action === "setup-yard-map") return this._setupYardMap();
+        if (action === "map-pan")
+          return this._panYardMap(
+            parseFloat(node.dataset.dx) || 0,
+            parseFloat(node.dataset.dy) || 0
+          );
+        if (action === "map-recenter") return this._recenterYardMap();
         if (action === "place-plant") return this._placePlant(node.dataset.plantId);
         if (action === "toggle-theme") return this._cycleTheme();
         if (action === "open-banner-settings") {
@@ -3008,18 +3014,32 @@
       }
     }
 
-    async _setupYardMap(spanM) {
+    async _setupYardMap(spanM, lat, lon) {
       // v1.30 — fetch + cache the aerial backdrop (centered on the HA location).
       // v1.43 — spanM zooms. When it's omitted (plain "Refresh aerial") KEEP the
       // current span: sending {} would fall back to the service default and
       // silently undo the user's zoom.
+      // v1.44 — lat/lon re-centre (panning). When omitted, keep the current
+      // centre for the same reason — a refresh must not snap the view back to
+      // the HA location after the user panned. Markers are re-projected
+      // server-side, so plants keep their true ground position.
       if (this._mapBusy) return;
-      const cur = Number(this._yardMap?.span_m);
+      const m = this._yardMap || {};
+      const cur = Number(m.span_m);
       const span = Number.isFinite(spanM) ? spanM : Number.isFinite(cur) ? cur : null;
+      const curLat = Number(m.center_lat);
+      const curLon = Number(m.center_lon);
+      const useLat = Number.isFinite(lat) ? lat : Number.isFinite(curLat) ? curLat : null;
+      const useLon = Number.isFinite(lon) ? lon : Number.isFinite(curLon) ? curLon : null;
       this._mapBusy = true;
       this._renderNow();
       try {
-        const data = span ? { span_m: span } : {};
+        const data = {};
+        if (span) data.span_m = span;
+        if (useLat != null && useLon != null) {
+          data.latitude = useLat;
+          data.longitude = useLon;
+        }
         await this._hass.callService("complete_irrigation", "set_yard_map", data);
       } catch (err) {
         alert("Failed to fetch the aerial image: " + (err?.message || err));
@@ -3061,6 +3081,40 @@
       } catch (_e) {
         /* not all targets support capture; window listeners cover it */
       }
+    }
+
+    _panYardMap(dxFrac, dyFrac) {
+      // v1.44 — shift the view by a fraction of the current span. dx grows EAST,
+      // dy grows NORTH. Ground metres -> degrees: latitude is ~111320 m/degree;
+      // longitude degrees shrink by cos(latitude).
+      const m = this._yardMap;
+      if (!m || this._mapBusy) return;
+      const span = Number(m.span_m) || 60;
+      const lat0 = Number(m.center_lat);
+      const lon0 = Number(m.center_lon);
+      if (!Number.isFinite(lat0) || !Number.isFinite(lon0)) return;
+      const dLat = (dyFrac * span) / 111320;
+      const dLon =
+        (dxFrac * span) / (111320 * Math.max(Math.cos((lat0 * Math.PI) / 180), 1e-6));
+      this._setupYardMap(span, lat0 + dLat, lon0 + dLon);
+    }
+
+    _recenterYardMap() {
+      // v1.44 — back to the HA home location (undoes panning), keeping the zoom.
+      // Passing NaN lat/lon would keep the current centre, so send the service
+      // call with span only — the backend defaults the centre to hass.config.
+      const m = this._yardMap;
+      if (!m || this._mapBusy) return;
+      const span = Number(m.span_m) || 60;
+      this._mapBusy = true;
+      this._renderNow();
+      this._hass
+        .callService("complete_irrigation", "set_yard_map", { span_m: span })
+        .catch((err) => alert("Failed to re-centre the map: " + (err?.message || err)))
+        .finally(async () => {
+          this._mapBusy = false;
+          await this._fetchYard();
+        });
     }
 
     _onMapPointerMove(e) {
@@ -6331,6 +6385,15 @@
         `<div class="yard-map-wrap" style="aspect-ratio:${m.width} / ${m.height}">` +
         `<img class="yard-map-img" src="${escapeAttr(m.image_path)}" alt="Aerial view of the yard" draggable="false" />` +
         markers +
+        // v1.44 — pan controls: shift the view by 30% of the span per tap. The
+        // backend re-projects markers, so plants keep their ground position.
+        (this._mapBusy
+          ? ""
+          : `<button class="map-pan map-pan-n" data-action="map-pan" data-dx="0" data-dy="0.3" title="Pan north">▲</button>` +
+            `<button class="map-pan map-pan-s" data-action="map-pan" data-dx="0" data-dy="-0.3" title="Pan south">▼</button>` +
+            `<button class="map-pan map-pan-w" data-action="map-pan" data-dx="-0.3" data-dy="0" title="Pan west">◀</button>` +
+            `<button class="map-pan map-pan-e" data-action="map-pan" data-dx="0.3" data-dy="0" title="Pan east">▶</button>` +
+            `<button class="map-pan map-pan-home" data-action="map-recenter" title="Re-centre on your Home Assistant location">⌂</button>`) +
         `</div>` +
         (chips
           ? `<div class="yard-map-unplaced"><span class="muted">Tap to place:</span> ${chips}</div>`
@@ -8019,6 +8082,15 @@
         `.map-zoom select{font-size:13px;padding:4px 6px}` +
         `.yard-map-wrap{position:relative;width:100%;border-radius:8px;overflow:hidden;background:#1b1b1b;touch-action:none;user-select:none}` +
         `.yard-map-img{display:block;width:100%;height:100%;object-fit:cover;pointer-events:none}` +
+        // v1.44 — pan chevrons on the map edges + home in the corner. 44px hit
+        // targets for touch; semi-transparent so the aerial stays readable.
+        `.map-pan{position:absolute;z-index:5;width:34px;height:34px;min-width:34px;padding:0;border:none;border-radius:8px;background:rgba(0,0,0,0.45);color:#fff;font-size:15px;line-height:34px;text-align:center;cursor:pointer;touch-action:manipulation}` +
+        `.map-pan:hover{background:rgba(0,0,0,0.7)}` +
+        `.map-pan-n{top:8px;left:50%;transform:translateX(-50%)}` +
+        `.map-pan-s{bottom:8px;left:50%;transform:translateX(-50%)}` +
+        `.map-pan-w{left:8px;top:50%;transform:translateY(-50%)}` +
+        `.map-pan-e{right:8px;top:50%;transform:translateY(-50%)}` +
+        `.map-pan-home{top:8px;right:8px;font-size:17px}` +
         `.yard-map-marker{position:absolute;transform:translate(-50%,-50%);background:none;border:none;padding:0;cursor:grab;display:flex;flex-direction:column;align-items:center;gap:2px;z-index:2}` +
         `.yard-map-marker.dragging{cursor:grabbing;z-index:5}` +
         `.yard-map-dot{width:16px;height:16px;border-radius:50%;background:#e53935;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.5)}` +

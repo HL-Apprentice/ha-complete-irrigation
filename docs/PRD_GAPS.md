@@ -1,8 +1,13 @@
 # PRD Gap Tracker
 
-Live tracker of every numbered user story in `docs/PRD.md` that is NOT yet fully implemented. Reviewed against shipped code in v1.7.0 (see audit run on 2026-05-21). The PRD itself is the historical spec; this file is the working "what's left" punch list so ideas aren't lost.
+> **HISTORICAL: last audited at v1.10.0 (2026-05-22); not updated since — do not
+> treat the open-gaps list or the Phase-2 exclusions below as current.** Several
+> declared-Phase-2 items have since shipped (ET-based runtime adjustment:
+> `et_calc.py` + `pyeto/`; anomaly detection: `watering_diagnosis.py`; plant
+> vision health: `vision_health.py`). See the README and CHANGELOG for current
+> behavior; re-audit against the current release before reusing this list.
 
-Update this file whenever a gap closes (move it to the changelog at the bottom) or new gaps are discovered.
+Gap tracker (frozen) of every numbered user story in `docs/PRD.md` that was NOT yet fully implemented as of the last audit. Reviewed against shipped code in v1.7.0 (see audit run on 2026-05-21). The PRD itself is the historical spec; this file was the working "what's left" punch list so ideas weren't lost.
 
 ---
 
