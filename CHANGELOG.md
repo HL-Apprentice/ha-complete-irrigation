@@ -4,6 +4,25 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.43.2 — 2026-07-16 — patch (docs)
+
+**Everything is documented now.** Five services were registered in code but
+missing from `services.yaml`, so they had **no description or field hints in
+Developer Tools → Actions** — effectively undiscoverable: `start_establishment`,
+`duplicate_plant`, `research_plant_species`, `propose_watering_advice`,
+`dismiss_watering_advice`. All added with full field docs (39/39 services now
+documented). Also documented the `map_export_url_template` config field.
+
+**README** brought current after ~a dozen releases: a proper **Yard & plants**
+section (add/identify/duplicate/photos, drip sizing, the zoomable map + custom
+aerial source, care tasks); the **Plant identification & AI** section rewritten
+for the local + external (Claude/Grok/Gemini) model picker, curated-care-first
+design, key safety, and the reasoning-model token budget; the **services table**
+expanded from 14 to all 39, grouped; and the **Architecture** section refreshed
+with the current pure-module list and the CI-parity discipline.
+
+No behaviour change — descriptions and docs only.
+
 ## v1.43.1 — 2026-07-16 — patch
 
 **Fix red CI.** The test suite had been failing on GitHub since v1.41.0 while
