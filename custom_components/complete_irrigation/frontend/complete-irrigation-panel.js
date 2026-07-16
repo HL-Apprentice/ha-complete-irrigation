@@ -72,7 +72,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.46.0";
+  const PANEL_VERSION = "v1.47.0";
   // v1.41 — external plant-ID providers (mirrors llm_client.PROVIDERS). URL is
   // auto-filled when a provider is picked; model is an editable hint. All speak
   // the same OpenAI /v1/chat/completions shape, so one settings form covers them.
@@ -434,6 +434,9 @@
       this._mapBusy = false; // v1.30 — set_yard_map fetch in flight
       this._mapSourceDraft = null; // v1.42 — aerial URL-template edit draft; null = mirror config
       this._mapSourceSaved = false; // v1.42 — transient "✓ Saved" label
+      this._measureMode = false; // v1.47 — draw-a-box canopy measure mode
+      this._canopyBox = null; // v1.47 — in-progress drag box {rect,x0,y0,x1,y1}
+      this._canopyResult = null; // v1.47 — finalized {sqft,x0,y0,x1,y1,plantId}
       this._yardLoaded = false;
       this._plantEditor = null; // null = form hidden; object = add/edit draft
       // v1.35 — light surveys + care tasks + watering diagnosis state.
@@ -862,6 +865,8 @@
             parseFloat(node.dataset.dy) || 0
           );
         if (action === "map-recenter") return this._recenterYardMap();
+        if (action === "toggle-measure") return this._toggleMeasure();
+        if (action === "apply-canopy") return this._applyCanopy();
         if (action === "place-plant") return this._placePlant(node.dataset.plantId);
         if (action === "toggle-theme") return this._cycleTheme();
         if (action === "open-banner-settings") {
@@ -1355,6 +1360,11 @@
       if (t.dataset?.action === "map-span-change") {
         const span = parseFloat(t.value);
         if (Number.isFinite(span)) this._setupYardMap(span);
+        return;
+      }
+      // v1.47 — pick which plant a measured canopy applies to.
+      if (t.dataset?.action === "canopy-plant") {
+        if (this._canopyResult) this._canopyResult.plantId = t.value;
         return;
       }
       // v1.41 — plant-ID mode / provider selects re-render (reveal external
@@ -3135,6 +3145,24 @@
     }
 
     _onMapPointerDown(e) {
+      // v1.47 — canopy measure mode: drag a box; area is computed on release.
+      if (this._measureMode) {
+        const wrap = e.target?.closest?.(".yard-map-wrap");
+        if (!wrap) return;
+        e.preventDefault();
+        const rect = wrap.getBoundingClientRect();
+        const x = (e.clientX - rect.left) / rect.width;
+        const y = (e.clientY - rect.top) / rect.height;
+        this._canopyBox = { rect, x0: x, y0: y, x1: x, y1: y };
+        this._canopyResult = null;
+        try {
+          wrap.setPointerCapture?.(e.pointerId);
+        } catch (_e) {
+          /* window listeners cover it */
+        }
+        this._drawCanopyBox();
+        return;
+      }
       // v1.30 — begin dragging a plant marker. We mutate the live element during
       // the drag (no re-render) and persist on release.
       const marker = e.target?.closest?.('[data-action="map-marker"]');
@@ -3187,6 +3215,13 @@
     }
 
     _onMapPointerMove(e) {
+      const b = this._canopyBox;
+      if (b) {
+        b.x1 = Math.min(1, Math.max(0, (e.clientX - b.rect.left) / b.rect.width));
+        b.y1 = Math.min(1, Math.max(0, (e.clientY - b.rect.top) / b.rect.height));
+        this._drawCanopyBox();
+        return;
+      }
       const d = this._mapDrag;
       if (!d) return;
       const x = Math.min(1, Math.max(0, (e.clientX - d.rect.left) / d.rect.width));
@@ -3198,6 +3233,29 @@
     }
 
     async _onMapPointerUp() {
+      // v1.47 — finalize a canopy-measure box: compute ft² from the map's span.
+      const b = this._canopyBox;
+      if (b) {
+        this._canopyBox = null;
+        const dx = Math.abs(b.x1 - b.x0);
+        const dy = Math.abs(b.y1 - b.y0);
+        if (dx < 0.01 || dy < 0.01) {
+          this._renderNow(); // too small — clear the stray overlay
+          return;
+        }
+        const span = Number(this._yardMap?.span_m) || 60;
+        const sqft = Math.round(((Math.PI / 4) * (dx * span) * (dy * span) * 10.7639) * 10) / 10;
+        this._canopyResult = {
+          sqft,
+          x0: Math.min(b.x0, b.x1),
+          y0: Math.min(b.y0, b.y1),
+          x1: Math.max(b.x0, b.x1),
+          y1: Math.max(b.y0, b.y1),
+          plantId: "",
+        };
+        this._renderNow();
+        return;
+      }
       const d = this._mapDrag;
       this._mapDrag = null;
       if (!d) return;
@@ -3213,6 +3271,62 @@
       } catch (err) {
         alert("Failed to save marker position: " + (err?.message || err));
         await this._fetchYard();
+      }
+    }
+
+    _toggleMeasure() {
+      // v1.47 — enter/leave canopy-measure mode.
+      this._measureMode = !this._measureMode;
+      this._canopyBox = null;
+      this._canopyResult = null;
+      this._renderNow();
+    }
+
+    _drawCanopyBox() {
+      // Imperative overlay during the drag (no re-render, so it stays smooth).
+      const b = this._canopyBox;
+      const wrap = this.shadowRoot?.querySelector(".yard-map-wrap");
+      if (!b || !wrap) return;
+      let box = wrap.querySelector(".canopy-box");
+      if (!box) {
+        box = document.createElement("div");
+        box.className = "canopy-box";
+        wrap.appendChild(box);
+      }
+      const l = Math.min(b.x0, b.x1) * 100;
+      const t = Math.min(b.y0, b.y1) * 100;
+      const w = Math.abs(b.x1 - b.x0) * 100;
+      const h = Math.abs(b.y1 - b.y0) * 100;
+      box.style.cssText =
+        `left:${l}%;top:${t}%;width:${w}%;height:${h}%;` +
+        // live readout of the ground area
+        (() => {
+          const span = Number(this._yardMap?.span_m) || 60;
+          const dx = Math.abs(b.x1 - b.x0);
+          const dy = Math.abs(b.y1 - b.y0);
+          const sqft = Math.round((Math.PI / 4) * (dx * span) * (dy * span) * 10.7639);
+          box.dataset.area = sqft + " sq ft";
+          return "";
+        })();
+    }
+
+    async _applyCanopy() {
+      const r = this._canopyResult;
+      const plantId = r && r.plantId;
+      if (!r || !plantId) {
+        alert("Pick which plant this canopy is for.");
+        return;
+      }
+      try {
+        await this._hass.callService("complete_irrigation", "update_plant", {
+          plant_id: plantId,
+          canopy_area_sqft: r.sqft,
+        });
+        this._measureMode = false;
+        this._canopyResult = null;
+        await this._fetchYard();
+      } catch (err) {
+        alert("Failed to set canopy: " + (err?.message || err));
       }
     }
 
@@ -6447,16 +6561,49 @@
             )}">+ ${escapeHtml(p.name)}</button>`
         )
         .join("");
+      // v1.47 — canopy measure: draw a box on the aerial -> area in ft², no LLM.
+      const measureBtn = this._mapBusy
+        ? ""
+        : `<button class="btn btn-small${
+            this._measureMode ? " btn-primary" : ""
+          }" data-action="toggle-measure" title="Draw a box around a plant's canopy to measure its footprint from the aerial">${
+            this._measureMode ? "✕ Done" : "📐 Measure canopy"
+          }</button>`;
+      const r = this._canopyResult;
+      const canopyOverlay = r
+        ? `<div class="canopy-box canopy-box-final" data-area="${r.sqft} sq ft" style="left:${(
+            r.x0 * 100
+          ).toFixed(2)}%;top:${(r.y0 * 100).toFixed(2)}%;width:${((r.x1 - r.x0) * 100).toFixed(
+            2
+          )}%;height:${((r.y1 - r.y0) * 100).toFixed(2)}%"></div>`
+        : "";
+      const measurePanel = !this._measureMode
+        ? ""
+        : r
+        ? `<div class="canopy-panel"><strong>Canopy ≈ ${r.sqft} sq ft.</strong> Apply to ` +
+          `<select data-action="canopy-plant"><option value="">— pick a plant —</option>` +
+          plants
+            .map(
+              (p) =>
+                `<option value="${escapeAttr(p.id)}"${
+                  r.plantId === p.id ? " selected" : ""
+                }>${escapeHtml(p.name)}</option>`
+            )
+            .join("") +
+          `</select> <button class="btn btn-small btn-primary" data-action="apply-canopy">Set canopy</button></div>`
+        : `<div class="canopy-panel muted">Drag a box around a plant's canopy on the aerial to measure it. Canopies are read as an ellipse fit to the box.</div>`;
       return (
         `<div class="card yard-map-card">` +
         `<div class="yard-map-head"><strong>🗺️ Yard map</strong>` +
-        `<span class="yard-map-actions">${zoomSel}${setupBtn}</span></div>` +
-        `<div class="yard-map-wrap" style="aspect-ratio:${m.width} / ${m.height}">` +
+        `<span class="yard-map-actions">${zoomSel}${measureBtn}${setupBtn}</span></div>` +
+        `<div class="yard-map-wrap${
+          this._measureMode ? " measuring" : ""
+        }" style="aspect-ratio:${m.width} / ${m.height}">` +
         `<img class="yard-map-img" src="${escapeAttr(m.image_path)}" alt="Aerial view of the yard" draggable="false" />` +
         markers +
-        // v1.44 — pan controls: shift the view by 30% of the span per tap. The
-        // backend re-projects markers, so plants keep their ground position.
-        (this._mapBusy
+        canopyOverlay +
+        // v1.44 — pan controls (hidden while measuring so a drag draws a box).
+        (this._mapBusy || this._measureMode
           ? ""
           : `<button class="map-pan map-pan-n" data-action="map-pan" data-dx="0" data-dy="0.3" title="Pan north">▲</button>` +
             `<button class="map-pan map-pan-s" data-action="map-pan" data-dx="0" data-dy="-0.3" title="Pan south">▼</button>` +
@@ -6464,6 +6611,7 @@
             `<button class="map-pan map-pan-e" data-action="map-pan" data-dx="0.3" data-dy="0" title="Pan east">▶</button>` +
             `<button class="map-pan map-pan-home" data-action="map-recenter" title="Re-centre on your Home Assistant location">⌂</button>`) +
         `</div>` +
+        measurePanel +
         (chips
           ? `<div class="yard-map-unplaced"><span class="muted">Tap to place:</span> ${chips}</div>`
           : `<p class="muted yard-map-hint">Drag a marker to reposition it.</p>`) +
@@ -8174,6 +8322,13 @@
         `.map-pan-w{left:8px;top:50%;transform:translateY(-50%)}` +
         `.map-pan-e{right:8px;top:50%;transform:translateY(-50%)}` +
         `.map-pan-home{top:8px;right:8px;font-size:17px}` +
+        // v1.47 — canopy measure: crosshair, drawn box + live area label.
+        `.yard-map-wrap.measuring{cursor:crosshair}` +
+        `.yard-map-wrap.measuring .yard-map-marker{pointer-events:none;opacity:0.6}` +
+        `.canopy-box{position:absolute;z-index:6;border:2px dashed #ffd54f;background:rgba(255,213,79,0.18);pointer-events:none;box-sizing:border-box}` +
+        `.canopy-box::after{content:attr(data-area);position:absolute;left:0;bottom:100%;margin-bottom:2px;background:rgba(0,0,0,0.7);color:#fff;font-size:11px;padding:1px 5px;border-radius:4px;white-space:nowrap}` +
+        `.canopy-panel{margin-top:8px;font-size:13px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}` +
+        `.canopy-panel select{font-size:13px;padding:4px 6px}` +
         `.yard-map-marker{position:absolute;transform:translate(-50%,-50%);background:none;border:none;padding:0;cursor:grab;display:flex;flex-direction:column;align-items:center;gap:2px;z-index:2}` +
         `.yard-map-marker.dragging{cursor:grabbing;z-index:5}` +
         `.yard-map-dot{width:16px;height:16px;border-radius:50%;background:#e53935;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.5)}` +

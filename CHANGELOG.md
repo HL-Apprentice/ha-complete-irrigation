@@ -4,6 +4,22 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.47.0 — 2026-07-16 — minor
+
+**Measure a plant's canopy right off the aerial — no LLM, no reference object.**
+Because the yard map is geo-referenced (its ground span is known in metres), you
+can now measure canopy from the top-down image. On the Yard map press **📐
+Measure canopy**, drag a box around a plant's canopy, and the footprint in square
+feet appears live on the box (read as an ellipse fit to the box, since canopies
+are round-ish). Pick the plant from the dropdown and hit **Set canopy** — it fills
+that plant's canopy area, which is what drives its water need.
+
+This is the honest no-LLM answer to "measure canopy from the picture": a single
+close-up phone photo can't give real size without a reference object or depth
+sensor, but the top-down aerial *can*, because the map already knows metres per
+pixel. Markers are frozen and pan controls hidden while measuring so a drag draws
+a box instead. The area math is a tested pure helper (canopy_sqft_from_box).
+
 ## v1.46.0 — 2026-07-16 — minor
 
 **Verify a plant name — free, no API key, no LLM.** The plant editor has a new
