@@ -7,6 +7,7 @@ from custom_components.complete_irrigation.yard_map import (
     esri_export_url,
     export_url,
     format_export_template,
+    normalize_export_template,
     valid_export_template,
 )
 
@@ -104,3 +105,57 @@ def test_export_url_uses_template_when_set():
 
 def test_export_url_blank_template_falls_back_to_esri():
     assert "arcgisonline.com" in export_url(BBOX, 200, 167, "   ")
+
+
+# ── percent-encoded braces (v1.42.1) ────────────────────────────────
+# `{` / `}` are illegal in a URL (RFC 3986), so a template copied from a browser
+# address bar or a linkified URL arrives with them encoded. Verbatim capture of
+# the real-world failure that motivated this:
+ENCODED = (
+    "https://gis.example.gov/arcgis/rest/services/Imagery/Aerials2026/MapServer/export"
+    "?bbox=%7Bbbox%7D&bboxSR=4326&imageSR=4326&size=%7Bwidth%7D,%7Bheight%7D"
+    "&format=jpg&f=image"
+)
+
+
+def test_percent_encoded_braces_are_accepted():
+    assert valid_export_template(ENCODED)
+
+
+def test_percent_encoded_braces_normalize_to_real_tokens():
+    assert normalize_export_template(ENCODED) == MC
+
+
+def test_lowercase_percent_encoding_also_accepted():
+    lower = ENCODED.replace("%7B", "%7b").replace("%7D", "%7d")
+    assert valid_export_template(lower)
+    assert normalize_export_template(lower) == MC
+
+
+def test_encoded_template_substitutes_correctly():
+    url = format_export_template(ENCODED, BBOX, 1536, 1285)
+    assert "bbox=-111.50000000,33.20000000,-111.49935567,33.20053899" in url
+    assert "size=1536,1285" in url
+    assert "%7B" not in url and "{" not in url
+
+
+def test_encoded_and_raw_produce_identical_urls():
+    assert format_export_template(ENCODED, BBOX, 800, 600) == format_export_template(
+        MC, BBOX, 800, 600
+    )
+
+
+def test_normalize_does_not_blanket_urldecode():
+    # Only the braces are decoded — a %26 that is meant to stay DATA must survive,
+    # or a blanket unquote would turn it into a parameter separator.
+    t = "https://x/y?bbox={bbox}&size={width},{height}&q=a%26b%20c"
+    assert normalize_export_template(t) == t
+    assert "%26" in format_export_template(t, BBOX, 1, 1)
+
+
+def test_normalize_trims_and_handles_non_string():
+    assert normalize_export_template("  https://x?bbox={bbox}&s={width},{height}  ").startswith(
+        "https://"
+    )
+    assert normalize_export_template(None) == ""
+    assert normalize_export_template(42) == ""

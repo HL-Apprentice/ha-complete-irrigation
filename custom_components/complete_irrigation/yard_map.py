@@ -133,11 +133,34 @@ def esri_export_url(bbox: Bbox, width: int, height: int) -> str:
 _TEMPLATE_TOKENS = ("{bbox}", "{west}", "{south}", "{east}", "{north}", "{width}", "{height}")
 
 
+def normalize_export_template(template: str) -> str:
+    """Undo percent-encoding of the TOKEN BRACES only, and trim.
+
+    `{` and `}` are not legal URL characters (RFC 3986), so anything that treats
+    the template as a real URL — a browser address bar, a linkified URL in a chat
+    or doc, many "copy link" buttons — hands back `%7Bbbox%7D` instead of
+    `{bbox}`. That is the overwhelmingly common way a user obtains this string, so
+    accept it rather than rejecting a template that is correct in spirit.
+
+    Deliberately narrow: only %7B/%7D are decoded, NOT the whole URL. A blanket
+    unquote would corrupt legitimately-encoded query values (e.g. a %26 that is
+    meant to stay data, not become a parameter separator).
+    """
+    if not isinstance(template, str):
+        return ""
+    out = template.strip()
+    for enc in ("%7B", "%7b"):
+        out = out.replace(enc, "{")
+    for enc in ("%7D", "%7d"):
+        out = out.replace(enc, "}")
+    return out
+
+
 def format_export_template(template: str, bbox: Bbox, width: int, height: int) -> str:
     """Fill an export URL template. Supported tokens: {bbox} (w,s,e,n), the four
     edges individually ({west}/{south}/{east}/{north}), {width}, {height}."""
     w, s, e, n = bbox.as_tuple()
-    out = template
+    out = normalize_export_template(template)
     for token, value in (
         ("{bbox}", f"{w:.8f},{s:.8f},{e:.8f},{n:.8f}"),
         ("{west}", f"{w:.8f}"),
@@ -157,7 +180,9 @@ def valid_export_template(template: Any) -> bool:
     silently fetch the wrong ground area — reject it at the config boundary."""
     if not isinstance(template, str) or not template.strip():
         return False
-    t = template.strip()
+    # Accept percent-encoded braces — a template copied from a browser/linkified
+    # URL arrives as %7Bbbox%7D and is correct in every way that matters.
+    t = normalize_export_template(template)
     if not t.startswith(("http://", "https://")):
         return False
     has_bbox = "{bbox}" in t or all(k in t for k in ("{west}", "{south}", "{east}", "{north}"))
