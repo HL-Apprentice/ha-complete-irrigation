@@ -2028,6 +2028,7 @@ class ScheduleCoordinator:
             "eto_auto_value": self._auto_eto_in_week,
             "eto_auto_at": self._auto_eto_at.isoformat() if self._auto_eto_at else None,
             "weather_entity": self._resolve_weather_entity(),
+            "eto_provider": str(self._config.get("eto_provider") or "ha"),  # v1.49
         }
 
     def _zone_moisture_band(self, zone_id: str) -> str:
@@ -2107,6 +2108,11 @@ class ScheduleCoordinator:
         guess. Wired to a daily 03:00 timer + an immediate call when toggled on."""
         if not self._config.get("eto_auto"):
             return
+        # v1.49 — Open-Meteo provider: keyless, uses the HA lat/lon, and returns
+        # FAO ET0 directly — no Home Assistant weather entity required.
+        if str(self._config.get("eto_provider") or "ha") == "open_meteo":
+            await self._refresh_auto_eto_open_meteo()
+            return
         entity = self._resolve_weather_entity()
         if not entity:
             _LOGGER.debug("auto-ETo: no weather entity available")
@@ -2177,6 +2183,61 @@ class ScheduleCoordinator:
             self._auto_eto_in_week,
             entity,
             len(forecast),
+        )
+
+    async def _refresh_auto_eto_open_meteo(self) -> None:
+        """v1.49 — auto-ETo from Open-Meteo (keyless). Uses the HA lat/lon, reads
+        FAO ET0 directly, and applies the SAME sane-range guard as the weather-
+        entity path — a bad value leaves the previous / manual figure untouched."""
+        import json as _json
+
+        import aiohttp
+        from homeassistant.helpers.aiohttp_client import async_get_clientsession
+        from homeassistant.util import dt as dt_util
+
+        from .open_meteo import open_meteo_url, parse_open_meteo
+
+        lat = self._hass.config.latitude
+        lon = self._hass.config.longitude
+        if lat is None or lon is None:
+            _LOGGER.debug("auto-ETo (Open-Meteo): no Home Assistant location set")
+            return
+        session = async_get_clientsession(self._hass)
+        try:
+            async with session.get(
+                open_meteo_url(float(lat), float(lon), self._hass.config.time_zone),
+                timeout=aiohttp.ClientTimeout(total=20),
+            ) as resp:
+                if resp.status != 200:
+                    _LOGGER.warning("auto-ETo (Open-Meteo): HTTP %s", resp.status)
+                    return
+                raw = await resp.content.read(200_000)
+        except Exception as err:
+            _LOGGER.warning("auto-ETo (Open-Meteo): fetch failed: %s", err)
+            return
+        try:
+            data = parse_open_meteo(_json.loads(raw))
+        except ValueError:
+            _LOGGER.warning("auto-ETo (Open-Meteo): response was not valid JSON")
+            return
+        now_local = dt_util.now()
+        if data["forecast_high_f"] is not None:
+            self._forecast_high_f = data["forecast_high_f"]
+            self._forecast_high_at = now_local
+        eto = data["eto_week_in"]
+        if eto is None or not (0 < eto <= SANE_ETO_MAX):
+            _LOGGER.warning(
+                "auto-ETo (Open-Meteo): %s in/week out of sane range (0, %.0f] — keeping fallback",
+                eto,
+                SANE_ETO_MAX,
+            )
+            return
+        self._auto_eto_in_week = round(eto, 3)
+        self._auto_eto_at = now_local
+        _LOGGER.info(
+            "auto-ETo: %.2f in/week from Open-Meteo (%d-day forecast)",
+            self._auto_eto_in_week,
+            data["days"],
         )
 
     # ── Restart fail-over (v1.30) ─────────────────────────────────

@@ -72,7 +72,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.48.0";
+  const PANEL_VERSION = "v1.49.0";
   // v1.41 — external plant-ID providers (mirrors llm_client.PROVIDERS). URL is
   // auto-filled when a provider is picked; model is an editable hint. All speak
   // the same OpenAI /v1/chat/completions shape, so one settings form covers them.
@@ -1373,6 +1373,10 @@
       if (t.dataset?.action === "canopy-plant") {
         if (this._canopyResult) this._canopyResult.plantId = t.value;
         return;
+      }
+      // v1.49 — switch the auto-ET source (HA weather entity <-> Open-Meteo).
+      if (t.dataset?.action === "eto-provider-change") {
+        return this._setEtoProvider(t.value);
       }
       // v1.41 — plant-ID mode / provider selects re-render (reveal external
       // block, auto-fill the provider's endpoint URL + model).
@@ -3096,6 +3100,21 @@
         alert("Failed to toggle auto ET: " + (err?.message || err));
       } finally {
         this._pendingAutoEto = null;
+        await this._fetchYard();
+      }
+    }
+
+    async _setEtoProvider(provider) {
+      // v1.49 — switch the auto-ET source. The backend re-fetches immediately on
+      // an eto_provider change, so the refetch here sees the fresh figure.
+      if (provider !== "ha" && provider !== "open_meteo") return;
+      try {
+        await this._hass.callService("complete_irrigation", "set_weather_config", {
+          eto_provider: provider,
+        });
+      } catch (err) {
+        alert("Failed to switch the ET source: " + (err?.message || err));
+      } finally {
         await this._fetchYard();
       }
     }
@@ -6513,7 +6532,13 @@
         const d = new Date(st.eto_auto_at);
         if (!isNaN(d)) autoAtTxt = d.toLocaleString();
       }
-      const wEnt = st.weather_entity ? escapeHtml(st.weather_entity) : "your weather entity";
+      const provider = st.eto_provider || "ha"; // v1.49
+      const wEnt =
+        provider === "open_meteo"
+          ? "Open-Meteo"
+          : st.weather_entity
+          ? escapeHtml(st.weather_entity)
+          : "your weather entity";
       const autoNote = autoOn
         ? `<p class="muted yard-eto-auto">` +
           (usingAuto
@@ -6538,6 +6563,21 @@
         `<label class="enabled-check"><input type="checkbox" data-action="toggle-auto-eto"${
           autoOn ? " checked" : ""
         } /> Auto reference ET from weather forecast (FAO-56)</label>` +
+        // v1.49 — ET source: an HA weather entity, or keyless Open-Meteo.
+        (autoOn
+          ? `<label style="margin-top:6px">ET source</label>` +
+            `<select data-action="eto-provider-change">` +
+            `<option value="ha"${
+              provider === "ha" ? " selected" : ""
+            }>Home Assistant weather entity</option>` +
+            `<option value="open_meteo"${
+              provider === "open_meteo" ? " selected" : ""
+            }>Open-Meteo — keyless, no setup</option>` +
+            `</select>` +
+            (provider === "open_meteo"
+              ? `<p class="muted" style="font-size:12px;margin-top:4px">Fetches FAO ET0 for your Home Assistant location — no weather entity or API key needed.</p>`
+              : "")
+          : "") +
         autoNote +
         `<label>${autoOn ? "Manual fallback (inches / week)" : "Reference ET (inches / week)"}</label>` +
         `<div class="yard-eto-row">` +
