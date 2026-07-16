@@ -567,6 +567,143 @@ set_general_config:
       example: "['switch.front_lawn', 'switch.back_yard', 'switch.garden']"
       selector:
         object:
+    map_export_url_template:
+      name: Yard map aerial source (URL template)
+      description: >
+        Custom aerial for the yard map. The default (blank) is Esri World Imagery,
+        which is coarse at yard scale — it won't render sharper than ~0.3 m/px, so
+        a small yard is fetched tiny and upscaled. Many county assessors / city GIS
+        offices publish much sharper orthophotos as a keyless ArcGIS export. Tokens:
+        {bbox} (or {west}/{south}/{east}/{north}) plus {width} and {height}. Also
+        editable in Settings → Yard map imagery. Blank restores Esri.
+      required: false
+      example: "https://gis.example.gov/arcgis/rest/services/Imagery/Aerials2026/MapServer/export?bbox={bbox}&bboxSR=4326&imageSR=4326&size={width},{height}&format=jpg&f=image"
+      selector:
+        text:
+
+start_establishment:
+  name: Start "new grass" establishment mode
+  description: >
+    Create a bounded, auto-expiring multi-cycle watering schedule for a freshly
+    seeded/sodded zone — short cycles several times a day, spread across a
+    12-hour daytime window, ending automatically after `days`. Also available as
+    the 🌱 button on the Zones tab.
+  fields:
+    zone_entity_id:
+      name: Zone
+      description: The zone switch that was reseeded.
+      required: true
+      selector:
+        entity:
+          domain: switch
+    cycles_per_day:
+      name: Cycles per day
+      description: How many short waterings per day (spread over a 12-hour daytime window).
+      required: false
+      default: 3
+      selector:
+        number:
+          min: 1
+          max: 8
+          step: 1
+          mode: box
+    minutes_per_cycle:
+      name: Minutes per cycle
+      description: Duration of each individual cycle.
+      required: false
+      default: 10
+      selector:
+        number:
+          min: 1
+          max: 60
+          step: 1
+          mode: box
+    days:
+      name: Days
+      description: How long establishment lasts. The schedules auto-expire after this.
+      required: false
+      default: 12
+      selector:
+        number:
+          min: 1
+          max: 60
+          step: 1
+          mode: box
+    start_hour:
+      name: Start hour
+      description: Hour of the first cycle (0-23, local time).
+      required: false
+      default: 6
+      selector:
+        number:
+          min: 0
+          max: 23
+          step: 1
+          mode: box
+
+duplicate_plant:
+  name: Duplicate a plant
+  description: >
+    Copy an existing plant — species, water-use, canopy, zone, drip setup and care
+    attributes — WITHOUT its photos, map position, or health history. Handy for a
+    row of identical shrubs. Returns the new plant's id in the response.
+  fields:
+    plant_id:
+      name: Plant
+      description: The id of the plant to copy (see the Yard tab / list_plants).
+      required: true
+      selector:
+        text:
+
+research_plant_species:
+  name: Research a species by name
+  description: >
+    Look up care details for a species you name yourself (no photo needed) and
+    apply them to the plant, keeping your species text and canopy. Checks the
+    curated low-desert care table FIRST (accurate + offline); only falls back to
+    the configured plant-ID model for species it doesn't cover.
+  fields:
+    plant_id:
+      name: Plant
+      description: The plant to apply the researched care to.
+      required: true
+      selector:
+        text:
+    species:
+      name: Species
+      description: >
+        Scientific or common name, e.g. "Leucophyllum frutescens" or "Texas Ranger".
+        Leave blank to use the species already on the plant.
+      required: false
+      example: "Leucophyllum frutescens"
+      selector:
+        text:
+
+propose_watering_advice:
+  name: Store watering-advisor proposals
+  description: >
+    ADVISORY ONLY — used by the external watering-advisor job
+    (tools/watering_advisor_job.py). Stores rail-validated proposals for display
+    in the panel's 🤖 advisor card. Nothing here changes watering: each item is
+    applied later by YOU, through the same validated services you use manually.
+  fields:
+    advice:
+      name: Advice payload
+      description: The advisor's proposal object (bounded + validated server-side).
+      required: true
+      selector:
+        object:
+    model:
+      name: Model name
+      description: Which model produced the proposals (shown on the card).
+      required: false
+      example: "qwen2.5:14b"
+      selector:
+        text:
+
+dismiss_watering_advice:
+  name: Dismiss watering advice
+  description: Clear all stored watering-advisor proposals from the panel.
 
 set_conflict_policy:
   name: Set schedule-conflict policy
