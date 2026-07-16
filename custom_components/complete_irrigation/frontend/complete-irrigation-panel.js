@@ -72,7 +72,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.41.4";
+  const PANEL_VERSION = "v1.42.0";
   // v1.41 — external plant-ID providers (mirrors llm_client.PROVIDERS). URL is
   // auto-filled when a provider is picked; model is an editable hint. All speak
   // the same OpenAI /v1/chat/completions shape, so one settings form covers them.
@@ -432,6 +432,8 @@
       this._yardMap = null; // v1.30 — {image_path, bbox, width, height, center_lat/lon, span_m, version}
       this._mapDrag = null; // v1.30 — in-flight marker drag {plantId, el, rect}
       this._mapBusy = false; // v1.30 — set_yard_map fetch in flight
+      this._mapSourceDraft = null; // v1.42 — aerial URL-template edit draft; null = mirror config
+      this._mapSourceSaved = false; // v1.42 — transient "✓ Saved" label
       this._yardLoaded = false;
       this._plantEditor = null; // null = form hidden; object = add/edit draft
       // v1.35 — light surveys + care tasks + watering diagnosis state.
@@ -898,6 +900,7 @@
         if (action === "save-vision-endpoint") return this._saveVisionEndpoint();
         if (action === "test-vision") return this._testVisionEndpoint();
         if (action === "clear-llm-key") return this._clearLlmKey();
+        if (action === "save-map-source") return this._saveMapSource();
         // v1.39 — watering advisor.
         if (action === "advice-apply")
           return this._applyAdviceItem(parseInt(node.dataset.idx, 10));
@@ -1128,6 +1131,11 @@
         // v1.37 — vision-endpoint draft. Lazily seeded from config on first
         // edit so a background re-render can't wipe unsaved typing.
         this._syncVisionField(t);
+        return;
+      }
+      if (action === "map-source-field") {
+        // v1.42 — keep the typed template alive across background re-renders.
+        this._mapSourceDraft = t.value;
         return;
       }
       if (action === "photo-file") {
@@ -3574,6 +3582,8 @@
         // v1.37/v1.41 — plant identification: local vision model + optional
         // external provider (Claude / Grok / Gemini / custom) with a mode.
         this._renderPlantIdCard(c) +
+        // v1.42 — custom aerial source for the yard map.
+        this._renderMapSourceCard(c) +
         `<section class="settings-card">` +
         `<h3 class="section-title">Calendar feed</h3>` +
         `<p class="section-hint">Subscribe from your phone's calendar app to see the next 30 days of planned runs.</p>` +
@@ -3673,6 +3683,56 @@
         `</div>` +
         `</section>`
       );
+    }
+
+    _renderMapSourceCard(c) {
+      // v1.42 — the default Esri World Imagery is coarse at yard scale; let the
+      // user point the map at a sharper keyless aerial export (e.g. a county
+      // assessor's orthophoto MapServer) via a URL template.
+      const t = (this._mapSourceDraft ?? c.map_export_url_template) || "";
+      const ph =
+        "https://…/MapServer/export?bbox={bbox}&bboxSR=4326&imageSR=4326" +
+        "&size={width},{height}&format=jpg&f=image";
+      return (
+        `<section class="settings-card">` +
+        `<h3 class="section-title">Yard map imagery</h3>` +
+        `<p class="section-hint">The map defaults to Esri World Imagery, which is coarse at yard scale — it won't render sharper than ~0.3&nbsp;m/px, so a small yard gets fetched tiny and upscaled. Many county assessors and city GIS offices publish much sharper aerials as a keyless ArcGIS export; paste that URL template here to use it instead.</p>` +
+        `<div class="weather-form" style="background:transparent;border:none;padding:0;max-width:none">` +
+        `<label>Aerial export URL template</label>` +
+        `<input name="map_export_url_template" data-action="map-source-field" type="text" value="${escapeAttr(
+          t
+        )}" placeholder="${escapeAttr(ph)}" />` +
+        `<p class="section-hint" style="margin-top:4px">Tokens: <code>{bbox}</code> (or <code>{west}</code>/<code>{south}</code>/<code>{east}</code>/<code>{north}</code>) plus <code>{width}</code> and <code>{height}</code>. Leave blank for the default Esri imagery. After saving, press <strong>Refresh aerial</strong> on the Yard tab to re-fetch.</p>` +
+        `<div class="modal-actions">` +
+        `<button type="button" class="btn btn-primary" data-action="save-map-source">${
+          this._mapSourceSaved ? "✓ Saved" : "Save"
+        }</button>` +
+        `</div>` +
+        `</div>` +
+        `</section>`
+      );
+    }
+
+    async _saveMapSource() {
+      // The backend validates the template and RAISES on a bad one, so a typo
+      // surfaces here instead of silently fetching the wrong ground area.
+      const root = this.shadowRoot;
+      const v = (root?.querySelector('[name="map_export_url_template"]')?.value || "").trim();
+      try {
+        await this._hass.callService("complete_irrigation", "set_general_config", {
+          map_export_url_template: v,
+        });
+        this._mapSourceDraft = null; // re-hydrate from saved config
+        await this._fetchConfig();
+        this._mapSourceSaved = true;
+        this._renderNow();
+        setTimeout(() => {
+          this._mapSourceSaved = false;
+          this._renderNow();
+        }, 2500);
+      } catch (err) {
+        alert("Failed to save the map imagery source: " + (err?.message || err));
+      }
     }
 
     _seedVisionDraft() {
