@@ -4,6 +4,25 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.48.0 — 2026-07-16 — minor
+
+**The yard map now pans and zooms like a real map.** The old edge chevrons
+jumped a big fraction of the view per tap (often onto the neighbour's house) --
+useless for fine placement. Replaced with a proper slippy-map interaction:
+
+- **Drag the aerial** to pan in tiny, precise increments.
+- **Scroll, pinch, or the +/- buttons** to zoom right in on a plant.
+- **Markers move and scale with the view**, so you can drop each one exactly on
+  its canopy even when zoomed in -- placement maps back through the transform, so
+  the stored position stays accurate at any zoom.
+- **Reset (⤢)** returns to fit.
+
+This is a purely client-side view over the already-fetched aerial -- no server
+round-trip per pan/zoom, so it's smooth. The separate *Zoom* dropdown still sets
+the base image's ground coverage (how much yard is fetched, and how sharp). The
+canopy-measure box and marker drag were updated to the same transform math so
+they stay accurate at any pan/zoom.
+
 ## v1.47.1 — 2026-07-16 — patch (docs)
 
 **Every external connection is now disclosed up front.** A new **Privacy &

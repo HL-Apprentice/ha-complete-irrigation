@@ -72,7 +72,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.47.1";
+  const PANEL_VERSION = "v1.48.0";
   // v1.41 — external plant-ID providers (mirrors llm_client.PROVIDERS). URL is
   // auto-filled when a provider is picked; model is an editable hint. All speak
   // the same OpenAI /v1/chat/completions shape, so one settings form covers them.
@@ -434,6 +434,11 @@
       this._mapBusy = false; // v1.30 — set_yard_map fetch in flight
       this._mapSourceDraft = null; // v1.42 — aerial URL-template edit draft; null = mirror config
       this._mapSourceSaved = false; // v1.42 — transient "✓ Saved" label
+      // v1.48 — client-side slippy-map view transform (drag to pan, scroll to
+      // zoom). Purely a view aid over the fetched aerial — the stored bbox +
+      // normalized marker coords are unchanged; screen<->norm goes through this.
+      this._mapView = { scale: 1, tx: 0, ty: 0 };
+      this._mapPan = null; // in-progress background pan {sx,sy,tx0,ty0,rect}
       this._measureMode = false; // v1.47 — draw-a-box canopy measure mode
       this._canopyBox = null; // v1.47 — in-progress drag box {rect,x0,y0,x1,y1}
       this._canopyResult = null; // v1.47 — finalized {sqft,x0,y0,x1,y1,plantId}
@@ -533,6 +538,7 @@
       this._onMapPointerDown = this._onMapPointerDown.bind(this);
       this._onMapPointerMove = this._onMapPointerMove.bind(this);
       this._onMapPointerUp = this._onMapPointerUp.bind(this);
+      this._onMapWheel = this._onMapWheel.bind(this); // v1.48 — scroll-to-zoom
 
       // v1.19.0 — scroll-position preservation across renders. _render()
       // rebuilds the whole shadow DOM via innerHTML, which resets every
@@ -633,6 +639,9 @@
       this.shadowRoot.addEventListener("pointermove", this._onMapPointerMove);
       this.shadowRoot.addEventListener("pointerup", this._onMapPointerUp);
       this.shadowRoot.addEventListener("pointercancel", this._onMapPointerUp);
+      // v1.48 — scroll-to-zoom on the yard map (non-passive so we can
+      // preventDefault the page scroll while zooming the aerial).
+      this.shadowRoot.addEventListener("wheel", this._onMapWheel, { passive: false });
       // v1.19.0 — scroll events don't bubble, but they DO run the
       // capture phase, so a capture listener on the shadow root sees
       // scrolls from every descendant (main, day-cal-grid, modals…).
@@ -653,6 +662,7 @@
       this.shadowRoot.removeEventListener("pointermove", this._onMapPointerMove);
       this.shadowRoot.removeEventListener("pointerup", this._onMapPointerUp);
       this.shadowRoot.removeEventListener("pointercancel", this._onMapPointerUp);
+      this.shadowRoot.removeEventListener("wheel", this._onMapWheel, { passive: false });
       this.shadowRoot.removeEventListener("scroll", this._onAnyScroll, true);
       this._revokePhotoAddPreview(); // free a staged photo-add object URL on teardown
       this._stopNowLineTimer();
@@ -859,12 +869,9 @@
           return this._deletePlant(node.dataset.plantId, node.dataset.plantName);
         if (action === "apply-eto") return this._applyEto();
         if (action === "setup-yard-map") return this._setupYardMap();
-        if (action === "map-pan")
-          return this._panYardMap(
-            parseFloat(node.dataset.dx) || 0,
-            parseFloat(node.dataset.dy) || 0
-          );
-        if (action === "map-recenter") return this._recenterYardMap();
+        if (action === "map-zoom-in") return this._zoomMapButton(1);
+        if (action === "map-zoom-out") return this._zoomMapButton(-1);
+        if (action === "map-reset-view") return this._resetMapView();
         if (action === "toggle-measure") return this._toggleMeasure();
         if (action === "apply-canopy") return this._applyCanopy();
         if (action === "place-plant") return this._placePlant(node.dataset.plantId);
@@ -3110,6 +3117,7 @@
       const curLon = Number(m.center_lon);
       const useLat = Number.isFinite(lat) ? lat : Number.isFinite(curLat) ? curLat : null;
       const useLon = Number.isFinite(lon) ? lon : Number.isFinite(curLon) ? curLon : null;
+      this._mapView = { scale: 1, tx: 0, ty: 0 }; // v1.48 — new base image = fresh view
       this._mapBusy = true;
       this._renderNow();
       try {
@@ -3145,15 +3153,13 @@
     }
 
     _onMapPointerDown(e) {
-      // v1.47 — canopy measure mode: drag a box; area is computed on release.
-      if (this._measureMode) {
-        const wrap = e.target?.closest?.(".yard-map-wrap");
-        if (!wrap) return;
+      const wrap = e.target?.closest?.(".yard-map-wrap");
+      // v1.47 — canopy measure mode: drag a box (area computed on release).
+      if (this._measureMode && wrap) {
         e.preventDefault();
         const rect = wrap.getBoundingClientRect();
-        const x = (e.clientX - rect.left) / rect.width;
-        const y = (e.clientY - rect.top) / rect.height;
-        this._canopyBox = { rect, x0: x, y0: y, x1: x, y1: y };
+        const n = this._screenToNorm(e.clientX, e.clientY, rect);
+        this._canopyBox = { rect, x0: n.x, y0: n.y, x1: n.x, y1: n.y };
         this._canopyResult = null;
         try {
           wrap.setPointerCapture?.(e.pointerId);
@@ -3163,76 +3169,138 @@
         this._drawCanopyBox();
         return;
       }
-      // v1.30 — begin dragging a plant marker. We mutate the live element during
-      // the drag (no re-render) and persist on release.
+      // v1.30 — drag a plant marker (mutated live, persisted on release).
       const marker = e.target?.closest?.('[data-action="map-marker"]');
-      if (!marker) return;
-      const wrap = marker.closest(".yard-map-wrap");
-      if (!wrap) return;
-      e.preventDefault();
-      const rect = wrap.getBoundingClientRect();
-      this._mapDrag = { plantId: marker.dataset.plantId, el: marker, rect, x: null, y: null };
-      marker.classList.add("dragging");
-      try {
-        marker.setPointerCapture(e.pointerId);
-      } catch (_e) {
-        /* not all targets support capture; window listeners cover it */
+      if (marker && wrap) {
+        e.preventDefault();
+        this._mapDrag = {
+          plantId: marker.dataset.plantId,
+          el: marker,
+          rect: wrap.getBoundingClientRect(),
+          x: null,
+          y: null,
+        };
+        marker.classList.add("dragging");
+        try {
+          marker.setPointerCapture(e.pointerId);
+        } catch (_e) {
+          /* window listeners cover it */
+        }
+        return;
+      }
+      // v1.48 — otherwise drag the MAP itself (fine client-side pan). Only when
+      // the press lands on the aerial layer, not a button/chip.
+      if (wrap && e.target?.closest?.(".yard-map-view")) {
+        e.preventDefault();
+        const v = this._mapView;
+        this._mapPan = { sx: e.clientX, sy: e.clientY, tx0: v.tx, ty0: v.ty };
+        wrap.classList.add("panning");
+        try {
+          wrap.setPointerCapture?.(e.pointerId);
+        } catch (_e) {
+          /* window listeners cover it */
+        }
       }
     }
 
-    _panYardMap(dxFrac, dyFrac) {
-      // v1.44 — shift the view by a fraction of the current span. dx grows EAST,
-      // dy grows NORTH. Ground metres -> degrees: latitude is ~111320 m/degree;
-      // longitude degrees shrink by cos(latitude).
-      const m = this._yardMap;
-      if (!m || this._mapBusy) return;
-      const span = Number(m.span_m) || 60;
-      const lat0 = Number(m.center_lat);
-      const lon0 = Number(m.center_lon);
-      if (!Number.isFinite(lat0) || !Number.isFinite(lon0)) return;
-      const dLat = (dyFrac * span) / 111320;
-      const dLon =
-        (dxFrac * span) / (111320 * Math.max(Math.cos((lat0 * Math.PI) / 180), 1e-6));
-      this._setupYardMap(span, lat0 + dLat, lon0 + dLon);
+    // ── v1.48 slippy-map view transform (drag to pan, scroll/pinch to zoom).
+    // Purely client-side over the fetched aerial; the stored bbox + normalized
+    // marker coords are unchanged. screen <-> normalized goes through here.
+    _screenToNorm(clientX, clientY, rect) {
+      const v = this._mapView;
+      const w = rect.width || 1;
+      const h = rect.height || 1;
+      return {
+        x: (clientX - rect.left - v.tx) / (v.scale * w),
+        y: (clientY - rect.top - v.ty) / (v.scale * h),
+      };
     }
 
-    _recenterYardMap() {
-      // v1.44 — back to the HA home location (undoes panning), keeping the zoom.
-      // Passing NaN lat/lon would keep the current centre, so send the service
-      // call with span only — the backend defaults the centre to hass.config.
-      const m = this._yardMap;
-      if (!m || this._mapBusy) return;
-      const span = Number(m.span_m) || 60;
-      this._mapBusy = true;
-      this._renderNow();
-      this._hass
-        .callService("complete_irrigation", "set_yard_map", { span_m: span })
-        .catch((err) => alert("Failed to re-centre the map: " + (err?.message || err)))
-        .finally(async () => {
-          this._mapBusy = false;
-          await this._fetchYard();
-        });
+    _applyMapTransform() {
+      const view = this.shadowRoot?.querySelector(".yard-map-view");
+      if (!view) return;
+      const v = this._mapView;
+      view.style.transform = `translate(${v.tx}px, ${v.ty}px) scale(${v.scale})`;
+    }
+
+    _clampMapView() {
+      // Keep the scaled image covering the frame (no empty gaps at the edges).
+      const v = this._mapView;
+      const wrap = this.shadowRoot?.querySelector(".yard-map-wrap");
+      if (!wrap) return;
+      const r = wrap.getBoundingClientRect();
+      v.tx = Math.min(0, Math.max(r.width * (1 - v.scale), v.tx));
+      v.ty = Math.min(0, Math.max(r.height * (1 - v.scale), v.ty));
+    }
+
+    _zoomMapAt(px, py, factor, rect) {
+      // Zoom toward (px,py) in wrap-local px, keeping that point under the cursor.
+      const v = this._mapView;
+      const newScale = Math.min(8, Math.max(1, v.scale * factor));
+      if (newScale === v.scale) return;
+      const k = newScale / v.scale;
+      v.tx = px - k * (px - v.tx);
+      v.ty = py - k * (py - v.ty);
+      v.scale = newScale;
+      this._clampMapView();
+      this._applyMapTransform();
+    }
+
+    _onMapWheel(e) {
+      const wrap = e.target?.closest?.(".yard-map-wrap");
+      if (!wrap || this._canopyBox || this._mapPan) return;
+      e.preventDefault(); // don't scroll the page while zooming the aerial
+      const r = wrap.getBoundingClientRect();
+      this._zoomMapAt(e.clientX - r.left, e.clientY - r.top, e.deltaY < 0 ? 1.15 : 1 / 1.15, r);
+    }
+
+    _zoomMapButton(dir) {
+      const wrap = this.shadowRoot?.querySelector(".yard-map-wrap");
+      if (!wrap) return;
+      const r = wrap.getBoundingClientRect();
+      this._zoomMapAt(r.width / 2, r.height / 2, dir > 0 ? 1.4 : 1 / 1.4, r);
+    }
+
+    _resetMapView() {
+      this._mapView = { scale: 1, tx: 0, ty: 0 };
+      this._applyMapTransform();
     }
 
     _onMapPointerMove(e) {
+      // v1.48 — background pan.
+      const p = this._mapPan;
+      if (p) {
+        const v = this._mapView;
+        v.tx = p.tx0 + (e.clientX - p.sx);
+        v.ty = p.ty0 + (e.clientY - p.sy);
+        this._clampMapView();
+        this._applyMapTransform();
+        return;
+      }
       const b = this._canopyBox;
       if (b) {
-        b.x1 = Math.min(1, Math.max(0, (e.clientX - b.rect.left) / b.rect.width));
-        b.y1 = Math.min(1, Math.max(0, (e.clientY - b.rect.top) / b.rect.height));
+        const n = this._screenToNorm(e.clientX, e.clientY, b.rect);
+        b.x1 = Math.min(1, Math.max(0, n.x));
+        b.y1 = Math.min(1, Math.max(0, n.y));
         this._drawCanopyBox();
         return;
       }
       const d = this._mapDrag;
       if (!d) return;
-      const x = Math.min(1, Math.max(0, (e.clientX - d.rect.left) / d.rect.width));
-      const y = Math.min(1, Math.max(0, (e.clientY - d.rect.top) / d.rect.height));
-      d.x = x;
-      d.y = y;
-      d.el.style.left = (x * 100).toFixed(3) + "%";
-      d.el.style.top = (y * 100).toFixed(3) + "%";
+      const n = this._screenToNorm(e.clientX, e.clientY, d.rect);
+      d.x = Math.min(1, Math.max(0, n.x));
+      d.y = Math.min(1, Math.max(0, n.y));
+      d.el.style.left = (d.x * 100).toFixed(3) + "%";
+      d.el.style.top = (d.y * 100).toFixed(3) + "%";
     }
 
     async _onMapPointerUp() {
+      // v1.48 — end a background pan (client-only view; nothing to persist).
+      if (this._mapPan) {
+        this._mapPan = null;
+        this.shadowRoot?.querySelector(".yard-map-wrap")?.classList.remove("panning");
+        return;
+      }
       // v1.47 — finalize a canopy-measure box: compute ft² from the map's span.
       const b = this._canopyBox;
       if (b) {
@@ -3285,13 +3353,13 @@
     _drawCanopyBox() {
       // Imperative overlay during the drag (no re-render, so it stays smooth).
       const b = this._canopyBox;
-      const wrap = this.shadowRoot?.querySelector(".yard-map-wrap");
-      if (!b || !wrap) return;
-      let box = wrap.querySelector(".canopy-box");
+      const view = this.shadowRoot?.querySelector(".yard-map-view");
+      if (!b || !view) return;
+      let box = view.querySelector(".canopy-box");
       if (!box) {
         box = document.createElement("div");
         box.className = "canopy-box";
-        wrap.appendChild(box);
+        view.appendChild(box);
       }
       const l = Math.min(b.x0, b.x1) * 100;
       const t = Math.min(b.y0, b.y1) * 100;
@@ -6592,6 +6660,8 @@
             .join("") +
           `</select> <button class="btn btn-small btn-primary" data-action="apply-canopy">Set canopy</button></div>`
         : `<div class="canopy-panel muted">Drag a box around a plant's canopy on the aerial to measure it. Canopies are read as an ellipse fit to the box.</div>`;
+      const v = this._mapView;
+      const viewTransform = `transform:translate(${v.tx}px,${v.ty}px) scale(${v.scale});transform-origin:0 0`;
       return (
         `<div class="card yard-map-card">` +
         `<div class="yard-map-head"><strong>🗺️ Yard map</strong>` +
@@ -6599,22 +6669,25 @@
         `<div class="yard-map-wrap${
           this._measureMode ? " measuring" : ""
         }" style="aspect-ratio:${m.width} / ${m.height}">` +
+        // v1.48 — everything that pans/zooms lives in this transformed layer.
+        `<div class="yard-map-view" style="${viewTransform}">` +
         `<img class="yard-map-img" src="${escapeAttr(m.image_path)}" alt="Aerial view of the yard" draggable="false" />` +
         markers +
         canopyOverlay +
-        // v1.44 — pan controls (hidden while measuring so a drag draws a box).
-        (this._mapBusy || this._measureMode
+        `</div>` +
+        // v1.48 — zoom controls sit OUTSIDE the transformed layer (fixed).
+        (this._mapBusy
           ? ""
-          : `<button class="map-pan map-pan-n" data-action="map-pan" data-dx="0" data-dy="0.3" title="Pan north">▲</button>` +
-            `<button class="map-pan map-pan-s" data-action="map-pan" data-dx="0" data-dy="-0.3" title="Pan south">▼</button>` +
-            `<button class="map-pan map-pan-w" data-action="map-pan" data-dx="-0.3" data-dy="0" title="Pan west">◀</button>` +
-            `<button class="map-pan map-pan-e" data-action="map-pan" data-dx="0.3" data-dy="0" title="Pan east">▶</button>` +
-            `<button class="map-pan map-pan-home" data-action="map-recenter" title="Re-centre on your Home Assistant location">⌂</button>`) +
+          : `<div class="map-zoom-btns">` +
+            `<button class="map-zbtn" data-action="map-zoom-in" title="Zoom in">+</button>` +
+            `<button class="map-zbtn" data-action="map-zoom-out" title="Zoom out">−</button>` +
+            `<button class="map-zbtn map-zreset" data-action="map-reset-view" title="Reset view (fit)">⤢</button>` +
+            `</div>`) +
         `</div>` +
         measurePanel +
         (chips
           ? `<div class="yard-map-unplaced"><span class="muted">Tap to place:</span> ${chips}</div>`
-          : `<p class="muted yard-map-hint">Drag a marker to reposition it.</p>`) +
+          : `<p class="muted yard-map-hint">Drag the map to pan &middot; scroll or +/&minus; to zoom in &middot; drag a marker to reposition.</p>`) +
         `</div>`
       );
     }
@@ -8311,17 +8384,16 @@
         `.yard-map-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}` +
         `.map-zoom{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--ci-text-2)}` +
         `.map-zoom select{font-size:13px;padding:4px 6px}` +
-        `.yard-map-wrap{position:relative;width:100%;border-radius:8px;overflow:hidden;background:#1b1b1b;touch-action:none;user-select:none}` +
+        `.yard-map-wrap{position:relative;width:100%;border-radius:8px;overflow:hidden;background:#1b1b1b;touch-action:none;user-select:none;cursor:grab}` +
+        `.yard-map-wrap.panning{cursor:grabbing}` +
+        // v1.48 — the transformed layer that pans/zooms (image + markers + overlays).
+        `.yard-map-view{position:absolute;inset:0;will-change:transform}` +
         `.yard-map-img{display:block;width:100%;height:100%;object-fit:cover;pointer-events:none}` +
-        // v1.44 — pan chevrons on the map edges + home in the corner. 44px hit
-        // targets for touch; semi-transparent so the aerial stays readable.
-        `.map-pan{position:absolute;z-index:5;width:34px;height:34px;min-width:34px;padding:0;border:none;border-radius:8px;background:rgba(0,0,0,0.45);color:#fff;font-size:15px;line-height:34px;text-align:center;cursor:pointer;touch-action:manipulation}` +
-        `.map-pan:hover{background:rgba(0,0,0,0.7)}` +
-        `.map-pan-n{top:8px;left:50%;transform:translateX(-50%)}` +
-        `.map-pan-s{bottom:8px;left:50%;transform:translateX(-50%)}` +
-        `.map-pan-w{left:8px;top:50%;transform:translateY(-50%)}` +
-        `.map-pan-e{right:8px;top:50%;transform:translateY(-50%)}` +
-        `.map-pan-home{top:8px;right:8px;font-size:17px}` +
+        // v1.48 — zoom controls (fixed corner, outside the transformed layer).
+        `.map-zoom-btns{position:absolute;z-index:5;right:8px;bottom:8px;display:flex;flex-direction:column;gap:4px}` +
+        `.map-zbtn{width:34px;height:34px;min-width:34px;padding:0;border:none;border-radius:8px;background:rgba(0,0,0,0.5);color:#fff;font-size:20px;line-height:34px;text-align:center;cursor:pointer;touch-action:manipulation}` +
+        `.map-zbtn:hover{background:rgba(0,0,0,0.75)}` +
+        `.map-zreset{font-size:15px}` +
         // v1.47 — canopy measure: crosshair, drawn box + live area label.
         `.yard-map-wrap.measuring{cursor:crosshair}` +
         `.yard-map-wrap.measuring .yard-map-marker{pointer-events:none;opacity:0.6}` +
