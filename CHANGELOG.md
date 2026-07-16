@@ -4,6 +4,19 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.47.1 — 2026-07-16 — patch (docs)
+
+**Every external connection is now disclosed up front.** A new **Privacy &
+external connections** section in the README lays out — in a plain table — the
+only three times the integration touches the internet, all opt-in: the aerial
+yard map (Esri or your GIS; sends map coordinates; no key), plant-name verify
+(GBIF; sends the typed name; no key), and plant identification (your local model
+or an external AI you choose; sends photos/prompts; external needs your key). It
+states plainly that there is **no telemetry or phone-home**, that weather is read
+from HA entities rather than fetched here, and that the whole app can run with no
+external connections and no API keys. SECURITY.md's data-handling section is
+updated to match (adds the GBIF name-verify flow, now three features not two).
+
 ## v1.47.0 — 2026-07-16 — minor
 
 **Measure a plant's canopy right off the aerial — no LLM, no reference object.**
