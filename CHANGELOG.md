@@ -4,6 +4,19 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.52.2 — 2026-07-18 — patch
+
+**Fix an aerial-map regression introduced in v1.52.1.** The 15 MB read cap added
+last patch used `resp.content.read(15_000_001)`, but aiohttp's
+`StreamReader.read(n)` returns only the currently-buffered chunk (it does not loop
+to EOF the way `read(-1)` does) -- so any aerial image larger than one network
+chunk was truncated and saved as a broken/partial map (the image magic-byte check
+only inspects the head, so it slipped through). The read now accumulates the FULL
+image via `iter_chunked`, still bailing early past 15 MB, so both the complete
+image and the chunked/no-Content-Length DoS cap are preserved. Caught in a
+pre-pull review. The capped JSON reads (Perenual etc.) are unaffected -- small
+JSON arrives in one chunk and degrades gracefully on the rare partial read.
+
 ## v1.52.1 — 2026-07-18 — patch
 
 **Hardening from a security + stability review of the outbound connectors.**

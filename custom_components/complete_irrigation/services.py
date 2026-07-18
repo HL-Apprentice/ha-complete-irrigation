@@ -3233,12 +3233,19 @@ async def _async_register_services(hass: HomeAssistant) -> None:
                 if resp.content_length is not None and resp.content_length > 15_000_000:
                     _LOGGER.warning("set_yard_map: aerial response too large, refusing")
                     return
-                # Bounded read: a chunked / no-Content-Length body can't buffer past
-                # the cap (the pre-check above only sees an honest Content-Length).
-                content = await resp.content.read(15_000_001)
-                if len(content) > 15_000_000:
-                    _LOGGER.warning("set_yard_map: aerial body too large, refusing")
-                    return
+                # Bounded FULL read: accumulate the whole image but bail past the cap.
+                # (resp.content.read(N) would return only the first buffered chunk and
+                # TRUNCATE a multi-chunk image; iter_chunked reads to EOF, and a chunked
+                # / no-Content-Length body still can't buffer past the cap.)
+                chunks: list[bytes] = []
+                total = 0
+                async for chunk in resp.content.iter_chunked(65536):
+                    total += len(chunk)
+                    if total > 15_000_000:
+                        _LOGGER.warning("set_yard_map: aerial body too large, refusing")
+                        return
+                    chunks.append(chunk)
+                content = b"".join(chunks)
         except Exception as err:  # network / timeout / client errors — never crash
             _LOGGER.warning("set_yard_map: aerial fetch failed: %s", err)
             return
