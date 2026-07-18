@@ -5,6 +5,7 @@ from __future__ import annotations
 from custom_components.complete_irrigation.yard_map import (
     Bbox,
     esri_export_url,
+    export_host_allowed,
     export_url,
     format_export_template,
     normalize_export_template,
@@ -38,6 +39,34 @@ def test_rejects_missing_size_tokens():
 
 def test_rejects_missing_bbox():
     assert not valid_export_template("https://x/y?size={width},{height}")
+
+
+# ── SSRF host guard (v1.52.1) ────────────────────────────────────────
+
+
+def test_export_host_allows_public_and_esri():
+    assert export_host_allowed(MC)
+    assert export_host_allowed("https://services.arcgisonline.com/a?bbox={bbox}")
+
+
+def test_export_host_blocks_loopback_and_metadata():
+    # loopback (probing HA's own API) and cloud metadata (169.254.169.254)
+    assert not export_host_allowed("http://127.0.0.1:8123/{bbox}?w={width}&h={height}")
+    assert not export_host_allowed("https://[::1]/{bbox}")
+    assert not export_host_allowed("http://169.254.169.254/latest/meta-data/?b={bbox}")
+    assert not export_host_allowed("http://localhost/{bbox}")
+    assert not export_host_allowed("http://metadata.google.internal/{bbox}")
+
+
+def test_export_host_allows_private_lan_for_self_hosters():
+    # A self-hosted GIS/tile server on the LAN is a legitimate use — not blocked.
+    assert export_host_allowed("http://192.168.1.50:8080/export?bbox={bbox}&size={width},{height}")
+    assert export_host_allowed("https://gis.internal.example/export?bbox={bbox}")
+
+
+def test_export_host_rejects_junk():
+    for bad in (None, "", "   ", 123, "not-a-url", "ftp://host/{bbox}"):
+        assert export_host_allowed(bad) is False
 
 
 def test_rejects_partial_edge_set():

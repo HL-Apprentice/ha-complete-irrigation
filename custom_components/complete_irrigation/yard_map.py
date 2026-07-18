@@ -20,9 +20,11 @@ A Bbox is (west, south, east, north) in WGS84 degrees.
 
 from __future__ import annotations
 
+import ipaddress
 import math
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlparse
 
 # Metres per degree of latitude (mean); longitude scales by cos(latitude).
 _M_PER_DEG_LAT = 111_320.0
@@ -248,6 +250,37 @@ def valid_export_template(template: Any) -> bool:
         return False
     has_bbox = "{bbox}" in t or all(k in t for k in ("{west}", "{south}", "{east}", "{north}"))
     return has_bbox and "{width}" in t and "{height}" in t
+
+
+# Hostnames that must never be an aerial-export target — resolving the HA server
+# at these is SSRF, never a real imagery source.
+_BLOCKED_EXPORT_HOSTNAMES = frozenset({"localhost", "metadata", "metadata.google.internal"})
+
+
+def export_host_allowed(url_or_template: Any) -> bool:
+    """SSRF guard for the custom aerial-export URL (v1.52.1). Rejects targets that
+    are never a legitimate imagery host but ARE dangerous to fetch server-side:
+    loopback, link-local (incl. 169.254.169.254 cloud metadata), unspecified,
+    multicast, and the localhost/metadata hostnames. RFC-1918 / ULA private ranges
+    are allowed on purpose, so a self-hoster can point at their own LAN GIS server.
+    A hostname that RESOLVES to a blocked IP (DNS rebinding) is a residual —
+    admin-gated and blind (the response must still pass the image-magic-byte sniff)."""
+    if not isinstance(url_or_template, str) or not url_or_template.strip():
+        return False
+    try:
+        parsed = urlparse(normalize_export_template(url_or_template.strip()))
+    except ValueError:
+        return False
+    if parsed.scheme not in ("http", "https"):
+        return False
+    host = (parsed.hostname or "").lower()
+    if not host or host in _BLOCKED_EXPORT_HOSTNAMES:
+        return False
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return True  # a hostname (not an IP literal) — allowed; see DNS-rebinding note
+    return not (ip.is_loopback or ip.is_link_local or ip.is_unspecified or ip.is_multicast)
 
 
 def export_url(bbox: Bbox, width: int, height: int, template: str | None = None) -> str:

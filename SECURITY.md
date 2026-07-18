@@ -61,8 +61,17 @@ admin-only) fetches an aerial backdrop image over HTTPS from Esri World Imagery
 a custom ArcGIS-compatible export URL you configure — sending only the map
 center **latitude/longitude** (defaulting to your Home Assistant location) and a
 span. It is opt-in (nothing is sent unless you run that action), times out after
-30 s, fails closed (the previous map is kept on any error), and validates the
-response is a real image before saving.
+30 s, fails closed (the previous map is kept on any error), reads the response
+body with a hard 15 MB cap (v1.52.1 — a chunked/no-Content-Length body can't
+buffer past the limit), and validates the response is a real image before saving.
+Since v1.52.1 the **custom export URL is SSRF-guarded**: the host must be `http(s)`
+and may not be a loopback, link-local, cloud-metadata (`169.254.169.254`),
+unspecified, or multicast address, checked both when you save it and again at
+fetch time. Private LAN ranges (RFC-1918/ULA) remain allowed on purpose so a
+self-hoster can point at their own GIS/tile server. Residual: a public hostname
+that *resolves* to a private address (DNS rebinding) is not blocked — this action
+is admin-only and blind (the response must still pass the image check), so the
+residual risk is limited to internal reachability probing by a privileged user.
 
 **Plant-brain LLM features.** The opt-in plant features — species identify /
 research (v1.37) and vision health checks (v1.33) — send plant photos and text
