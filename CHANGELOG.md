@@ -4,6 +4,26 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.52.1 — 2026-07-18 — patch
+
+**Hardening from a security + stability review of the outbound connectors.**
+Three low-severity findings from an adversarial multi-agent review, all fixed:
+
+- **Perenual response read is now size-capped** (200 KB, matching the other four
+  connectors) instead of reading the body unbounded -- a hostile or buggy upstream
+  can no longer buffer an oversized body into memory. Its error handling also now
+  degrades gracefully to the LLM path on any failure.
+- **Aerial-map read is now a hard-capped stream read** (15 MB) so a chunked /
+  no-Content-Length response can't buffer past the limit before the size check.
+- **Custom aerial export URL is SSRF-guarded**: the host must be http(s) and may
+  not be loopback, link-local, cloud-metadata (169.254.169.254), unspecified, or
+  multicast -- checked when you save it and again at fetch time. Private LAN ranges
+  stay allowed so a self-hoster can point at their own GIS server. (Admin-only
+  feature; the review rated all three low.)
+
+No behavior change for normal use. SECURITY.md documents the new guards and the
+DNS-rebinding residual.
+
 ## v1.52.0 — 2026-07-16 — minor
 
 **Optional cloud care lookup — Perenual.** "Research details" (research a plant

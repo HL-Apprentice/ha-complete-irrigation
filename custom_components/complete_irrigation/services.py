@@ -505,7 +505,11 @@ def _clean_map_template(value: str) -> str:
     """Validate a custom aerial export template before it reaches config. An empty
     string clears it (back to Esri); anything non-empty must be a usable template,
     otherwise set_yard_map would silently fetch the wrong ground area."""
-    from .yard_map import normalize_export_template, valid_export_template
+    from .yard_map import (
+        export_host_allowed,
+        normalize_export_template,
+        valid_export_template,
+    )
 
     # Normalize FIRST: a template copied from a browser address bar / linkified URL
     # comes back with the braces percent-encoded (%7Bbbox%7D). Store the clean form
@@ -517,6 +521,13 @@ def _clean_map_template(value: str) -> str:
         raise vol.Invalid(
             "map_export_url_template must be an http(s) URL containing {bbox} "
             "(or {west}/{south}/{east}/{north}) plus {width} and {height}"
+        )
+    # v1.52.1 — SSRF guard: don't let the aerial fetch be pointed at loopback /
+    # link-local / cloud-metadata hosts (private LAN ranges stay allowed).
+    if not export_host_allowed(t):
+        raise vol.Invalid(
+            "map_export_url_template host is not allowed (loopback, link-local, and "
+            "cloud-metadata addresses are blocked for security)"
         )
     return t
 
@@ -2639,6 +2650,8 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         # Opt-in; the curated table above always wins first.
         perenual_key = str(coord.config.get("perenual_api_key") or "").strip()
         if perenual_key:
+            import json as _json
+
             import aiohttp
             from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
@@ -2652,8 +2665,11 @@ async def _async_register_services(hass: HomeAssistant) -> None:
                     timeout=aiohttp.ClientTimeout(total=20),
                 ) as resp:
                     if resp.status == 200:
-                        pdata = parse_perenual_search(await resp.json(content_type=None))
-            except (aiohttp.ClientError, TimeoutError, ValueError):
+                        # Cap the read like every sibling connector — a hostile or
+                        # buggy upstream body must not buffer unbounded into memory.
+                        pdata = parse_perenual_search(_json.loads(await resp.content.read(200_000)))
+            except Exception as err:  # network / parse / anything -> LLM fallback
+                _LOGGER.debug("Perenual lookup failed, using LLM fallback: %s", err)
                 pdata = {"matched": False}
             # Only let Perenual win when it actually contributed CARE data — a
             # bare name match (no water-use, no sun) shouldn't short-circuit the
@@ -3171,6 +3187,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         from .yard_map import (
             bbox_from_center,
             bbox_from_cfg,
+            export_host_allowed,
             export_url,
             image_size_for_bbox,
             remap_norm,
@@ -3201,6 +3218,12 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             fetch_w, fetch_h = safe_export_size(span, width, height)
         url = export_url(bbox, fetch_w, fetch_h, template or None)
 
+        # v1.52.1 — re-check the final host at fetch time (defends a stored value
+        # that predates the config-write SSRF guard). Esri's default host passes.
+        if not export_host_allowed(url):
+            _LOGGER.warning("set_yard_map: aerial host not allowed, refusing to fetch")
+            return
+
         session = async_get_clientsession(hass)
         try:
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
@@ -3210,7 +3233,9 @@ async def _async_register_services(hass: HomeAssistant) -> None:
                 if resp.content_length is not None and resp.content_length > 15_000_000:
                     _LOGGER.warning("set_yard_map: aerial response too large, refusing")
                     return
-                content = await resp.read()
+                # Bounded read: a chunked / no-Content-Length body can't buffer past
+                # the cap (the pre-check above only sees an honest Content-Length).
+                content = await resp.content.read(15_000_001)
                 if len(content) > 15_000_000:
                     _LOGGER.warning("set_yard_map: aerial body too large, refusing")
                     return
