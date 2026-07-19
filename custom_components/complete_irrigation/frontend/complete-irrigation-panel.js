@@ -72,7 +72,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.52.2";
+  const PANEL_VERSION = "v1.53.0";
   // v1.41 — external plant-ID providers (mirrors llm_client.PROVIDERS). URL is
   // auto-filled when a provider is picked; model is an editable hint. All speak
   // the same OpenAI /v1/chat/completions shape, so one settings form covers them.
@@ -442,6 +442,8 @@
       // normalized marker coords are unchanged; screen<->norm goes through this.
       this._mapView = { scale: 1, tx: 0, ty: 0 };
       this._mapPan = null; // in-progress background pan {sx,sy,tx0,ty0,rect}
+      this._mapPointers = new Map(); // v1.53 — active touch pointers {id -> {x,y}}
+      this._mapPinch = null; // v1.53 — in-progress two-finger pinch {dist}
       this._measureMode = false; // v1.47 — draw-a-box canopy measure mode
       this._canopyBox = null; // v1.47 — in-progress drag box {rect,x0,y0,x1,y1}
       this._canopyResult = null; // v1.47 — finalized {sqft,x0,y0,x1,y1,plantId}
@@ -3225,15 +3227,38 @@
       // the press lands on the aerial layer, not a button/chip.
       if (wrap && e.target?.closest?.(".yard-map-view")) {
         e.preventDefault();
-        const v = this._mapView;
-        this._mapPan = { sx: e.clientX, sy: e.clientY, tx0: v.tx, ty0: v.ty };
-        wrap.classList.add("panning");
+        this._mapPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
         try {
           wrap.setPointerCapture?.(e.pointerId);
         } catch (_e) {
           /* window listeners cover it */
         }
+        // v1.53 — a second finger starts a pinch-zoom (supersedes the pan).
+        if (this._mapPointers.size >= 2) {
+          this._mapPan = null;
+          wrap.classList.remove("panning");
+          this._mapPinch = { dist: this._mapPointerDist() };
+          return;
+        }
+        const v = this._mapView;
+        this._mapPan = { sx: e.clientX, sy: e.clientY, tx0: v.tx, ty0: v.ty };
+        wrap.classList.add("panning");
       }
+    }
+
+    // v1.53 — distance + wrap-local midpoint of the two active map pointers.
+    _mapPointerDist() {
+      const pts = [...this._mapPointers.values()];
+      if (pts.length < 2) return 0;
+      return Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+    }
+
+    _mapPointerMid() {
+      const pts = [...this._mapPointers.values()];
+      const r = this.shadowRoot?.querySelector(".yard-map-wrap")?.getBoundingClientRect();
+      const cx = (pts[0].x + pts[1].x) / 2;
+      const cy = (pts[0].y + pts[1].y) / 2;
+      return { px: cx - (r?.left || 0), py: cy - (r?.top || 0), rect: r };
     }
 
     // ── v1.48 slippy-map view transform (drag to pan, scroll/pinch to zoom).
@@ -3300,6 +3325,20 @@
     }
 
     _onMapPointerMove(e) {
+      // v1.53 — two-finger pinch-zoom takes priority over pan.
+      if (this._mapPointers.has(e.pointerId)) {
+        this._mapPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      }
+      if (this._mapPinch && this._mapPointers.size >= 2) {
+        const dist = this._mapPointerDist();
+        const prev = this._mapPinch.dist || dist;
+        if (dist > 0 && prev > 0) {
+          const { px, py, rect } = this._mapPointerMid();
+          if (rect) this._zoomMapAt(px, py, dist / prev, rect);
+        }
+        this._mapPinch.dist = dist;
+        return;
+      }
       // v1.48 — background pan.
       const p = this._mapPan;
       if (p) {
@@ -3327,7 +3366,13 @@
       d.el.style.top = (d.y * 100).toFixed(3) + "%";
     }
 
-    async _onMapPointerUp() {
+    async _onMapPointerUp(e) {
+      // v1.53 — untrack a map pointer; a lifted finger ends the pinch.
+      if (e && this._mapPointers.has(e.pointerId)) this._mapPointers.delete(e.pointerId);
+      if (this._mapPinch && this._mapPointers.size < 2) {
+        this._mapPinch = null;
+        return; // remaining finger (if any) idles until re-pressed
+      }
       // v1.48 — end a background pan (client-only view; nothing to persist).
       if (this._mapPan) {
         this._mapPan = null;
