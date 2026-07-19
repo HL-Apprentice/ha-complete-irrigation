@@ -4,6 +4,18 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.54.0 — 2026-07-19 — minor
+
+**Light areas -- group co-located plants for the lux survey.** Plants that share
+a spot in the yard can now be grouped into a named **light area** (e.g. "Front
+Bed"), so one roaming lux survey can cover the whole group instead of surveying
+each plant one at a time (the area-wide survey itself lands next release). Assign
+an area two ways: type it into a plant's new **Light area** field (autocompletes
+from your existing areas), or open **Assign area** on the yard map and **draw a
+region** -- every marker inside joins the area in one step, with a live count as
+you drag. Each plant shows its area in the list. Purely additive; ungrouped
+plants are unaffected.
+
 ## v1.53.0 — 2026-07-18 — minor
 
 **Yard map: two-finger pinch-to-zoom on touch devices.** The slippy-map (v1.48)

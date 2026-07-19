@@ -105,6 +105,7 @@ SERVICE_ADD_PLANT = "add_plant"
 SERVICE_UPDATE_PLANT = "update_plant"
 SERVICE_DELETE_PLANT = "delete_plant"
 SERVICE_DUPLICATE_PLANT = "duplicate_plant"  # v1.40.11 — copy a plant (minus photos)
+SERVICE_ASSIGN_AREA_REGION = "assign_area_region"  # v1.54 — bulk-assign a light area by map region
 SERVICE_SET_YARD_MAP = "set_yard_map"  # v1.30 — fetch + cache the aerial backdrop
 SERVICE_ADD_PLANT_PHOTO = "add_plant_photo"  # v1.32 — per-plant photo + EXIF-GPS place
 SERVICE_SET_PLANT_HEALTH = "set_plant_health"  # v1.33 — store a vision-health verdict
@@ -565,6 +566,8 @@ _ADD_PLANT_SCHEMA = vol.Schema(
         vol.Required("wucols_category"): vol.In(_WUCOLS_CATEGORIES),
         vol.Required("canopy_area_sqft"): _CANOPY_AREA,
         vol.Required("zone_entity_id"): cv.entity_id,
+        # v1.54 — optional light-area label at creation ("" = ungrouped).
+        vol.Optional("area", default=""): vol.All(cv.string, vol.Length(max=60), _no_control_chars),
         # v1.35 — optional species (common or scientific name, free text).
         vol.Optional("species", default=""): _SPECIES,
     }
@@ -582,6 +585,8 @@ _UPDATE_PLANT_SCHEMA = vol.Schema(
         # v1.30 — normalized yard-map position (set when a marker is dragged/placed).
         vol.Optional("map_x"): _MAP_COORD,
         vol.Optional("map_y"): _MAP_COORD,
+        # v1.54 — light-area label ("" ungroups). Grouped plants survey together.
+        vol.Optional("area"): vol.All(cv.string, vol.Length(max=60), _no_control_chars),
         # v1.35 — optional species (common or scientific name, free text).
         vol.Optional("species"): _SPECIES,
         # v1.38 — installed drip emitters (count x GPH), set together.
@@ -594,6 +599,18 @@ _UPDATE_PLANT_SCHEMA = vol.Schema(
 
 _DELETE_PLANT_SCHEMA = vol.Schema({vol.Required("plant_id"): cv.string})
 _DUPLICATE_PLANT_SCHEMA = vol.Schema({vol.Required("plant_id"): cv.string})
+
+# v1.54 — bulk-assign a light-area label to every PLACED plant inside a drawn map
+# region (normalized box corners, any order). An empty area ungroups the enclosed.
+_ASSIGN_AREA_REGION_SCHEMA = vol.Schema(
+    {
+        vol.Required("area"): vol.All(cv.string, vol.Length(max=60), _no_control_chars),
+        vol.Required("x0"): _MAP_COORD,
+        vol.Required("y0"): _MAP_COORD,
+        vol.Required("x1"): _MAP_COORD,
+        vol.Required("y1"): _MAP_COORD,
+    }
+)
 
 # v1.30 — fetch + cache the aerial backdrop. Center defaults to the HA location.
 _SET_YARD_MAP_SCHEMA = vol.Schema(
@@ -2003,6 +2020,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             wucols_category=data["wucols_category"],
             canopy_area_sqft=data["canopy_area_sqft"],
             zone_entity_id=data["zone_entity_id"],
+            area=data.get("area", ""),
             species=data.get("species", ""),
         )
         coord.plants.add(plant)
@@ -2029,6 +2047,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
                 "zone_entity_id",
                 "map_x",
                 "map_y",
+                "area",
                 "species",
                 "emitter_count",
                 "emitter_gph",
@@ -2078,6 +2097,30 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         coord.plants.upsert(merged)
         await coord.async_save_plants()
         _LOGGER.info("Updated plant %s", merged.id)
+
+    async def handle_assign_area_region(call: ServiceCall) -> None:
+        """v1.54 — set a light-area label on every placed plant inside a drawn map
+        region (the panel draws a box on the aerial; this bulk-assigns the enclosed
+        markers to the area, or ungroups them when area is empty)."""
+        if not await _require_admin(hass, call):  # config write — admin only
+            return
+        data = _ASSIGN_AREA_REGION_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None:
+            return
+        from .plant import plants_in_region
+
+        area = data["area"].strip()
+        ids = plants_in_region(coord.plants.all(), data["x0"], data["y0"], data["x1"], data["y1"])
+        n = 0
+        for pid in ids:
+            p = coord.plants.get(pid)
+            if p is not None and p.area != area:
+                coord.plants.upsert(replace(p, area=area))
+                n += 1
+        if n:
+            await coord.async_save_plants()
+        _LOGGER.info("assign_area_region: set area %r on %d plant(s)", area, n)
 
     async def handle_add_plant_photo(call: ServiceCall) -> None:
         if not await _require_admin(hass, call):  # writes file bytes — admin only
@@ -3392,6 +3435,12 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         DOMAIN, SERVICE_UPDATE_PLANT, handle_update_plant, schema=_UPDATE_PLANT_SCHEMA
     )
     hass.services.async_register(
+        DOMAIN,
+        SERVICE_ASSIGN_AREA_REGION,
+        handle_assign_area_region,
+        schema=_ASSIGN_AREA_REGION_SCHEMA,
+    )
+    hass.services.async_register(
         DOMAIN, SERVICE_DELETE_PLANT, handle_delete_plant, schema=_DELETE_PLANT_SCHEMA
     )
     hass.services.async_register(
@@ -3782,6 +3831,7 @@ def _async_unregister_services(hass: HomeAssistant) -> None:
         SERVICE_SET_GENERAL_CONFIG,
         SERVICE_ADD_PLANT,
         SERVICE_UPDATE_PLANT,
+        SERVICE_ASSIGN_AREA_REGION,
         SERVICE_DELETE_PLANT,
         SERVICE_DUPLICATE_PLANT,
         SERVICE_SET_YARD_MAP,
