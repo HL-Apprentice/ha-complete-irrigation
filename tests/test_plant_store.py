@@ -402,3 +402,75 @@ def test_duplicate_copies_care_but_not_photos():
     assert (new.temp_low_f, new.temp_high_f) == (15, 115)
     # NOT copied (fresh photo + placement)
     assert new.photos == () and new.map_x is None and new.map_y is None
+
+
+# ── v1.54 light-area grouping ───────────────────────────────────────
+
+
+def _placed(pid, x, y, area=""):
+    """A placed plant with a light-area label (canopy area fixed at 50 ft²)."""
+    return PlantRecord(
+        id=pid,
+        name=pid,
+        wucols_category="low",
+        canopy_area_sqft=50.0,
+        zone_entity_id="switch.z",
+        map_x=x,
+        map_y=y,
+        area=area,
+    )
+
+
+def test_area_defaults_empty_and_round_trips():
+    r = _placed("p1", 0.5, 0.5, area="Front Bed")
+    assert r.area == "Front Bed"
+    assert PlantRecord.from_dict(r.to_dict()).area == "Front Bed"
+    assert _placed("p2", 0.1, 0.1).area == ""
+
+
+def test_area_rejects_overlong():
+    with pytest.raises(ValueError):
+        _placed("p1", 0.5, 0.5, area="x" * 61)
+
+
+def test_from_dict_tolerant_area():
+    base = _placed("p1", 0.5, 0.5).to_dict()
+    base.pop("area", None)
+    assert PlantRecord.from_dict(base).area == ""
+    base["area"] = "y" * 200
+    assert len(PlantRecord.from_dict(base).area) == 60
+
+
+def test_store_by_area_and_areas():
+    store = PlantStore()
+    for p in (
+        _placed("a", 0.1, 0.1, area="Front Bed"),
+        _placed("b", 0.2, 0.2, area="Front Bed"),
+        _placed("c", 0.9, 0.9, area="Back Corner"),
+        _placed("d", 0.5, 0.5),
+    ):
+        store.upsert(p)
+    assert [p.id for p in store.by_area("Front Bed")] == ["a", "b"]
+    assert [p.id for p in store.by_area("Back Corner")] == ["c"]
+    assert [p.id for p in store.by_area("")] == ["d"]
+    assert store.areas() == ["Front Bed", "Back Corner"]
+
+
+def test_plants_in_region_encloses_and_skips_unplaced():
+    from custom_components.complete_irrigation.plant import plants_in_region
+
+    plants = [
+        _placed("inside", 0.30, 0.30),
+        _placed("edge", 0.20, 0.20),
+        _placed("outside", 0.90, 0.90),
+        PlantRecord(
+            id="noplace",
+            name="noplace",
+            wucols_category="low",
+            canopy_area_sqft=50.0,
+            zone_entity_id="switch.z",
+        ),
+    ]
+    ids = plants_in_region(plants, 0.40, 0.40, 0.20, 0.20)
+    assert set(ids) == {"inside", "edge"}
+    assert "outside" not in ids and "noplace" not in ids

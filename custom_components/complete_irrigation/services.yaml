@@ -956,6 +956,57 @@ duplicate_plant:
       selector:
         text:
 
+assign_area_region:
+  name: Assign light area by map region
+  description: >
+    Set a light-area label on every placed plant whose yard-map marker falls
+    inside a drawn region. The panel draws the box on the aerial; an empty area
+    ungroups the enclosed plants.
+  fields:
+    area:
+      name: Light area
+      description: The area label to assign (empty string ungroups).
+      required: true
+      example: "Front Bed"
+      selector:
+        text:
+    x0:
+      name: Region X0 (0-1)
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 1
+          step: any
+          mode: box
+    y0:
+      name: Region Y0 (0-1)
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 1
+          step: any
+          mode: box
+    x1:
+      name: Region X1 (0-1)
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 1
+          step: any
+          mode: box
+    y1:
+      name: Region Y1 (0-1)
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 1
+          step: any
+          mode: box
+
 research_plant_species:
   name: Research a species by name
   description: >
@@ -1263,6 +1314,15 @@ update_plant:
           max: 1
           step: any
           mode: box
+    area:
+      name: Light area
+      description: >
+        Free-text light-area label grouping co-located plants (e.g. "Front Bed").
+        Plants sharing an area are surveyed together. Empty string ungroups.
+      required: false
+      example: "Front Bed"
+      selector:
+        text:
     species:
       name: Species
       description: Scientific or common species name (free text).

@@ -50,6 +50,11 @@ class PlantRecord:
     # edge, each in [0, 1]). None = not placed yet. Independent of pixel size.
     map_x: float | None = None
     map_y: float | None = None
+    # v1.54 — free-text light-AREA label grouping co-located plants (e.g. "Front
+    # Bed"). Plants sharing an area are surveyed together (one lux reading applies
+    # to all). "" = ungrouped. Assigned per-plant or by drawing a region on the
+    # yard map (plants_in_region maps a drawn box -> the enclosed plant ids).
+    area: str = ""
     # v1.32 — photo history for biannual LLM-vision health checks. Each entry:
     # {"ts": epoch-int, "path": "/local/.../<id>/<ts>.jpg", "note": str}. Immutable
     # tuple; newest-first. Absent in older records -> empty.
@@ -120,6 +125,9 @@ class PlantRecord:
         for axis, val in (("map_x", self.map_x), ("map_y", self.map_y)):
             if val is not None and (not math.isfinite(val) or not (0.0 <= val <= 1.0)):
                 raise ValueError(f"{axis} must be a finite value in [0, 1], got {val}")
+        # v1.54 — area is a short free-text label ("" = ungrouped).
+        if not isinstance(self.area, str) or len(self.area) > 60:
+            raise ValueError("area must be a string of at most 60 chars")
         # Photos: a tuple of {ts, path, ...} dicts (each must at least have a path).
         if not isinstance(self.photos, tuple):
             raise ValueError("photos must be a tuple")
@@ -171,6 +179,7 @@ class PlantRecord:
             "zone_entity_id": self.zone_entity_id,
             "map_x": self.map_x,
             "map_y": self.map_y,
+            "area": self.area,
             "photos": [dict(p) for p in self.photos],
             "health": dict(self.health) if isinstance(self.health, dict) else None,
             "species": self.species,
@@ -272,6 +281,7 @@ class PlantRecord:
             zone_entity_id=str(data["zone_entity_id"]),
             map_x=_coord("map_x"),
             map_y=_coord("map_y"),
+            area=str(data.get("area") or "")[:60],
             photos=photos,
             health=data.get("health") if isinstance(data.get("health"), dict) else None,
             species=str(data.get("species") or "")[:120],
@@ -349,6 +359,21 @@ class PlantStore:
             seen.setdefault(p.zone_entity_id, None)
         return list(seen)
 
+    # ── v1.54 light-area grouping ───────────────────────────────────
+    def by_area(self, area: str) -> list[PlantRecord]:
+        """Plants in one light-area (exact label match), in insertion order.
+        An empty area matches the ungrouped plants."""
+        want = (area or "").strip()
+        return [p for p in self._items.values() if p.area == want]
+
+    def areas(self) -> list[str]:
+        """Distinct non-empty area labels that have at least one plant, in order."""
+        seen: dict[str, None] = {}
+        for p in self._items.values():
+            if p.area:
+                seen.setdefault(p.area, None)
+        return list(seen)
+
     # ── Serialization ───────────────────────────────────────────────
     def to_serializable(self) -> list[dict[str, Any]]:
         """A JSON-safe list of plant dicts for HA storage."""
@@ -370,3 +395,22 @@ class PlantStore:
                 continue
             store._items[rec.id] = rec
         return store
+
+
+def plants_in_region(
+    plants: list[PlantRecord], x0: float, y0: float, x1: float, y1: float
+) -> list[str]:
+    """Ids of PLACED plants whose normalized (map_x, map_y) fall inside the box.
+
+    Corners may be given in any order; unplaced plants (no map position) are
+    skipped. Pure + HA-free: the panel draws a region on the aerial and this
+    selects the enclosed markers to bulk-assign to a light area (v1.54)."""
+    lo_x, hi_x = (x0, x1) if x0 <= x1 else (x1, x0)
+    lo_y, hi_y = (y0, y1) if y0 <= y1 else (y1, y0)
+    out: list[str] = []
+    for p in plants:
+        if p.map_x is None or p.map_y is None:
+            continue
+        if lo_x <= p.map_x <= hi_x and lo_y <= p.map_y <= hi_y:
+            out.append(p.id)
+    return out

@@ -72,7 +72,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.53.0";
+  const PANEL_VERSION = "v1.54.0";
   // v1.41 — external plant-ID providers (mirrors llm_client.PROVIDERS). URL is
   // auto-filled when a provider is picked; model is an editable hint. All speak
   // the same OpenAI /v1/chat/completions shape, so one settings form covers them.
@@ -181,6 +181,7 @@
       wucols_category: "moderate",
       canopy_area_sqft: "",
       zone_entity_id: "",
+      area: "", // v1.54 — light-area label (groups plants for one lux survey)
       photos: [], // v1.32 — gallery of {ts, path, note} for the open editor
       species: "", // v1.35 — optional botanical/common species name
       lux_low: "", // v1.35 — light range draft (strings; empty = unset)
@@ -445,6 +446,7 @@
       this._mapPointers = new Map(); // v1.53 — active touch pointers {id -> {x,y}}
       this._mapPinch = null; // v1.53 — in-progress two-finger pinch {dist}
       this._measureMode = false; // v1.47 — draw-a-box canopy measure mode
+      this._areaAssignMode = false; // v1.54 — draw-a-region light-area assign mode
       this._canopyBox = null; // v1.47 — in-progress drag box {rect,x0,y0,x1,y1}
       this._canopyResult = null; // v1.47 — finalized {sqft,x0,y0,x1,y1,plantId}
       this._yardLoaded = false;
@@ -878,6 +880,7 @@
         if (action === "map-zoom-out") return this._zoomMapButton(-1);
         if (action === "map-reset-view") return this._resetMapView();
         if (action === "toggle-measure") return this._toggleMeasure();
+        if (action === "toggle-area-assign") return this._toggleAreaAssign();
         if (action === "apply-canopy") return this._applyCanopy();
         if (action === "place-plant") return this._placePlant(node.dataset.plantId);
         if (action === "toggle-theme") return this._cycleTheme();
@@ -2612,6 +2615,7 @@
           wucols_category: p.wucols_category,
           canopy_area_sqft: p.canopy_area_sqft,
           zone_entity_id: p.zone_entity_id,
+          area: p.area || "", // v1.54 — light-area label
           photos: Array.isArray(p.photos) ? p.photos : [],
           health: p.health || null,
           species: p.species || "",
@@ -2669,6 +2673,9 @@
         wucols_category: e.wucols_category,
         canopy_area_sqft: area,
         zone_entity_id: zone,
+        // v1.54 — light-area label (e.area is the group; distinct from the local
+        // `area` above which is canopy ft²). Backend caps at 60; "" ungroups.
+        area: (e.area || "").trim().slice(0, 60),
         // v1.35 — optional species (backend caps at 120 chars; the input's
         // maxlength matches, the slice is belt-and-suspenders).
         species: (e.species || "").trim().slice(0, 120),
@@ -3189,8 +3196,8 @@
 
     _onMapPointerDown(e) {
       const wrap = e.target?.closest?.(".yard-map-wrap");
-      // v1.47 — canopy measure mode: drag a box (area computed on release).
-      if (this._measureMode && wrap) {
+      // v1.47/v1.54 — draw-a-box mode: canopy measure OR light-area assign.
+      if ((this._measureMode || this._areaAssignMode) && wrap) {
         e.preventDefault();
         const rect = wrap.getBoundingClientRect();
         const n = this._screenToNorm(e.clientX, e.clientY, rect);
@@ -3389,6 +3396,12 @@
           this._renderNow(); // too small — clear the stray overlay
           return;
         }
+        // v1.54 — light-area assign: name the region + bulk-assign the enclosed.
+        if (this._areaAssignMode) {
+          this._areaAssignMode = false;
+          await this._assignAreaRegion(b);
+          return;
+        }
         const span = Number(this._yardMap?.span_m) || 60;
         const sqft = Math.round(((Math.PI / 4) * (dx * span) * (dy * span) * 10.7639) * 10) / 10;
         this._canopyResult = {
@@ -3423,8 +3436,57 @@
     _toggleMeasure() {
       // v1.47 — enter/leave canopy-measure mode.
       this._measureMode = !this._measureMode;
+      this._areaAssignMode = false; // the two draw modes are mutually exclusive
       this._canopyBox = null;
       this._canopyResult = null;
+      this._renderNow();
+    }
+
+    _toggleAreaAssign() {
+      // v1.54 — enter/leave light-area assign mode (draw a region -> name it ->
+      // bulk-assign the enclosed markers). Shares the box-draw with measure mode.
+      this._areaAssignMode = !this._areaAssignMode;
+      this._measureMode = false;
+      this._canopyBox = null;
+      this._canopyResult = null;
+      this._renderNow();
+    }
+
+    async _assignAreaRegion(b) {
+      // v1.54 — name the drawn region's light area and bulk-assign every placed
+      // marker inside it (server recomputes the enclosure authoritatively; the
+      // client-side count here is just for the prompt).
+      const inX = (x) => x >= Math.min(b.x0, b.x1) && x <= Math.max(b.x0, b.x1);
+      const inY = (y) => y >= Math.min(b.y0, b.y1) && y <= Math.max(b.y0, b.y1);
+      const enclosed = (this._plants || []).filter(
+        (p) => p.map_x != null && p.map_y != null && inX(p.map_x) && inY(p.map_y)
+      );
+      if (!enclosed.length) {
+        alert("No placed plant markers inside that region.");
+        this._renderNow();
+        return;
+      }
+      const suggested = enclosed.find((p) => p.area)?.area || "";
+      const area = window.prompt(
+        `Light area for ${enclosed.length} plant(s) in this region (blank ungroups):`,
+        suggested
+      );
+      if (area === null) {
+        this._renderNow(); // cancelled
+        return;
+      }
+      try {
+        await this._hass.callService("complete_irrigation", "assign_area_region", {
+          area: area.trim().slice(0, 60),
+          x0: b.x0,
+          y0: b.y0,
+          x1: b.x1,
+          y1: b.y1,
+        });
+        await this._fetchYard();
+      } catch (err) {
+        alert("Failed to assign area: " + (err?.message || err));
+      }
       this._renderNow();
     }
 
@@ -3445,8 +3507,17 @@
       const h = Math.abs(b.y1 - b.y0) * 100;
       box.style.cssText =
         `left:${l}%;top:${t}%;width:${w}%;height:${h}%;` +
-        // live readout of the ground area
+        // live readout: enclosed-plant count in area-assign mode, else ground area
         (() => {
+          if (this._areaAssignMode) {
+            const inX = (x) => x >= Math.min(b.x0, b.x1) && x <= Math.max(b.x0, b.x1);
+            const inY = (y) => y >= Math.min(b.y0, b.y1) && y <= Math.max(b.y0, b.y1);
+            const n = (this._plants || []).filter(
+              (p) => p.map_x != null && p.map_y != null && inX(p.map_x) && inY(p.map_y)
+            ).length;
+            box.dataset.area = n + (n === 1 ? " plant" : " plants");
+            return "";
+          }
           const span = Number(this._yardMap?.span_m) || 60;
           const dx = Math.abs(b.x1 - b.x0);
           const dy = Math.abs(b.y1 - b.y0);
@@ -6884,6 +6955,14 @@
           }" data-action="toggle-measure" title="Draw a box around a plant's canopy to measure its footprint from the aerial">${
             this._measureMode ? "✕ Done" : "📐 Measure canopy"
           }</button>`;
+      // v1.54 — assign a light area by drawing a region around co-located markers.
+      const areaAssignBtn = this._mapBusy
+        ? ""
+        : `<button class="btn btn-small${
+            this._areaAssignMode ? " btn-primary" : ""
+          }" data-action="toggle-area-assign" title="Draw a region on the aerial to group the enclosed plants into a light area for the lux survey">${
+            this._areaAssignMode ? "✕ Done" : "🗺️ Assign area"
+          }</button>`;
       const r = this._canopyResult;
       const canopyOverlay = r
         ? `<div class="canopy-box canopy-box-final" data-area="${r.sqft} sq ft" style="left:${(
@@ -6907,14 +6986,18 @@
             .join("") +
           `</select> <button class="btn btn-small btn-primary" data-action="apply-canopy">Set canopy</button></div>`
         : `<div class="canopy-panel muted">Drag a box around a plant's canopy on the aerial to measure it. Canopies are read as an ellipse fit to the box.</div>`;
+      // v1.54 — hint while drawing a light-area region.
+      const areaAssignPanel = this._areaAssignMode
+        ? `<div class="canopy-panel muted">Drag a region around the plants that share a light spot — you'll name the area, and every marker inside joins it (one lux survey then covers them all).</div>`
+        : "";
       const v = this._mapView;
       const viewTransform = `transform:translate(${v.tx}px,${v.ty}px) scale(${v.scale});transform-origin:0 0`;
       return (
         `<div class="card yard-map-card">` +
         `<div class="yard-map-head"><strong>🗺️ Yard map</strong>` +
-        `<span class="yard-map-actions">${zoomSel}${measureBtn}${setupBtn}</span></div>` +
+        `<span class="yard-map-actions">${zoomSel}${measureBtn}${areaAssignBtn}${setupBtn}</span></div>` +
         `<div class="yard-map-wrap${
-          this._measureMode ? " measuring" : ""
+          this._measureMode || this._areaAssignMode ? " measuring" : ""
         }" style="aspect-ratio:${m.width} / ${m.height}">` +
         // v1.48 — everything that pans/zooms lives in this transformed layer.
         `<div class="yard-map-view" style="${viewTransform}">` +
@@ -6932,6 +7015,7 @@
             `</div>`) +
         `</div>` +
         measurePanel +
+        areaAssignPanel +
         (chips
           ? `<div class="yard-map-unplaced"><span class="muted">Tap to place:</span> ${chips}</div>`
           : `<p class="muted yard-map-hint">Drag the map to pan &middot; scroll or +/&minus; to zoom in &middot; drag a marker to reposition.</p>`) +
@@ -7051,9 +7135,16 @@
         ["high", "High"],
       ];
       const zones = this._zonePickOptions();
+      // v1.54 — existing light-area labels, for the Area field's autocomplete so
+      // grouping stays consistent (type "Front Bed" once, reuse it everywhere).
+      const areaList = [...new Set((this._plants || []).map((p) => p.area).filter(Boolean))]
+        .sort()
+        .map((a) => `<option value="${escapeAttr(a)}"></option>`)
+        .join("");
       return (
         `<form class="card plant-form">` +
         `<h3>${e.id ? "Edit plant" : "Add plant"}</h3>` +
+        (areaList ? `<datalist id="eos-area-list">${areaList}</datalist>` : "") +
         `<div class="yard-form-grid">` +
         `<div><label>Friendly name</label>` +
         `<input name="name" data-action="plant-field" type="text" value="${escapeAttr(
@@ -7106,6 +7197,13 @@
           )
           .join("") +
         `</select></div>` +
+        // v1.54 — light-area label; groups co-located plants so ONE lux survey
+        // covers them all. Autocompletes from existing areas; also set in bulk by
+        // drawing a region on the yard map.
+        `<div><label>Light area</label>` +
+        `<input name="area" data-action="plant-field" type="text" maxlength="60" value="${escapeAttr(
+          e.area || ""
+        )}" placeholder="e.g. Front Bed" list="eos-area-list" /></div>` +
         // v1.35 — light range (SAVED plants only: add_plant takes no lux
         // fields, so on add the pair would be silently discarded — show a
         // hint instead, like the photo/health/light sections below). The
@@ -7552,6 +7650,7 @@
             `<span>&middot; ${escapeHtml(this._zoneFriendly(p.zone_entity_id))}</span>` +
             `<span>&middot; ${escapeHtml(this._catLabel(p.wucols_category))}</span>` +
             `<span>&middot; ${escapeHtml(String(p.canopy_area_sqft))} ft&sup2;</span>` +
+            (p.area ? `<span>&middot; 🗺️ ${escapeHtml(p.area)}</span>` : "") +
             `</div></div>` +
             `<div class="plant-row-actions">` +
             `<button class="btn btn-small" data-action="edit-plant" data-plant-id="${escapeAttr(
