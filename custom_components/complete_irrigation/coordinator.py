@@ -316,6 +316,10 @@ class ScheduleCoordinator:
         # the user simply re-starts). Each: {"sensor": entity_id, "until": datetime,
         # "started": datetime, "minutes": int, "samples": [float, ...]}.
         self._light_survey_sessions: dict[str, dict[str, Any]] = {}
+        # v1.55 — area-wide light surveys: one sampling session per AREA whose
+        # result fans out to every plant in that area. Keyed by area label; each:
+        # {"sensor", "started", "until", "minutes", "samples", "plant_ids": [...]}.
+        self._area_survey_sessions: dict[str, dict[str, Any]] = {}
 
     @property
     def schedule_store(self) -> ScheduleStore:
@@ -819,6 +823,110 @@ class ScheduleCoordinator:
                 event_type="light_survey_complete",
             )
 
+    # ── Area-wide light surveys (v1.55) ────────────────────────────
+    def start_area_light_survey(
+        self, area: str, plant_ids: list[str], sensor_entity_id: str, minutes: int
+    ) -> None:
+        """Register ONE survey session for a light area; the tick samples it and,
+        on completion, applies the reading to every listed plant. Caller validated."""
+        from homeassistant.util import dt as dt_util
+
+        now = dt_util.now()
+        self._area_survey_sessions[area] = {
+            "sensor": sensor_entity_id,
+            "started": now,
+            "until": now + timedelta(minutes=minutes),
+            "minutes": minutes,
+            "samples": [],
+            "plant_ids": list(plant_ids),
+        }
+
+    def cancel_area_light_survey(self, area: str) -> bool:
+        return self._area_survey_sessions.pop(area, None) is not None
+
+    def area_survey_status(self) -> dict[str, dict[str, Any]]:
+        """Active area sessions for the WS layer/panel: area -> progress info."""
+        out: dict[str, dict[str, Any]] = {}
+        for area, s in self._area_survey_sessions.items():
+            out[area] = {
+                "sensor": s["sensor"],
+                "started": s["started"].isoformat(),
+                "until": s["until"].isoformat(),
+                "minutes": s["minutes"],
+                "samples": len(s["samples"]),
+                "plants": len(s["plant_ids"]),
+            }
+        return out
+
+    async def _tick_area_surveys(self, now: datetime) -> None:
+        """Sample each active area survey once per tick; finish + fan out when due."""
+        if not self._area_survey_sessions:
+            return
+        finished: list[str] = []
+        for area, sess in self._area_survey_sessions.items():
+            val = self._sample_light_sensor(sess["sensor"])
+            if val is not None:
+                sess["samples"].append(val)
+            if now >= sess["until"]:
+                finished.append(area)
+        for area in finished:
+            sess = self._area_survey_sessions.pop(area, None)
+            if sess is None:  # race: cancelled mid-batch
+                continue
+            await self._finish_area_light_survey(area, sess, now)
+
+    async def _finish_area_light_survey(
+        self, area: str, sess: dict[str, Any], now: datetime
+    ) -> None:
+        """Store the one reading on every plant still in the area, each with its own
+        verdict vs its own optimal range. One summary notification for the area."""
+        from dataclasses import replace as _dc_replace
+
+        summary = summarize_samples(sess["samples"])
+        if summary is None:
+            _LOGGER.warning(
+                "Area light survey %r produced no usable samples (sensor %s)",
+                area,
+                sess["sensor"],
+            )
+            if self.notifier is not None:
+                await self.notifier.notify(
+                    f"Light survey for area '{area}' collected no usable readings from "
+                    f"{sess['sensor']} — check the sensor and try again.",
+                    title="Area light survey failed",
+                    category=CATEGORY_INFORMATIONAL,
+                    event_type="area_light_survey_failed",
+                )
+            return
+        ts = int(now.timestamp())
+        applied = 0
+        for pid in sess["plant_ids"]:
+            plant = self._plants.get(pid)
+            if plant is None:  # deleted mid-survey — skip, don't store a lie
+                continue
+            verdict = light_verdict(summary["lux_avg"], plant.lux_low, plant.lux_high)
+            entry = make_survey_entry(
+                ts=ts,
+                minutes=sess["minutes"],
+                sensor_entity_id=sess["sensor"],
+                summary=summary,
+                verdict=verdict,
+            )
+            surveys = (entry, *plant.light_surveys)[:_MAX_SURVEYS_KEPT]
+            self._plants.upsert(_dc_replace(plant, light_surveys=surveys))
+            applied += 1
+        if applied:
+            await self.async_save_plants()
+        if self.notifier is not None:
+            await self.notifier.notify(
+                f"Light survey for area '{area}' complete — avg "
+                f"{summary['lux_avg']:.0f} lux over {summary['samples']} readings, "
+                f"applied to {applied} plant(s).",
+                title="Area light survey complete",
+                category=CATEGORY_INFORMATIONAL,
+                event_type="area_light_survey_complete",
+            )
+
     # ── Watering diagnosis (v1.35) ─────────────────────────────────
 
     def diagnose_zone_watering(self, zone_entity_id: str):
@@ -959,6 +1067,7 @@ class ScheduleCoordinator:
         # Both are advisory-only and must never break the watering tick.
         try:
             await self._tick_light_surveys(now)
+            await self._tick_area_surveys(now)
             await self._tick_care_reminders(now)
         except Exception:
             _LOGGER.exception("Care/light tick failed (advisory features; watering unaffected)")

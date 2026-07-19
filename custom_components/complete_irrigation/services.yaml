@@ -1573,6 +1573,51 @@ cancel_light_survey:
       selector:
         text:
 
+start_area_light_survey:
+  name: Start area light survey
+  description: >
+    Sample an illuminance sensor once for a timed window and apply the reading to
+    EVERY plant in a light area — each verdicted against its own optimal lux range.
+    One survey for a group of co-located plants instead of one per plant.
+  fields:
+    area:
+      name: Light area
+      description: The area label to survey (plants sharing this area).
+      required: true
+      example: "Front Bed"
+      selector:
+        text:
+    sensor_entity_id:
+      name: Illuminance sensor
+      description: The lux sensor entity to sample.
+      required: true
+      selector:
+        entity:
+          domain: sensor
+          device_class: illuminance
+    minutes:
+      name: Minutes
+      description: Survey length in minutes (sampled about once a minute).
+      required: false
+      default: 10
+      selector:
+        number:
+          min: 1
+          max: 240
+          step: 1
+          mode: box
+
+cancel_area_light_survey:
+  name: Cancel area light survey
+  description: Cancel a running area light survey (nothing is stored).
+  fields:
+    area:
+      name: Light area
+      description: The area whose survey to cancel.
+      required: true
+      selector:
+        text:
+
 add_care_task:
   name: Add care task
   description: >

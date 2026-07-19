@@ -267,13 +267,17 @@ async def list_plants(hass, connection, msg):
     show a live 'surveying…' state without a new round-trip."""
     coord = _find_coordinator(hass)
     if coord is None:
-        connection.send_result(msg["id"], {"plants": [], "active_light_surveys": {}})
+        connection.send_result(
+            msg["id"],
+            {"plants": [], "active_light_surveys": {}, "active_area_surveys": {}},
+        )
         return
     connection.send_result(
         msg["id"],
         {
             "plants": coord.plants.to_serializable(),
             "active_light_surveys": coord.light_survey_status(),
+            "active_area_surveys": coord.area_survey_status(),  # v1.55
         },
     )
 
