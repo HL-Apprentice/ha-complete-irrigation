@@ -4,6 +4,15 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.53.0 — 2026-07-18 — minor
+
+**Yard map: two-finger pinch-to-zoom on touch devices.** The slippy-map (v1.48)
+already did drag-to-pan and scroll/trackpad zoom; now a phone or tablet can
+**pinch to zoom** the aerial directly. Two fingers on the map zoom toward the
+point between them (the same 1x-8x range as the zoom buttons and scroll), and a
+single finger still pans. Purely a client-side view aid -- the stored bbox and
+normalized marker positions are unchanged.
+
 ## v1.52.2 — 2026-07-18 — patch
 
 **Fix an aerial-map regression introduced in v1.52.1.** The 15 MB read cap added
