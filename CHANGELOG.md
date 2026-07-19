@@ -4,6 +4,16 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.55.0 — 2026-07-19 — minor
+
+**Area-wide lux survey -- one survey covers a whole light area.** Building on last
+release's light areas: place the roaming illuminance sensor in an area, pick it in
+the new **Light areas** card on the Yard tab, and **Survey** -- the reading is
+applied to every plant in that area at once, each verdicted against its own
+optimal range (instead of surveying each plant one at a time). Live "surveying..."
+progress with a Cancel, and a completion notification summarizing the area result.
+The per-plant survey is unchanged.
+
 ## v1.54.0 — 2026-07-19 — minor
 
 **Light areas -- group co-located plants for the lux survey.** Plants that share

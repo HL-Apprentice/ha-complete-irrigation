@@ -113,6 +113,8 @@ SERVICE_SET_PLANT_HEALTH = "set_plant_health"  # v1.33 — store a vision-health
 SERVICE_SET_PLANT_LIGHT_RANGE = "set_plant_light_range"
 SERVICE_START_LIGHT_SURVEY = "start_light_survey"
 SERVICE_CANCEL_LIGHT_SURVEY = "cancel_light_survey"
+SERVICE_START_AREA_LIGHT_SURVEY = "start_area_light_survey"  # v1.55 — survey a whole area
+SERVICE_CANCEL_AREA_LIGHT_SURVEY = "cancel_area_light_survey"
 SERVICE_ADD_CARE_TASK = "add_care_task"
 SERVICE_UPDATE_CARE_TASK = "update_care_task"
 SERVICE_DELETE_CARE_TASK = "delete_care_task"
@@ -669,6 +671,21 @@ _START_LIGHT_SURVEY_SCHEMA = vol.Schema(
     }
 )
 _CANCEL_LIGHT_SURVEY_SCHEMA = vol.Schema({vol.Required("plant_id"): cv.string})
+
+# v1.55 — area-wide light survey: ONE sampling session whose reading is applied to
+# every plant in the named area (each gets its own verdict vs its own range).
+_START_AREA_LIGHT_SURVEY_SCHEMA = vol.Schema(
+    {
+        vol.Required("area"): vol.All(cv.string, vol.Length(min=1, max=60), _no_control_chars),
+        vol.Required("sensor_entity_id"): cv.entity_id,
+        vol.Optional("minutes", default=DEFAULT_SURVEY_MINUTES): vol.All(
+            vol.Coerce(int), vol.Range(min=MIN_SURVEY_MINUTES, max=MAX_SURVEY_MINUTES)
+        ),
+    }
+)
+_CANCEL_AREA_LIGHT_SURVEY_SCHEMA = vol.Schema(
+    {vol.Required("area"): vol.All(cv.string, vol.Length(min=1, max=60))}
+)
 
 # v1.35 — care-task reminders (fertilize/prune/mulch/inspect/custom).
 _CARE_INTERVAL = vol.All(vol.Coerce(int), vol.Range(min=MIN_INTERVAL_DAYS, max=MAX_INTERVAL_DAYS))
@@ -2389,6 +2406,41 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         if coord.cancel_light_survey(data["plant_id"]):
             _LOGGER.info("Light survey cancelled for %s", data["plant_id"])
 
+    # ── v1.55: area-wide light surveys ──────────────────────────────
+
+    async def handle_start_area_light_survey(call: ServiceCall) -> None:
+        if not await _require_admin(hass, call):  # drives sampling — admin only
+            return
+        data = _START_AREA_LIGHT_SURVEY_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None:
+            return
+        area = data["area"].strip()
+        plants = coord.plants.by_area(area)
+        if not plants:
+            raise vol.Invalid(f"no plants are in the area {area!r}")
+        sensor = data["sensor_entity_id"]
+        if hass.states.get(sensor) is None:
+            raise vol.Invalid(f"sensor {sensor} does not exist")
+        coord.start_area_light_survey(area, [p.id for p in plants], sensor, data["minutes"])
+        _LOGGER.info(
+            "Area light survey started for %r (%d plants) on %s for %d min",
+            area,
+            len(plants),
+            sensor,
+            data["minutes"],
+        )
+
+    async def handle_cancel_area_light_survey(call: ServiceCall) -> None:
+        if not await _require_admin(hass, call):
+            return
+        data = _CANCEL_AREA_LIGHT_SURVEY_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None:
+            return
+        if coord.cancel_area_light_survey(data["area"].strip()):
+            _LOGGER.info("Area light survey cancelled for %r", data["area"])
+
     # ── v1.35: care-task reminders ──────────────────────────────────
 
     async def handle_add_care_task(call: ServiceCall) -> None:
@@ -3478,6 +3530,18 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         schema=_CANCEL_LIGHT_SURVEY_SCHEMA,
     )
     hass.services.async_register(
+        DOMAIN,
+        SERVICE_START_AREA_LIGHT_SURVEY,
+        handle_start_area_light_survey,
+        schema=_START_AREA_LIGHT_SURVEY_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_CANCEL_AREA_LIGHT_SURVEY,
+        handle_cancel_area_light_survey,
+        schema=_CANCEL_AREA_LIGHT_SURVEY_SCHEMA,
+    )
+    hass.services.async_register(
         DOMAIN, SERVICE_ADD_CARE_TASK, handle_add_care_task, schema=_ADD_CARE_TASK_SCHEMA
     )
     hass.services.async_register(
@@ -3840,6 +3904,8 @@ def _async_unregister_services(hass: HomeAssistant) -> None:
         SERVICE_SET_PLANT_LIGHT_RANGE,
         SERVICE_START_LIGHT_SURVEY,
         SERVICE_CANCEL_LIGHT_SURVEY,
+        SERVICE_START_AREA_LIGHT_SURVEY,
+        SERVICE_CANCEL_AREA_LIGHT_SURVEY,
         SERVICE_ADD_CARE_TASK,
         SERVICE_UPDATE_CARE_TASK,
         SERVICE_DELETE_CARE_TASK,

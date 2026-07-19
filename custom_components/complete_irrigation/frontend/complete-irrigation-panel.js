@@ -72,7 +72,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.54.0";
+  const PANEL_VERSION = "v1.55.0";
   // v1.41 — external plant-ID providers (mirrors llm_client.PROVIDERS). URL is
   // auto-filled when a provider is picked; model is an editable hint. All speak
   // the same OpenAI /v1/chat/completions shape, so one settings form covers them.
@@ -453,6 +453,8 @@
       this._plantEditor = null; // null = form hidden; object = add/edit draft
       // v1.35 — light surveys + care tasks + watering diagnosis state.
       this._activeLightSurveys = {}; // plant_id -> {sensor, started, until, minutes, samples}
+      this._activeAreaSurveys = {}; // v1.55 — area -> {sensor, until, minutes, samples, plants}
+      this._areaSurveyDraft = { sensor: "", minutes: "10" }; // v1.55 — area-survey controls
       this._lightSurveyPoll = null; // 30s list_plants refetch while a survey runs (Yard open)
       this._careTasks = []; // list_care_tasks rows (fetched with the yard)
       this._careDraft = {
@@ -722,7 +724,8 @@
       // surveys remain or the user leaves the Yard tab.
       const wanted =
         this._currentSection === "yard" &&
-        Object.keys(this._activeLightSurveys || {}).length > 0;
+        (Object.keys(this._activeLightSurveys || {}).length > 0 ||
+          Object.keys(this._activeAreaSurveys || {}).length > 0);
       if (!wanted) return this._stopLightSurveyPoll();
       if (this._lightSurveyPoll) return;
       this._lightSurveyPoll = setInterval(() => this._pollLightSurveys(), 30000);
@@ -746,6 +749,7 @@
         });
         this._plants = (res && res.plants) || [];
         this._activeLightSurveys = (res && res.active_light_surveys) || {};
+        this._activeAreaSurveys = (res && res.active_area_surveys) || {};
         this._syncLightSurveyPoll(); // self-clear once every survey completes
         this._scheduleRender();
       } catch (err) {
@@ -881,6 +885,8 @@
         if (action === "map-reset-view") return this._resetMapView();
         if (action === "toggle-measure") return this._toggleMeasure();
         if (action === "toggle-area-assign") return this._toggleAreaAssign();
+        if (action === "survey-area") return this._surveyArea(t.dataset.area);
+        if (action === "cancel-area-survey") return this._cancelAreaSurvey(t.dataset.area);
         if (action === "apply-canopy") return this._applyCanopy();
         if (action === "place-plant") return this._placePlant(node.dataset.plantId);
         if (action === "toggle-theme") return this._cycleTheme();
@@ -1354,6 +1360,12 @@
       if (!t) return;
       // v2 — Yard plant editor: keep draft current per keystroke so a
       // background re-render doesn't blow away unsaved typing.
+      // v1.55 — area-survey sensor/minutes draft (survives background re-renders).
+      if (t.dataset?.action === "area-survey-field") {
+        if (t.name === "area_survey_sensor") this._areaSurveyDraft.sensor = t.value;
+        else if (t.name === "area_survey_minutes") this._areaSurveyDraft.minutes = t.value;
+        return;
+      }
       if (t.dataset?.action === "plant-field") {
         if (this._plantEditor && t.name in this._plantEditor) {
           this._plantEditor[t.name] = t.value;
@@ -1950,6 +1962,8 @@
         // v1.35 — in-flight illuminance surveys ride along on list_plants.
         this._activeLightSurveys =
           (plantsRes && plantsRes.active_light_surveys) || {};
+        this._activeAreaSurveys =
+          (plantsRes && plantsRes.active_area_surveys) || {}; // v1.55
         this._careTasks = (tasksRes && tasksRes.tasks) || [];
         this._yardReports = (reportRes && reportRes.reports) || [];
         this._yardEto = reportRes ? reportRes.eto_in_week : null;
@@ -3488,6 +3502,91 @@
         alert("Failed to assign area: " + (err?.message || err));
       }
       this._renderNow();
+    }
+
+    async _surveyArea(area) {
+      // v1.55 — start ONE lux survey for a light area; the backend applies the
+      // reading to every plant in it. Sensor + minutes come from the area draft.
+      if (!area) return;
+      const d = this._areaSurveyDraft || {};
+      const sensor = (d.sensor || "").trim();
+      const minutes = parseInt(d.minutes, 10);
+      if (!sensor) {
+        alert("Enter the illuminance sensor entity first (e.g. sensor.roaming_lux).");
+        return;
+      }
+      if (!Number.isFinite(minutes) || minutes < 1 || minutes > 240) {
+        alert("Minutes must be between 1 and 240.");
+        return;
+      }
+      try {
+        await this._hass.callService("complete_irrigation", "start_area_light_survey", {
+          area,
+          sensor_entity_id: sensor,
+          minutes,
+        });
+        await this._fetchYard();
+      } catch (err) {
+        alert("Failed to start the area survey: " + (err?.message || err));
+      }
+      this._renderNow();
+    }
+
+    async _cancelAreaSurvey(area) {
+      if (!area) return;
+      try {
+        await this._hass.callService("complete_irrigation", "cancel_area_light_survey", {
+          area,
+        });
+        await this._fetchYard();
+      } catch (err) {
+        alert("Failed to cancel the area survey: " + (err?.message || err));
+      }
+      this._renderNow();
+    }
+
+    _renderAreaSurveys() {
+      // v1.55 — one lux survey per light AREA (covers all its plants).
+      const areas = [...new Set((this._plants || []).map((p) => p.area).filter(Boolean))].sort();
+      if (!areas.length) return "";
+      const d = this._areaSurveyDraft || { sensor: "", minutes: "10" };
+      const rows = areas
+        .map((a) => {
+          const count = (this._plants || []).filter((p) => p.area === a).length;
+          const active = this._activeAreaSurveys && this._activeAreaSurveys[a];
+          const right = active
+            ? `<span class="muted">surveying… ${escapeHtml(String(active.samples))} readings</span>` +
+              `<button class="btn btn-small" data-action="cancel-area-survey" data-area="${escapeAttr(
+                a
+              )}">Cancel</button>`
+            : `<span class="muted">${count} plant${count === 1 ? "" : "s"}</span>` +
+              `<button class="btn btn-small btn-primary" data-action="survey-area" data-area="${escapeAttr(
+                a
+              )}">Survey</button>`;
+          return (
+            `<div class="area-survey-row"><span class="area-survey-name">🗺️ ${escapeHtml(
+              a
+            )}</span>${right}</div>`
+          );
+        })
+        .join("");
+      return (
+        `<div class="card area-survey-card">` +
+        `<h3>Light areas</h3>` +
+        `<p class="muted">One lux survey covers every plant in an area. Set the roaming sensor in the area, pick it below, then Survey — each plant is verdicted against its own optimal range.</p>` +
+        `<div class="yard-form-grid">` +
+        `<div><label>Illuminance sensor</label>` +
+        `<input name="area_survey_sensor" data-action="area-survey-field" type="text" value="${escapeAttr(
+          d.sensor
+        )}" placeholder="sensor.roaming_lux" /></div>` +
+        `<div><label>Minutes</label>` +
+        `<input name="area_survey_minutes" data-action="area-survey-field" type="number" min="1" max="240" step="1" value="${escapeAttr(
+          d.minutes
+        )}" /></div>` +
+        `</div>` +
+        rows +
+        `</div>`
+      );
     }
 
     _drawCanopyBox() {
@@ -6879,6 +6978,8 @@
             `</div>`) +
         // Plant list
         this._renderPlantList() +
+        // v1.55 — one lux survey per light area (covers all its plants)
+        this._renderAreaSurveys() +
         // v1.35 — recurring care reminders (fertilize/prune/mulch/inspect)
         this._renderCareTasks() +
         // Per-loop design report
@@ -8707,6 +8808,8 @@
         `.plant-row-name{font-weight:600;font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}` +
         `.plant-row-meta{display:flex;flex-wrap:wrap;gap:2px 8px;font-size:12px;color:var(--ci-text-2);margin-top:3px}` +
         `.plant-row-actions{display:flex;gap:8px;flex-shrink:0}` +
+        `.area-survey-row{display:flex;align-items:center;gap:10px;justify-content:space-between;padding:9px 0;border-top:1px solid var(--ci-border)}` +
+        `.area-survey-name{font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}` +
         `@media (max-width:520px){.plant-row{flex-direction:column;align-items:stretch}.plant-row-actions .btn{flex:1}}` +
         // v1.40.7 — "Scheduled for this loop" info section (was a warning)
         `.yard-scheds{margin:8px 0 4px;padding:8px 11px;border:1px solid var(--ci-border);border-radius:10px}` +
