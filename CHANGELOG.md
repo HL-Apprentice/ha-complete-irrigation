@@ -4,6 +4,30 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.56.0 — 2026-07-22 — minor
+
+**Smart schedule assistant -- essential/non-essential runs, conflict detection, and a
+propose-only LLM rescheduler.** Schedules can now be marked **Essential** (default) or
+**Non-essential**. When runs would collide on the one-zone controller, essential runs
+are kept on time and whole while non-essential runs are moved (or split) to fit around
+them -- and nothing is ever missed (the never-drop failsafe is unchanged).
+
+- **Conflict check on add/edit** -- the moment a new or edited schedule would collide you
+  get a notification to adjust it. With an AI model configured, the assistant instead
+  **proposes** shift/split fixes you review and apply with one tap (propose-only --
+  nothing changes your watering on its own). A **nightly 9 PM sweep** catches issues
+  proactively.
+- **Conflict splitting** -- a non-essential run can be split into timed pieces to fill the
+  gaps around essentials; the pieces always sum to the full duration (no water lost).
+- **Per-plant-type split defaults** -- set the minimum split chunk per type (Tree, Shrub,
+  Grass, Flower, Cactus & succulent) in Settings; a schedule tagged with a type inherits
+  its default (trees get long soaks, grass splits fine), and changing a type retunes every
+  schedule of that type at once.
+
+Every proposal routes through the same validated services you use by hand and is bounded
+so an approved fix can never drop a run or change a run's total water. Multi-model
+verified (Claude + Grok + Gemini + Qwen); 30+ new unit tests.
+
 ## v1.55.0 — 2026-07-19 — minor
 
 **Area-wide lux survey -- one survey covers a whole light area.** Building on last
