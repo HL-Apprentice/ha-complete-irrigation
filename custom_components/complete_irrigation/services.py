@@ -67,6 +67,8 @@ from .run_guard import (
 )
 from .run_history import SOURCE_MANUAL, SOURCE_SCHEDULED
 from .schedule import Schedule, ZoneStep
+from .schedule_split import SPLIT_PROFILES as _SPLIT_PROFILES
+from .schedule_split import merge_chunk_defaults as _merge_chunk_defaults
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant, ServiceCall
@@ -125,6 +127,8 @@ SERVICE_RESEARCH_PLANT_SPECIES = "research_plant_species"  # v1.40.9 — NAME ->
 SERVICE_ADD_PLANT_FROM_PHOTO = "add_plant_from_photo"  # v1.38 — photo-first creation
 SERVICE_PROPOSE_WATERING_ADVICE = "propose_watering_advice"  # v1.39 — LLM advisor
 SERVICE_DISMISS_WATERING_ADVICE = "dismiss_watering_advice"
+SERVICE_DISMISS_SCHEDULE_ADVICE = "dismiss_schedule_advice"  # v1.56 — clear a schedule proposal
+SERVICE_SPLIT_SCHEDULE = "split_schedule"  # v1.56 — actuate an approved split into timed parts
 SERVICE_TEST_VISION_ENDPOINT = "test_vision_endpoint"  # v1.39.1 — connectivity probe
 SERVICE_VERIFY_SPECIES_NAME = "verify_species_name"  # v1.46 — GBIF name check (no key)
 SERVICE_LOOKUP_HARDINESS_ZONE = "lookup_hardiness_zone"  # v1.50 — phzmapi (no key)
@@ -260,6 +264,12 @@ _ADD_SCHEDULE_SCHEMA = vol.Schema(
         vol.Optional("ignore_hot_weather", default=False): cv.boolean,
         vol.Optional("ignore_rain_lockout", default=False): cv.boolean,
         vol.Optional("color"): _validate_hex_color,  # v1.18
+        # v1.56 — scheduler priority + split floor + per-type split profile.
+        vol.Optional("essential", default=True): cv.boolean,
+        vol.Optional("min_chunk_minutes"): vol.Any(
+            None, vol.All(vol.Coerce(int), vol.Range(min=1, max=MAX_SCHEDULE_DURATION_MIN))
+        ),
+        vol.Optional("split_profile"): vol.In(("", *_SPLIT_PROFILES)),
         # Multi-zone: optional list of {zone_entity_id, duration_minutes}.
         # First step must equal zone_entity_id + duration_minutes.
         vol.Optional("zone_steps", default=[]): vol.All(
@@ -297,11 +307,40 @@ _UPDATE_SCHEDULE_SCHEMA = vol.Schema(
         vol.Optional("ignore_hot_weather"): cv.boolean,
         vol.Optional("ignore_rain_lockout"): cv.boolean,
         vol.Optional("color"): _validate_hex_color,  # v1.18
+        # v1.56 — scheduler priority + split floor + per-type split profile.
+        vol.Optional("essential"): cv.boolean,
+        vol.Optional("min_chunk_minutes"): vol.Any(
+            None, vol.All(vol.Coerce(int), vol.Range(min=1, max=MAX_SCHEDULE_DURATION_MIN))
+        ),
+        vol.Optional("split_profile"): vol.In(("", *_SPLIT_PROFILES)),
         vol.Optional("zone_steps"): vol.All(cv.ensure_list, [_ZONE_STEP_SCHEMA]),
     }
 )
 
 _DELETE_SCHEDULE_SCHEMA = vol.Schema({vol.Required("schedule_id"): cv.string})
+
+# v1.56 — actuate an approved split: replace one single-zone schedule with timed
+# parts whose minutes sum EXACTLY to its current duration (no water lost/added).
+_SPLIT_SCHEDULE_SCHEMA = vol.Schema(
+    {
+        vol.Required("schedule_id"): cv.string,
+        vol.Required("parts"): vol.All(
+            cv.ensure_list,
+            vol.Length(min=2, max=8),
+            [
+                vol.Schema(
+                    {
+                        vol.Required("start"): cv.time,
+                        vol.Required("minutes"): vol.All(
+                            vol.Coerce(int), vol.Range(min=1, max=MAX_SCHEDULE_DURATION_MIN)
+                        ),
+                    }
+                )
+            ],
+        ),
+    }
+)
+_DISMISS_SCHEDULE_ADVICE_SCHEMA = vol.Schema({})
 
 _RUN_SCHEDULE_SCHEMA = vol.Schema({vol.Required("schedule_id"): cv.string})
 
@@ -474,6 +513,15 @@ _SET_GENERAL_CONFIG_SCHEMA = vol.Schema(
         # After commanding the zone switch on/off we re-read its state this
         # long after and retry/alert if the command didn't take. 0 disables.
         vol.Optional("verify_switch_seconds"): vol.All(vol.Coerce(int), vol.Range(min=0, max=300)),
+        # v1.56 — per-plant-type default split-chunk floors (minutes). A loose dict
+        # {tree|shrub|grass|flower|cactus_succulent: int}; cleaned/merged over the
+        # built-ins by merge_chunk_defaults before storage.
+        vol.Optional("split_chunk_defaults"): vol.Schema(
+            {
+                vol.Optional(t): vol.All(vol.Coerce(int), vol.Range(min=1, max=480))
+                for t in _SPLIT_PROFILES
+            }
+        ),
     }
 )
 
@@ -490,6 +538,8 @@ _GENERAL_CONFIG_FIELDS: dict[str, Any] = {
     "controller_max_run_minutes": int,  # v1.25
     "block_gap_seconds": int,  # v1.25
     "verify_switch_seconds": int,  # v1.40 — 0 disables the check-back verify
+    # v1.56 — merge the per-type split-chunk defaults over the built-ins on store.
+    "split_chunk_defaults": lambda v: _merge_chunk_defaults(v),
     "vision_url": lambda v: v.strip(),  # v1.37 — empty string clears
     "vision_model": lambda v: v.strip(),  # v1.37
     "llm_mode": lambda v: v,  # v1.41 — local | external | fallback
@@ -1823,6 +1873,14 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         if coord is None:
             _LOGGER.warning("add_schedule called but no coordinator available")
             return
+        # v1.56 — clean cross-field message (the schema bounds min_chunk to
+        # MAX_SCHEDULE_DURATION_MIN, but the model requires it <= this run's duration).
+        _mc = data.get("min_chunk_minutes")
+        if _mc is not None and _mc > data["duration_minutes"]:
+            raise vol.Invalid(
+                f"min_chunk_minutes ({_mc}) can't exceed the run's duration "
+                f"({data['duration_minutes']} min)"
+            )
         steps_raw = data.get("zone_steps") or []
         zone_steps = tuple(
             ZoneStep(
@@ -1861,10 +1919,20 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             # edit lands. Anything coming through the service (panel,
             # automations, dev tools) gets "service".
             created_via="service",
+            # v1.56 — scheduler priority + split floor + per-type profile.
+            essential=data.get("essential", True),
+            min_chunk_minutes=data.get("min_chunk_minutes"),
+            split_profile=data.get("split_profile", ""),
         )
         coord.schedule_store.add(schedule)
         await coord.async_save()
         _LOGGER.info("Added schedule %s (%s) mode=%s", schedule.id, schedule.name, schedule.mode)
+        # v1.56 — base conflict check on add: notify (or hand to the LLM) if this new
+        # schedule collides with the existing plan. Fire-and-forget so the LLM round
+        # trip never delays this service response (review self-guards + never actuates).
+        from .schedule_review import review_schedule
+
+        hass.async_create_task(review_schedule(hass, coord, new_schedule_id=schedule.id))
 
     async def handle_update_schedule(call: ServiceCall) -> None:
         if not await _require_admin(hass, call):  # config write — admin only
@@ -1902,6 +1970,9 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             "sun_event",
             "sun_offset_minutes",
             "anchor",
+            "essential",
+            "min_chunk_minutes",
+            "split_profile",
         ):
             if key in data:
                 overrides[key] = data[key]
@@ -1915,10 +1986,118 @@ async def _async_register_services(hass: HomeAssistant) -> None:
                 )
                 for s in (data["zone_steps"] or [])
             )
+        # v1.56 — clean cross-field message before the model raises (min_chunk must
+        # be <= the effective duration, whether one or both are being changed).
+        _eff_dur = overrides.get("duration_minutes", existing.duration_minutes)
+        _eff_mc = overrides.get("min_chunk_minutes", existing.min_chunk_minutes)
+        if _eff_mc is not None and _eff_mc > _eff_dur:
+            raise vol.Invalid(
+                f"min_chunk_minutes ({_eff_mc}) can't exceed the run's duration ({_eff_dur} min)"
+            )
         merged = existing.with_changes(**overrides)
         coord.schedule_store.upsert(merged)
         await coord.async_save()
         _LOGGER.info("Updated schedule %s", merged.id)
+        # v1.56 — re-run the base conflict check after an edit (a moved start / longer
+        # duration can introduce a collision). Fire-and-forget: the LLM round trip
+        # never delays this service response (review self-guards + never actuates).
+        from .schedule_review import review_schedule
+
+        hass.async_create_task(review_schedule(hass, coord, new_schedule_id=merged.id))
+
+    async def handle_split_schedule(call: ServiceCall) -> None:
+        """v1.56 — actuate an approved split: replace a single-zone schedule with
+        timed parts that sum to its current duration. Propose-only upstream: the
+        user applies this from the reviewed proposal. Parts must not lose/add water."""
+        if not await _require_admin(hass, call):  # config write — admin only
+            return
+        data = _SPLIT_SCHEDULE_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None:
+            return
+        from .schedule import MODE_INTERVAL_HOURS
+        from .schedule_split import effective_min_chunk, merge_chunk_defaults
+
+        existing = coord.schedule_store.get(data["schedule_id"])
+        if existing is None:
+            raise vol.Invalid(f"no such schedule {data['schedule_id']}")
+        if len(existing.all_steps()) > 1:
+            raise vol.Invalid("only single-zone schedules can be split")
+        # An hourly-interval schedule fires many times a day from one start, so each
+        # split part would inherit that cadence and MULTIPLY the daily total — its
+        # parts would not sum to the day's water. Reject it (weekdays/interval fire
+        # once per active day, so their split preserves the total).
+        if existing.mode == MODE_INTERVAL_HOURS:
+            raise vol.Invalid("an hourly-interval schedule can't be split")
+        parts = data["parts"]
+        if sum(int(p["minutes"]) for p in parts) != existing.duration_minutes:
+            raise vol.Invalid(
+                "split parts must sum to the schedule's duration "
+                f"({existing.duration_minutes} min) so no water is lost"
+            )
+        floor = effective_min_chunk(
+            existing.min_chunk_minutes,
+            existing.split_profile,
+            merge_chunk_defaults(coord.config.get("split_chunk_defaults")),
+        )
+        for i, p in enumerate(parts, start=1):
+            if int(p["minutes"]) < floor:
+                raise vol.Invalid(
+                    f"split part {i} ({p['minutes']} min) is below the minimum "
+                    f"chunk floor ({floor} min)"
+                )
+        n = len(parts)
+        base = existing.name
+        # Build EVERY piece up front (ATOMIC): validation runs now, so a bad part can
+        # never leave the schedule half-split with water dropped. Parts drop sun
+        # anchoring (their explicit HH:MM starts must be honored) + the re-split floor.
+        common = {
+            "zone_steps": (),
+            "sun_event": None,
+            "sun_offset_minutes": 0,
+            "min_chunk_minutes": None,
+        }
+        try:
+            pieces = [
+                existing.with_changes(
+                    name=f"{base} (1/{n})",
+                    start_time=parts[0]["start"],
+                    duration_minutes=int(parts[0]["minutes"]),
+                    anchor="start",
+                    **common,
+                )
+            ]
+            for i, p in enumerate(parts[1:], start=2):
+                pieces.append(
+                    replace(
+                        existing,
+                        id=uuid.uuid4().hex[:12],
+                        name=f"{base} ({i}/{n})",
+                        start_time=p["start"],
+                        duration_minutes=int(p["minutes"]),
+                        anchor="start",
+                        **common,
+                    )
+                )
+        except ValueError as err:
+            raise vol.Invalid(f"could not split this schedule: {err}") from err
+        # All pieces valid -> commit together.
+        coord.schedule_store.upsert(pieces[0])
+        for piece in pieces[1:]:
+            coord.schedule_store.add(piece)
+        await coord.async_save()
+        _LOGGER.info("Split schedule %s into %d parts", existing.id, n)
+
+    async def handle_dismiss_schedule_advice(call: ServiceCall) -> None:
+        """v1.56 — clear the stored schedule proposal (nothing was actuated)."""
+        if not await _require_admin(hass, call):
+            return
+        _ = _DISMISS_SCHEDULE_ADVICE_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None:
+            return
+        if coord.config.pop("schedule_advice", None) is not None:
+            await coord.async_save_config()
 
     async def handle_delete_schedule(call: ServiceCall) -> None:
         if not await _require_admin(hass, call):  # destructive — admin only
@@ -3469,6 +3648,15 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         schema=_DELETE_SCHEDULE_SCHEMA,
     )
     hass.services.async_register(
+        DOMAIN, SERVICE_SPLIT_SCHEDULE, handle_split_schedule, schema=_SPLIT_SCHEDULE_SCHEMA
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_DISMISS_SCHEDULE_ADVICE,
+        handle_dismiss_schedule_advice,
+        schema=_DISMISS_SCHEDULE_ADVICE_SCHEMA,
+    )
+    hass.services.async_register(
         DOMAIN,
         SERVICE_SET_SCHEDULE_ENABLED,
         handle_set_schedule_enabled,
@@ -3884,6 +4072,8 @@ def _async_unregister_services(hass: HomeAssistant) -> None:
         SERVICE_ADD_SCHEDULE,
         SERVICE_UPDATE_SCHEDULE,
         SERVICE_DELETE_SCHEDULE,
+        SERVICE_SPLIT_SCHEDULE,
+        SERVICE_DISMISS_SCHEDULE_ADVICE,
         SERVICE_SET_SCHEDULE_ENABLED,
         SERVICE_SET_WEATHER_CONFIG,
         SERVICE_SET_ZONE_MOISTURE,

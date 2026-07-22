@@ -243,6 +243,47 @@ add_schedule:
       example: "#4caf50"
       selector:
         text:
+    essential:
+      name: Essential run
+      description: >
+        On (default): protect this run when schedules collide — keep it on time
+        and whole, disrupting non-essential runs first. Off: this run may be
+        moved and split to fit around essential runs (e.g. a bird-bath fill).
+        Nothing is ever missed either way.
+      required: false
+      default: true
+      selector:
+        boolean:
+    min_chunk_minutes:
+      name: Minimum split chunk (min)
+      description: >
+        If this run is ever split to fit gaps, don't cut it into pieces smaller
+        than this. Blank = default (5 min). Must be <= the run's duration.
+        Ignored when split_profile is set (the type default is used instead).
+      required: false
+      example: 5
+      selector:
+        number:
+          min: 1
+          max: 480
+          step: 1
+          mode: box
+    split_profile:
+      name: Split profile (plant type)
+      description: >
+        Tag this schedule with a plant type so it inherits that type's split-chunk
+        default (set under Settings > Split-chunk defaults). Empty = custom
+        (use min_chunk_minutes).
+      required: false
+      selector:
+        select:
+          options:
+            - ""
+            - tree
+            - shrub
+            - grass
+            - flower
+            - cactus_succulent
 
 update_schedule:
   name: Update schedule
@@ -390,6 +431,28 @@ update_schedule:
       example: "#4caf50"
       selector:
         text:
+    essential:
+      name: Essential run
+      description: >
+        On: protect this run when schedules collide (kept on time and whole,
+        non-essential runs disrupted first). Off: may be moved/split to fit
+        around essential runs. Nothing is ever missed.
+      required: false
+      selector:
+        boolean:
+    min_chunk_minutes:
+      name: Minimum split chunk (min)
+      description: >
+        Smallest slice this run may be split into. Blank keeps the default
+        (5 min). Must be <= the run's duration.
+      required: false
+      example: 5
+      selector:
+        number:
+          min: 1
+          max: 480
+          step: 1
+          mode: box
 
 delete_schedule:
   name: Delete schedule
@@ -401,6 +464,34 @@ delete_schedule:
       required: true
       selector:
         text:
+
+split_schedule:
+  name: Split schedule
+  description: >
+    Replace one single-zone schedule with timed parts whose minutes sum EXACTLY
+    to its current duration (no water lost or added). Used to actuate an approved
+    split proposal. Hourly-interval schedules can't be split.
+  fields:
+    schedule_id:
+      name: Schedule ID
+      description: The single-zone schedule to split.
+      required: true
+      selector:
+        text:
+    parts:
+      name: Parts
+      description: >
+        A list of 2-8 {start, minutes} objects. Each start is HH:MM; each
+        minutes >= the schedule's minimum chunk; all minutes must sum to the
+        schedule's current duration.
+      required: true
+      example: "[{start: '05:30', minutes: 5}, {start: '06:40', minutes: 10}]"
+      selector:
+        object:
+
+dismiss_schedule_advice:
+  name: Dismiss schedule advice
+  description: Clear the current proposed schedule fixes (nothing was actuated).
 
 set_schedule_enabled:
   name: Set schedule enabled

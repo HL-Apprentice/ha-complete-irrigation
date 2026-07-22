@@ -41,6 +41,27 @@ def _parse_hhmm(s: str) -> time:
     return time(int(hh), int(mm))
 
 
+def _coerce_min_chunk(v: Any, duration_minutes: int) -> int | None:
+    """v1.56 — tolerant read of min_chunk_minutes: a positive int clamped to the
+    run's duration, else None (use the global default). Keeps a stale/oversized
+    stored value from failing Schedule validation and dropping the whole record."""
+    try:
+        iv = int(v) if v is not None else None
+    except (TypeError, ValueError):
+        return None
+    if iv is None or iv < 1:
+        return None
+    return min(iv, duration_minutes)
+
+
+def _coerce_split_profile(v: Any) -> str:
+    """v1.56 — tolerant read of split_profile: a known plant type, else "" (none)."""
+    from .schedule_split import SPLIT_PROFILES
+
+    s = str(v or "")
+    return s if s in SPLIT_PROFILES else ""
+
+
 @dataclass(frozen=True)
 class ZoneStep:
     """One zone in a multi-zone schedule: which zone, how long.
@@ -157,6 +178,21 @@ class Schedule:
     sun_event: str | None = None
     sun_offset_minutes: int = 0
     anchor: str = ANCHOR_START
+    # v1.56 — scheduler priority. essential=True (default) means "keep this run as
+    # pure as possible: on time and un-split; disrupt non-essential runs FIRST when
+    # resolving a conflict." essential=False (e.g. a bird-bath fill) means the run
+    # may be shifted AND split to fit around the essential runs, and yields first.
+    # Nothing is ever dropped — the never-miss failsafe still applies to both.
+    essential: bool = True
+    # v1.56 — smallest slice this schedule may be split into when the scheduler
+    # breaks a run to fit gaps (minutes). None = use the global default. Guards a
+    # run from being chopped into useless slivers (e.g. a bird bath into 1-min bits).
+    min_chunk_minutes: int | None = None
+    # v1.56 — optional plant-type tag (tree/shrub/grass/flower/cactus_succulent).
+    # When set, the split floor comes from that type's configurable default instead
+    # of min_chunk_minutes, so re-tuning a type in Settings updates every schedule
+    # of that type at once. "" = none (use min_chunk_minutes / the global default).
+    split_profile: str = ""
 
     def __post_init__(self) -> None:
         # Validation split into small focused helpers — keeps each rule
@@ -208,6 +244,22 @@ class Schedule:
             raise ValueError(f"duration_minutes must be positive, got {self.duration_minutes}")
         if self.mode not in _VALID_MODES:
             raise ValueError(f"mode must be one of {_VALID_MODES}, got {self.mode!r}")
+        # v1.56 — split-chunk floor: None (use default) or a positive minute count
+        # no larger than the run itself.
+        if self.min_chunk_minutes is not None and not (
+            1 <= self.min_chunk_minutes <= self.duration_minutes
+        ):
+            raise ValueError(
+                "min_chunk_minutes must be None or an int in "
+                f"[1, {self.duration_minutes}], got {self.min_chunk_minutes}"
+            )
+        # v1.56 — split_profile is "" (none) or a known plant type.
+        from .schedule_split import SPLIT_PROFILES
+
+        if self.split_profile and self.split_profile not in SPLIT_PROFILES:
+            raise ValueError(
+                f"split_profile must be '' or one of {SPLIT_PROFILES}, got {self.split_profile!r}"
+            )
 
     def _validate_weekdays_mode(self) -> None:
         if not self.weekdays:
@@ -322,6 +374,9 @@ class Schedule:
             "sun_event": self.sun_event,
             "sun_offset_minutes": self.sun_offset_minutes,
             "anchor": self.anchor,
+            "essential": self.essential,
+            "min_chunk_minutes": self.min_chunk_minutes,
+            "split_profile": self.split_profile,
         }
 
     @classmethod
@@ -366,6 +421,13 @@ class Schedule:
             sun_event=(data.get("sun_event") if data.get("sun_event") in SUN_EVENTS else None),
             sun_offset_minutes=int(data.get("sun_offset_minutes") or 0),
             anchor=(data.get("anchor") if data.get("anchor") in _VALID_ANCHORS else ANCHOR_START),
+            # v1.56 — tolerant read: pre-v1.56 records default to essential + no
+            # custom split floor. A malformed min_chunk degrades to None.
+            essential=bool(data.get("essential", True)),
+            min_chunk_minutes=_coerce_min_chunk(
+                data.get("min_chunk_minutes"), int(data["duration_minutes"])
+            ),
+            split_profile=_coerce_split_profile(data.get("split_profile")),
         )
 
 

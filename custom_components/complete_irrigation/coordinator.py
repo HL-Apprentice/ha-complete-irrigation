@@ -246,6 +246,7 @@ class ScheduleCoordinator:
         self.notifier: NotificationDispatcher | None = None
         self._cancel_summary = None
         self._cancel_weekly = None
+        self._cancel_schedule_review = None  # v1.56 — nightly schedule sweep
         self._cancel_post_install = None
         # Sensor-availability tracking (PRD #57): remembers which bound
         # moisture sensors are currently offline so we only push a
@@ -457,6 +458,12 @@ class ScheduleCoordinator:
             self._hass, self._fire_weekly_reminder, hour=8, minute=0, second=0
         )
 
+        # v1.56 — nightly schedule safety-sweep (21:00): proactively catch any
+        # schedule conflict for the coming days and propose a fix (or notify).
+        self._cancel_schedule_review = async_track_time_change(
+            self._hass, self._fire_nightly_schedule_review, hour=21, minute=0, second=0
+        )
+
         # v1.28 — auto ETo: refresh the FAO-56 figure daily at 03:00 (after
         # midnight, before the morning watering window). If auto is already
         # enabled, fetch one immediately so the design math isn't manual-only
@@ -546,6 +553,7 @@ class ScheduleCoordinator:
             "_cancel_tick",
             "_cancel_summary",
             "_cancel_weekly",
+            "_cancel_schedule_review",
             "_cancel_post_install",
             "_cancel_eto",
             "_cancel_resume",
@@ -647,6 +655,17 @@ class ScheduleCoordinator:
             category=CATEGORY_IMPORTANT,
             event_type="low_moisture_summary",
         )
+
+    async def _fire_nightly_schedule_review(self, now=None) -> None:
+        """v1.56 — nightly safety sweep: detect any schedule conflict and propose a
+        fix (LLM configured) or notify for manual adjustment. Propose-only, never
+        actuates; wrapped so a review error never disturbs the coordinator."""
+        try:
+            from .schedule_review import review_schedule
+
+            await review_schedule(self._hass, self, new_schedule_id=None)
+        except Exception:
+            _LOGGER.exception("nightly schedule review failed (advisory)")
 
     async def _fire_weekly_reminder(self, now=None) -> None:
         from datetime import date as _date

@@ -40,6 +40,12 @@ class PlannedRun:
     # fired-runs ledger on this so a deferred run is never re-planned as a
     # fresh firing and lost. Defaults to start_at when not set explicitly.
     scheduled_start_at: datetime | None = None
+    # v1.56 — scheduler priority carried from the source Schedule. essential runs
+    # are protected (disrupt non-essential FIRST when resolving conflicts);
+    # min_chunk_minutes is the split floor (None = global default). Both flow
+    # through conflict resolution unchanged.
+    essential: bool = True
+    min_chunk_minutes: int | None = None
 
     def __post_init__(self) -> None:
         if self.scheduled_start_at is None:
@@ -115,6 +121,8 @@ def _expand_steps(
             duration_minutes=step.duration_minutes,
             schedule_id=sched.id,
             schedule_name=sched.name,
+            essential=sched.essential,  # v1.56 — carry priority into resolution
+            min_chunk_minutes=sched.min_chunk_minutes,
         )
         cursor = cursor + timedelta(
             minutes=step.duration_minutes,

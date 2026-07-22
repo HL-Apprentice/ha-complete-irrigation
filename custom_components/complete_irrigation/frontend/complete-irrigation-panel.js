@@ -72,7 +72,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.55.0";
+  const PANEL_VERSION = "v1.56.0";
   // v1.41 — external plant-ID providers (mirrors llm_client.PROVIDERS). URL is
   // auto-filled when a provider is picked; model is an editable hint. All speak
   // the same OpenAI /v1/chat/completions shape, so one settings form covers them.
@@ -355,6 +355,12 @@
       sun_event: "",
       sun_offset_minutes: "0",
       anchor: "start",
+      // v1.56 — scheduler priority. essential=true keeps the run pure (on time,
+      // un-split, disrupt non-essentials first). min_chunk_minutes = split floor
+      // ("" = default). Only matter when schedules conflict.
+      essential: true,
+      min_chunk_minutes: "",
+      split_profile: "", // v1.56 — "" (custom) or tree|shrub|grass|flower|cactus_succulent
       // Multi-zone: additional zones after the primary. Each is
       // {zone_entity_id, duration_minutes}. Empty = single-zone schedule.
       // The primary (top-level zone_entity_id + duration_minutes) is
@@ -485,6 +491,9 @@
       // was applied this session; reset when a NEW advice blob arrives.
       this._advisorApplied = {};
       this._advisorAppliedAt = null; // proposed_at the marks belong to
+      // v1.56 — same per-item "applied" marks for the schedule-fix card.
+      this._schedAdviceApplied = {};
+      this._schedAdviceAppliedAt = null;
 
       // Sensor (moisture) modal state
       this._sensorModalOpen = false;
@@ -944,6 +953,14 @@
         if (action === "advice-apply")
           return this._applyAdviceItem(parseInt(node.dataset.idx, 10));
         if (action === "advice-dismiss") return this._dismissAdvice();
+        // v1.56 — schedule-fix proposals.
+        if (action === "apply-schedule-advice")
+          return this._applyScheduleAdvice(parseInt(node.dataset.idx, 10));
+        if (action === "dismiss-schedule-advice") return this._dismissScheduleAdvice();
+        // v1.56 — schedule-fix proposals.
+        if (action === "apply-schedule-advice")
+          return this._applyScheduleAdvice(parseInt(node.dataset.idx, 10));
+        if (action === "dismiss-schedule-advice") return this._dismissScheduleAdvice();
         if (action === "zone-move-up") return this._reorderZone(node.dataset.entityId, -1);
         if (action === "zone-move-down") return this._reorderZone(node.dataset.entityId, 1);
         if (action === "day-cal-prev") {
@@ -1080,6 +1097,11 @@
       if (e.target?.dataset?.form === "conflict-policy") {
         e.preventDefault();
         this._saveConflictPolicy(e.target);
+        return;
+      }
+      if (e.target?.dataset?.form === "split-defaults") {
+        e.preventDefault();
+        this._saveSplitDefaults(e.target);
         return;
       }
       if (e.target?.dataset?.form === "ha-theme") {
@@ -1322,6 +1344,8 @@
         this._scheduleEditor.enabled = t.checked;
       } else if (t.name === "repeat_annually") {
         this._scheduleEditor.repeat_annually = t.checked;
+      } else if (t.name === "essential") {
+        this._scheduleEditor.essential = t.checked; // v1.56
       } else if (
         t.name === "ignore_wind" ||
         t.name === "ignore_hot_weather" ||
@@ -1331,6 +1355,10 @@
       } else if (t.name === "mode") {
         // Mode toggle flips which fields show — re-render the modal.
         this._scheduleEditor.mode = t.value;
+        this._renderNow();
+      } else if (t.name === "split_profile") {
+        // v1.56 — picking a plant type hides the raw min-chunk (type default wins).
+        this._scheduleEditor.split_profile = t.value;
         this._renderNow();
       } else if (t.name === "sun_event") {
         // v1.40 — flips the offset/anchor controls + fallback-time label.
@@ -1745,6 +1773,11 @@
         sun_offset_minutes:
           found.sun_offset_minutes != null ? String(found.sun_offset_minutes) : "0",
         anchor: found.anchor || "start",
+        // v1.56 — scheduler priority + split floor + per-type profile.
+        essential: found.essential !== false,
+        min_chunk_minutes:
+          found.min_chunk_minutes != null ? String(found.min_chunk_minutes) : "",
+        split_profile: found.split_profile || "",
         extra_steps: extra.map((s) => ({
           zone_entity_id: s.zone_entity_id,
           duration_minutes: s.duration_minutes,
@@ -1790,6 +1823,11 @@
         sun_offset_minutes:
           found.sun_offset_minutes != null ? String(found.sun_offset_minutes) : "0",
         anchor: found.anchor || "start",
+        // v1.56 — scheduler priority + split floor + per-type profile.
+        essential: found.essential !== false,
+        min_chunk_minutes:
+          found.min_chunk_minutes != null ? String(found.min_chunk_minutes) : "",
+        split_profile: found.split_profile || "",
         extra_steps: extra.map((s) => ({
           zone_entity_id: s.zone_entity_id,
           duration_minutes: s.duration_minutes,
@@ -2544,6 +2582,15 @@
         ignore_wind: !!e.ignore_wind,
         ignore_hot_weather: !!e.ignore_hot_weather,
         ignore_rain_lockout: !!e.ignore_rain_lockout,
+        // v1.56 — scheduler priority + split floor + per-type profile
+        essential: e.essential !== false,
+        split_profile: e.split_profile || "",
+        // A plant-type profile supplies the floor; a raw min-chunk only applies
+        // when profile is "custom" (none). "" → null = the global default.
+        min_chunk_minutes:
+          e.split_profile || e.min_chunk_minutes === "" || e.min_chunk_minutes == null
+            ? null
+            : parseInt(e.min_chunk_minutes, 10),
         // v1.18 — color ("" → null clears it on the server)
         color: e.color ? e.color : null,
         // v1.40 — sun-anchored start. sun_event: null EXPLICITLY clears a
@@ -4061,6 +4108,15 @@
         c.verify_switch_seconds != null ? c.verify_switch_seconds : 30;
       const snoozedUntil = c.weekly_reminder_snoozed_until || "";
       const adminOnlyServices = !!c.admin_only_services;
+      // v1.56 — per-plant-type split-chunk defaults (built-ins overlaid by config).
+      const chunkDef = {
+        tree: 20,
+        shrub: 15,
+        grass: 5,
+        flower: 8,
+        cactus_succulent: 10,
+        ...(c.split_chunk_defaults || {}),
+      };
       const policyOpt = (val, label) =>
         `<option value="${val}"${policy === val ? " selected" : ""}>${label}</option>`;
 
@@ -4111,6 +4167,29 @@
         `<input name="verify_switch_seconds" type="number" min="0" max="300" step="1" value="${escapeAttr(String(verifySeconds))}" />` +
         `<p class="section-hint" style="margin-top:6px">Re-checks the switch after on/off commands; 0 disables.</p>` +
         `<div class="modal-actions"><button type="submit" class="btn btn-primary">Save timing</button></div>` +
+        `</form>` +
+        `</section>` +
+        // v1.56 — per-plant-type split-chunk defaults. A schedule tagged with a
+        // type inherits its floor here; change one and every such schedule follows.
+        `<section class="settings-card">` +
+        `<h3 class="section-title">Split-chunk defaults by plant type ${tip("The smallest slice (minutes) the scheduler may cut each plant type into when it splits a run to fit around others. Tag a schedule with a plant type (in its editor) and it uses the value here — trees get long, uninterrupted soaks; grass tolerates small frequent pieces. Change a value and every schedule of that type follows.")}</h3>` +
+        `<form class="weather-form" data-form="split-defaults" style="background:transparent;border:none;padding:0;max-width:none">` +
+        [
+          ["tree", "Tree"],
+          ["shrub", "Shrub"],
+          ["grass", "Grass"],
+          ["flower", "Flower"],
+          ["cactus_succulent", "Cactus & succulent"],
+        ]
+          .map(
+            ([k, l]) =>
+              `<label>${escapeHtml(l)} (min)</label>` +
+              `<input name="chunk_${k}" type="number" min="1" max="480" step="1" value="${escapeAttr(
+                String(chunkDef[k])
+              )}" style="max-width:140px" />`
+          )
+          .join("") +
+        `<div class="modal-actions"><button type="submit" class="btn btn-primary">Save split defaults</button></div>` +
         `</form>` +
         `</section>` +
         // PRD #81 — snooze the Sunday weekly reminder
@@ -4601,6 +4680,25 @@
         this._visionTestBusy = false;
         this._renderNow();
       }
+    }
+
+    async _saveSplitDefaults(form) {
+      // v1.56 — persist the per-plant-type split-chunk floors.
+      const out = {};
+      for (const k of ["tree", "shrub", "grass", "flower", "cactus_succulent"]) {
+        const v = parseInt(form.querySelector(`input[name="chunk_${k}"]`)?.value, 10);
+        if (Number.isFinite(v) && v >= 1 && v <= 480) out[k] = v;
+      }
+      try {
+        await this._hass.callService("complete_irrigation", "set_general_config", {
+          split_chunk_defaults: out,
+        });
+        await this._fetchConfig();
+        alert("Split-chunk defaults saved.");
+      } catch (err) {
+        alert("Failed to save split defaults: " + (err?.message || err));
+      }
+      this._renderNow();
     }
 
     async _saveConflictPolicy(form) {
@@ -8104,12 +8202,102 @@
         `<button class="btn btn-primary" data-action="add-schedule">+ Add Schedule</button>` +
         `</header>` +
         this._renderRainLockoutBanner() +
+        this._renderScheduleAdvice() +
         (this._schedules.length === 0
           ? `<div class="empty"><p>No schedules yet. Click "+ Add Schedule" to create one.</p></div>`
           : `<div class="schedule-list">${this._schedules
               .map((s) => this._renderScheduleRow(s))
               .join("")}</div>`)
       );
+    }
+
+    _renderScheduleAdvice() {
+      // v1.56 — propose-only schedule fixes from the LLM (config.schedule_advice).
+      // Each Apply routes through the SAME validated services you use by hand:
+      // shift -> update_schedule(start_time); split -> split_schedule. Dismiss clears it.
+      const adv = this._config?.schedule_advice;
+      if (!adv || !Array.isArray(adv.items) || !adv.items.length) return "";
+      // Reset the per-item applied marks when a NEW proposal arrives.
+      if (this._schedAdviceAppliedAt !== adv.created_at) {
+        this._schedAdviceAppliedAt = adv.created_at;
+        this._schedAdviceApplied = {};
+      }
+      const rows = adv.items
+        .map((it, idx) => {
+          const name = escapeHtml(String(it.schedule_name || it.schedule_id || ""));
+          const reason = it.reason
+            ? `<span class="advice-reason">${escapeHtml(String(it.reason))}</span>`
+            : "";
+          let what;
+          if (it.type === "shift") {
+            what = `Move <strong>${name}</strong> to <strong>${escapeHtml(
+              String(it.proposed_start)
+            )}</strong>`;
+          } else if (it.type === "split") {
+            const parts = (it.parts || [])
+              .map((p) => `${escapeHtml(String(p.start))} (${escapeHtml(String(p.minutes))}m)`)
+              .join(" + ");
+            what = `Split <strong>${name}</strong> into ${(it.parts || []).length}: ${parts}`;
+          } else {
+            return "";
+          }
+          const applied = !!this._schedAdviceApplied[idx];
+          const btn = applied
+            ? `<button class="btn btn-small" disabled>✓ Applied</button>`
+            : `<button class="btn btn-small btn-primary" data-action="apply-schedule-advice" data-idx="${idx}">Apply</button>`;
+          return (
+            `<li class="advice-item"><div class="advice-what">${what} ${reason}</div>${btn}</li>`
+          );
+        })
+        .join("");
+      return (
+        `<section class="card advice-card">` +
+        `<h3>🗓️ Proposed schedule fixes</h3>` +
+        (adv.summary ? `<p class="advice-summary">${escapeHtml(String(adv.summary))}</p>` : "") +
+        `<ul class="advice-list">${rows}</ul>` +
+        `<div class="modal-actions">` +
+        `<button class="btn btn-small" data-action="dismiss-schedule-advice">Dismiss all</button>` +
+        `</div>` +
+        `<span class="advice-foot">Nothing changes until you tap Apply — each runs through the same validated services you use by hand, and no run is ever dropped.</span>` +
+        `</section>`
+      );
+    }
+
+    async _applyScheduleAdvice(idx) {
+      const adv = this._config?.schedule_advice;
+      const i = Number(idx);
+      const it = adv && Array.isArray(adv.items) ? adv.items[i] : null;
+      if (!it || this._schedAdviceApplied[i]) return;
+      try {
+        if (it.type === "shift") {
+          await this._hass.callService("complete_irrigation", "update_schedule", {
+            schedule_id: it.schedule_id,
+            start_time: it.proposed_start,
+          });
+        } else if (it.type === "split") {
+          await this._hass.callService("complete_irrigation", "split_schedule", {
+            schedule_id: it.schedule_id,
+            parts: (it.parts || []).map((p) => ({ start: p.start, minutes: p.minutes })),
+          });
+        } else {
+          return;
+        }
+        this._schedAdviceApplied[i] = true;
+        await this._fetchSchedules();
+      } catch (err) {
+        alert("Failed to apply the schedule fix: " + (err?.message || err));
+      }
+      this._renderNow();
+    }
+
+    async _dismissScheduleAdvice() {
+      try {
+        await this._hass.callService("complete_irrigation", "dismiss_schedule_advice", {});
+        await this._fetchConfig();
+      } catch (err) {
+        alert("Failed to dismiss: " + (err?.message || err));
+      }
+      this._renderNow();
     }
 
     _renderScheduleRow(s) {
@@ -8219,6 +8407,23 @@
 
     _renderScheduleModal() {
       const e = this._scheduleEditor;
+      // v1.56 — per-plant-type split-chunk defaults (built-ins overlaid by config).
+      const chunkDefaults = {
+        tree: 20,
+        shrub: 15,
+        grass: 5,
+        flower: 8,
+        cactus_succulent: 10,
+        ...(this._config?.split_chunk_defaults || {}),
+      };
+      const PROFILE_OPTS = [
+        ["", "Custom (set minutes below)"],
+        ["tree", "Tree"],
+        ["shrub", "Shrub"],
+        ["grass", "Grass"],
+        ["flower", "Flower"],
+        ["cactus_succulent", "Cactus & succulent"],
+      ];
       const allZones = this._panel?.config?.zones || [];
       // Hide zones the user has hidden from the Today view, BUT keep any
       // zone that's currently selected on this schedule (either as the
@@ -8486,6 +8691,32 @@
         // bath fill: no spray drift to defer for wind, no
         // evapotranspiration to boost for hot weather, no point
         // pausing during rain).
+        // v1.56 — scheduler priority (essential vs non-essential) + split floor.
+        `<h3 class="section-title">Scheduler priority ${tip("Only matters when schedules would collide on the one-zone controller. Essential runs are kept on time and whole; non-essential runs are moved/split first to fit around them. Nothing is ever missed either way.")}</h3>` +
+        `<label class="enabled-check"><input type="checkbox" name="essential"${
+          e.essential !== false ? " checked" : ""
+        } />Essential run ${tip("On (default): protect this run — keep it on time and whole, disrupting non-essential runs first. Turn OFF for a low-priority run (e.g. a bird-bath fill) that may be moved and split to fit around the essential ones.")}</label>` +
+        // v1.56 — split profile: pick a plant type to inherit its (customizable)
+        // split-chunk default, or "Custom" to set an exact minimum.
+        `<label>Split profile ${tip("If this run is ever split to fit gaps, don't cut it below this floor. Pick the plant type to inherit that type's default (trees soak long / rarely split; grass splits fine) — customize the per-type defaults in Settings. Choose Custom to set an exact minimum here.")}</label>` +
+        `<select name="split_profile" style="max-width:220px">` +
+        PROFILE_OPTS.map(
+          ([v, l]) =>
+            `<option value="${v}"${(e.split_profile || "") === v ? " selected" : ""}>${escapeHtml(
+              l
+            )}</option>`
+        ).join("") +
+        `</select>` +
+        (e.split_profile
+          ? `<p class="section-hint" style="margin-top:4px">Uses the ${escapeHtml(
+              e.split_profile.replace("_", " ")
+            )} default (${escapeHtml(
+              String(chunkDefaults[e.split_profile] ?? 5)
+            )} min). Change it in Settings &rsaquo; Split-chunk defaults.</p>`
+          : `<label style="margin-top:8px">Minimum split chunk (min) <small style="color:var(--ci-text-2)">(blank = default 5)</small></label>` +
+            `<input name="min_chunk_minutes" type="number" min="1" step="1" value="${escapeAttr(
+              e.min_chunk_minutes || ""
+            )}" placeholder="5" style="max-width:140px" />`) +
         `<h3 class="section-title">Ignore weather gates ${tip("Each toggle turns OFF a global gate for this schedule only. Other schedules still honor the gates normally. Default off (gates apply).")}</h3>` +
         `<label class="enabled-check"><input type="checkbox" name="ignore_wind"${
           e.ignore_wind ? " checked" : ""

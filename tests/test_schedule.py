@@ -86,6 +86,60 @@ def test_schedule_disabled_when_specified():
     assert s.enabled is False
 
 
+# ── v1.56 essential / min_chunk_minutes ─────────────────────────────
+
+
+def test_essential_defaults_true_and_roundtrips():
+    assert _good_schedule().essential is True  # default
+    s = _good_schedule(essential=False, min_chunk_minutes=5)
+    d = s.to_dict()
+    assert d["essential"] is False and d["min_chunk_minutes"] == 5
+    s2 = Schedule.from_dict(d)
+    assert s2.essential is False and s2.min_chunk_minutes == 5
+
+
+def test_from_dict_tolerant_priority_defaults():
+    # pre-v1.56 records (no keys) -> essential True, no custom chunk
+    d = _good_schedule().to_dict()
+    d.pop("essential", None)
+    d.pop("min_chunk_minutes", None)
+    s = Schedule.from_dict(d)
+    assert s.essential is True and s.min_chunk_minutes is None
+
+
+def test_min_chunk_validation_and_tolerant_clamp():
+    # live construction rejects an out-of-range chunk
+    with pytest.raises(ValueError, match="min_chunk"):
+        _good_schedule(duration_minutes=15, min_chunk_minutes=20)
+    with pytest.raises(ValueError, match="min_chunk"):
+        _good_schedule(min_chunk_minutes=0)
+    # a stale stored chunk bigger than the (now shorter) duration is CLAMPED on
+    # load, not dropped
+    d = _good_schedule(duration_minutes=10).to_dict()
+    d["min_chunk_minutes"] = 999
+    assert Schedule.from_dict(d).min_chunk_minutes == 10
+    # garbage degrades to None
+    d["min_chunk_minutes"] = "nope"
+    assert Schedule.from_dict(d).min_chunk_minutes is None
+
+
+def test_split_profile_validation_and_roundtrip():
+    s = _good_schedule(split_profile="tree")
+    assert s.split_profile == "tree"
+    assert Schedule.from_dict(s.to_dict()).split_profile == "tree"
+    assert _good_schedule().split_profile == ""  # default none
+    with pytest.raises(ValueError, match="split_profile"):
+        _good_schedule(split_profile="bonsai")
+
+
+def test_from_dict_tolerant_split_profile():
+    d = _good_schedule().to_dict()
+    d["split_profile"] = "bogus"  # unknown -> "" (never drops the record)
+    assert Schedule.from_dict(d).split_profile == ""
+    d.pop("split_profile", None)  # pre-v1.56 record
+    assert Schedule.from_dict(d).split_profile == ""
+
+
 # ════════════════════════════════════════════════════════════════════
 # Schedule serialization round-trip
 # ════════════════════════════════════════════════════════════════════
@@ -119,6 +173,9 @@ def test_schedule_to_dict_has_expected_shape():
         "sun_event": None,
         "sun_offset_minutes": 0,
         "anchor": "start",
+        "essential": True,
+        "min_chunk_minutes": None,
+        "split_profile": "",
     }
 
 
