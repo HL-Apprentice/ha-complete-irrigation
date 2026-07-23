@@ -29,7 +29,7 @@ A Home Assistant custom integration for complete, sensor-driven irrigation contr
 - **Manual Run-Now** per zone with duration popup and Stop button. Tile shows "Running — 4:52 left of 10 min" — hydrates after page reload via WS so external runs (Developer Tools, automations) also show the countdown.
 - **Valve verification (check-back)** — re-reads the physical switch after every on/off command; retries once and raises a CRITICAL alert if the valve didn't actuate.
 - **Calendar entity** (`calendar.irrigation` on a fresh install; existing installs keep their registered id) + **iCal feed** at `/api/complete_irrigation/calendar.ics` for phone calendar subscription.
-- **Conflict resolver** — serializes runs one zone at a time with a 2-min auto-buffer. Overlapping runs are deferred (never moved earlier); past the 2-hour cascade cap, the runs ahead are compressed (down to a 70% floor) to make room — a scheduled run is never dropped.
+- **Conflict resolver + smart scheduling (v1.56)** — a never-miss failsafe serializes runs one zone at a time (2-min buffer, defer + compress, never drops a run). On top of that, mark schedules **Essential** (protected) or **non-essential** (moved/split to fit); a base check on add/edit **notifies** you of a collision, or — with an AI model configured — **proposes** shift/split fixes you apply with one tap (propose-only, plus a nightly review). Non-essential runs can be split into gaps (parts sum to full duration; never below a per-plant-type **split-chunk floor** you customize in Settings).
 - **Long runs on capped controllers (v1.25)** — a run longer than the controller's block size (default 58 min) is auto-delivered as back-to-back blocks with a 30-s gap; tune via `controller_max_run_minutes` / `block_gap_seconds`.
 - **Rain lockout** — Tempest (or any rainfall sensor) triggers an ET-scaled system-wide lockout: lockout length = effective rain divided by the live daily ETo, so it lasts as many days as the rain actually replaced — hotter forecast, shorter lockout (heat-graduated ceiling), with a configurable rain floor. **Multi-rain** support: bind several rain sensors; first is primary for lockout, all show on the banner.
 - **Hot weather boost** — temp threshold + runtime % boost.
@@ -43,7 +43,9 @@ A Home Assistant custom integration for complete, sensor-driven irrigation contr
 - **Sharper aerials** — point the map at any keyless ArcGIS export (e.g. your county assessor's orthophotos, often ~10× sharper than the default global imagery) via a URL template.
 - **Plant identification** — photo → species → care. A **curated care table** for ~37 common Southwest/low-desert species supplies the water-use/sun/cadence (small vision models name plants well but can't differentiate water-use). Runs on a **local** model, an **external** one (Claude / Grok / Gemini / any OpenAI-compatible), or local-with-fallback. Keys stay on your server.
 - **Vision health checks** — a scheduled external job runs a local vision model (e.g. on a home GPU) to compare each plant's photos over time; verdicts are bounded by a safety rail and shown on the plant. Advisory only.
-- **Light surveys (v1.35)** — give a plant an optimal lux range, place a roaming illuminance sensor at it, and a timed survey stores min/avg/max + a too-little/optimal/too-much verdict.
+- **Light surveys + areas (v1.35 / v1.55)** — give a plant an optimal lux range, place a roaming illuminance sensor at it, and a timed survey stores min/avg/max + a too-little/optimal/too-much verdict. Group co-located plants into a named **light area** (type it, or draw a region on the yard map) and survey the whole group in one pass — the reading lands on every plant, each verdicted against its own range.
+- **Weather-adaptive ET (v1.28 / v1.49)** — the water math scales by reference ET₀ from a HA weather entity (FAO-56) or keyless **Open-Meteo**, or a manual value.
+- **Frost warnings (v1.50)** — look up your USDA hardiness zone from your ZIP (keyless) and cold-tender plants get a ❄️ badge.
 - **Care-task reminders (v1.35)** — recurring fertilize/prune/mulch/inspect reminders per plant or zone with last-done tracking; due tasks notify and re-nag weekly.
 - **Watering diagnosis (v1.35)** — 🩺 per zone: cross-checks moisture, 14-day run history, and vision concerns into a Signs → Confirm → Suggestions card. Advisory only.
 - **Custom sidebar panel** with Today / Schedules / Zones / Yard / History / Sensors / Weather / Notifications / Settings.
@@ -158,7 +160,7 @@ Notes:
 Almost everything is configurable from the panel — no Developer Tools required.
 
 ### Schedules (Schedules tab)
-**+ Add Schedule** → name, zone, start time, hours + minutes duration, recurrence (weekdays, every-N-days, or every-N-hours), enable. Save fires it on the configured cadence.
+**+ Add Schedule** → name, zone, start time, hours + minutes duration, recurrence (weekdays, every-N-days, or every-N-hours), enable. The editor also has an optional **sun anchor** (start/finish at sunrise/sunset ± offset), **weather-gate opt-outs** (ignore wind / hot-weather / rain lockout — handy for a bird-bath fill), a **color**, and **Scheduler priority** (Essential vs non-essential + split profile — see *Smart scheduling* below). Save fires it on the configured cadence.
 
 ### Moisture sensors per zone (Sensors tab)
 Click **Configure** on a zone card to bind moisture sensors. If you pick more than one, the modal requires a combine mode (Average / Lowest / Highest / Primary — no silent default). The card shows each sensor's live reading and the combined value used for irrigation decisions; min-violations show red.
@@ -175,8 +177,17 @@ Set notify target, master enable, quiet hours window, and toggle the daily low-m
 ### New-planting establishment mode (Zones tab)
 Click **🌱 New Planting** on the zone you replanted — new grass seed, shrubs, trees, anything getting established. Modal sets cycles per day, minutes per cycle, total days, start hour. The integration creates an auto-expiring schedule.
 
-### Schedule conflicts (automatic)
-When two schedules' run windows overlap, runs are serialized one zone at a time with a 2-min buffer: the overlapping run is deferred, and past the 2-hour cascade cap the runs ahead of it are compressed (down to a 70% floor of their requested minutes) so nothing is ever dropped. The Settings-tab policy picker (defer / shift / split) is retained for backward compatibility only — it no longer changes behavior.
+### Smart scheduling — essential vs non-essential, conflict fixes (Schedules tab)
+The controller runs **one zone at a time**, so schedules whose run windows overlap collide. Two layers handle that:
+
+- **Never-miss failsafe (always on, no setup).** When runs overlap they're serialized with a 2-min buffer — the overlapping run is deferred, and past the 2-hour cascade cap the runs ahead of it are compressed so **nothing is ever dropped**. This runs whether or not you touch anything below.
+- **Priority (per schedule).** In a schedule's editor, **Scheduler priority → Essential run** (default **on**) protects it: when things collide, essential runs stay on time and whole, while **non-essential** runs (e.g. a bird-bath fill) are the ones moved — or split — to fit around them.
+- **Conflict check on add/edit.** The moment you add or edit a schedule that would collide, you get a **notification** to adjust it. If you've set up an AI model (see *Plant identification & AI*), the assistant instead **proposes** shift/split fixes right in the Schedules tab — you review each and tap **Apply** (nothing changes your watering on its own). A **nightly 9 PM sweep** catches issues proactively so you're rarely surprised.
+- **Splitting non-essential runs.** A non-essential run can be broken into timed pieces that drop into the gaps around essentials; the pieces always sum to the full duration (**no water lost**), and never below the *minimum split chunk*.
+- **Minimum split chunk — per plant type.** So a run isn't chopped into useless slivers, each schedule has a split floor. Set a schedule's **Split profile** (Tree / Shrub / Grass / Flower / Cactus & succulent, or *Custom* for an exact number) and it inherits that type's default; customize the per-type defaults in **Settings → Split-chunk defaults** (trees get long soaks, grass splits fine). Change a type once and every schedule of that type follows.
+- **💬 Ask the scheduler (chat).** With an AI model attached, a chat box appears on the Schedules tab. Ask questions ("why does my tree schedule run so late?") or request changes in plain English ("move the grass earlier and split the bird bath") — it answers conversationally, and any change it suggests drops into the Apply card above for one-tap review. Still propose-only: nothing changes until you tap Apply.
+
+*The old Settings-tab conflict-policy picker (defer / shift / split) is retained for backward compatibility only — it no longer changes behavior.*
 
 ### Calendar feed (Settings tab → Copy)
 Subscribe to `/api/complete_irrigation/calendar.ics` from your phone calendar app for the next 30 days of planned runs.
@@ -194,6 +205,7 @@ then compares **water needed vs water actually delivered** per loop.
 
 - **🔍 Identify** — photo → species + care sheet (see *Plant identification* below).
 - **Research details** — you already know the species? Type it and skip the photo.
+- **Verify name** — next to the species field; checks the name against GBIF (free, no key, no AI) and returns the accepted scientific name to catch typos.
 - **Duplicate** — copies species/water-use/canopy/zone/drips **without** photos or
   map position. Fast for a row of identical oleanders.
 - **Photos** — tap a thumbnail for a full-size lightbox. EXIF-GPS places the plant
@@ -237,6 +249,19 @@ Recurring fertilize / prune / mulch / inspect reminders per plant, with last-don
 tracking. The **Seed a starter plan** row (button: **Seed plan**) creates a
 sensible set from the plant type (tree / shrub / flower / cactus-succulent /
 grass) in one tap.
+
+### Light, lux surveys & areas
+Optional — measure how much light each plant actually gets and check it against what it wants.
+
+- **Optimal lux range (per plant).** In a plant's editor set its **Light range**, or pick a **Light preset** (full sun / partial / bright shade / deep shade) which fills the bounds. Save the plant first, then set the range.
+- **Roaming light survey.** Put a single **illuminance (lux) sensor** at a plant and **Survey** it for a timed window (default 10 min, ~1 sample/min). The result — min/avg/max + a *too-little / optimal / too-much* verdict against that plant's range — is stored on the plant. Move the sensor to the next plant and repeat.
+- **Light areas — survey a group at once.** Co-located plants that share the same light can be grouped into a named **area** (e.g. "Front Bed"): type it in a plant's **Light area** field, or on the yard map tap **🗺️ Assign area**, **draw a region** around the markers, and name it — every enclosed plant joins. Then in the **Light areas** card pick your lux sensor and **Survey** the whole area in one pass; the reading is applied to every plant in it, each verdicted against its own range.
+
+### Weather-adaptive watering (reference ET)
+The Yard water math scales each plant's need by **reference ET₀** (how thirsty the day is). At the top of the **Yard** tab, **ET source** can be **Manual** (a fixed number you enter), **a HA weather entity** (FAO-56 from a forecast entity you already have), or **Open-Meteo** (fetched daily from `api.open-meteo.com`, keyless — sends only your HA latitude/longitude). Opt-in; a bad reading keeps your previous/manual figure.
+
+### Frost warnings (hardiness zone)
+In **Settings → Hardiness zone**, type your **ZIP** and **Look up zone** (keyless, via phzmapi). Plants whose cold tolerance is warmer than your zone get a **❄️** frost badge in the plant list so you know what may need winter protection.
 
 ## Plant identification & AI (all optional, all advisory-only)
 
@@ -350,9 +375,10 @@ automations, and all documented in **Developer Tools → Actions** with field hi
 |---|---|
 | `run_zone` / `stop_zone` | Manual control with auto-stop |
 | `run_schedule` | Fire an existing schedule now |
-| `add_schedule` / `update_schedule` / `delete_schedule` / `set_schedule_enabled` | Schedule CRUD |
+| `add_schedule` / `update_schedule` / `delete_schedule` / `set_schedule_enabled` | Schedule CRUD (incl. `essential`, `min_chunk_minutes`, `split_profile`) |
+| `split_schedule` / `dismiss_schedule_advice` | Actuate an approved split; clear a proposed schedule fix |
 | `start_establishment` | "New grass" multi-cycle schedule with auto-expiry |
-| `set_conflict_policy` | Global conflict-resolution policy |
+| `set_conflict_policy` | Global conflict-resolution policy (legacy; superseded by essential/non-essential) |
 | `clear_run_history` | Wipe stored run history |
 
 **Sensors, weather, notifications**
@@ -363,7 +389,7 @@ automations, and all documented in **Developer Tools → Actions** with field hi
 | `clear_rain_lockout` | Manually end rain lockout |
 | `set_notification_config` | Where to send push, quiet hours, low-moisture toggle |
 | `test_notification` | Send a sample notification |
-| `set_general_config` | Catch-all settings: zone buffer, zone order, admin-only mode, controller block size, valve verification, plant-ID model (local + external provider/key/mode), yard-map imagery template |
+| `set_general_config` | Catch-all settings: zone buffer, zone order, admin-only mode, controller block size, valve verification, plant-ID model (local + external provider/key/mode), Pl@ntNet/Perenual keys, yard-map imagery template, **per-plant-type split-chunk defaults** |
 
 **Plants & yard**
 | Service | Purpose |
@@ -375,6 +401,7 @@ automations, and all documented in **Developer Tools → Actions** with field hi
 | `set_yard_map` | Fetch/refresh the aerial; `span_m` zooms (markers are re-projected) |
 | `set_plant_health` | Store a vision-health verdict (rail-bounded) |
 | `set_plant_light_range` / `start_light_survey` / `cancel_light_survey` | Per-plant lux target + roaming survey |
+| `assign_area_region` / `start_area_light_survey` / `cancel_area_light_survey` | Group plants into a light area by map region; survey a whole area at once |
 
 **Plant identification**
 | Service | Purpose |
@@ -382,6 +409,8 @@ automations, and all documented in **Developer Tools → Actions** with field hi
 | `identify_plant_species` | Photo → species + care sheet |
 | `research_plant_species` | Species by NAME → care (curated table first, model as fallback) |
 | `apply_species_suggestion` / `dismiss_species_suggestion` | Accept or discard a suggestion |
+| `verify_species_name` | Check a typed name against GBIF (keyless) → accepted scientific name |
+| `lookup_hardiness_zone` | USDA zone from your ZIP (keyless) → ❄️ frost badges |
 | `test_vision_endpoint` | Probe every configured model (local + external) |
 
 **Care tasks & advisor**

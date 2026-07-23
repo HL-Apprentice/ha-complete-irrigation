@@ -4,6 +4,20 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.57.0 — 2026-07-23 — minor
+
+**Ask-the-scheduler chat + a complete docs walkthrough.** With an AI model attached, a
+**chat box** on the Schedules tab lets you ask about your schedules or request changes in
+plain English ("move the grass earlier and split the bird bath"). It answers
+conversationally, and any change it suggests drops into the Apply card for one-tap review
+-- still **propose-only**, so nothing changes your watering on its own. Admin-gated,
+never-drop-validated, and prose-tolerant (a conversational answer that isn't strict JSON
+is shown as-is).
+
+Also: the README now has a clean install/configure walkthrough for **every** option --
+smart scheduling, light areas & lux surveys, weather-adaptive ET, hardiness/frost, name
+verification, sun-anchored starts -- plus refreshed service tables.
+
 ## v1.56.0 — 2026-07-22 — minor
 
 **Smart schedule assistant -- essential/non-essential runs, conflict detection, and a

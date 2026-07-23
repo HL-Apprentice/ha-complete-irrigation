@@ -72,7 +72,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.56.0";
+  const PANEL_VERSION = "v1.57.0";
   // v1.41 — external plant-ID providers (mirrors llm_client.PROVIDERS). URL is
   // auto-filled when a provider is picked; model is an editable hint. All speak
   // the same OpenAI /v1/chat/completions shape, so one settings form covers them.
@@ -494,6 +494,9 @@
       // v1.56 — same per-item "applied" marks for the schedule-fix card.
       this._schedAdviceApplied = {};
       this._schedAdviceAppliedAt = null;
+      // v1.57 — propose-only chat with the scheduling LLM.
+      this._scheduleChat = []; // [{role:"you"|"bot", text}]
+      this._scheduleChatBusy = false;
 
       // Sensor (moisture) modal state
       this._sensorModalOpen = false;
@@ -1102,6 +1105,11 @@
       if (e.target?.dataset?.form === "split-defaults") {
         e.preventDefault();
         this._saveSplitDefaults(e.target);
+        return;
+      }
+      if (e.target?.dataset?.form === "schedule-chat") {
+        e.preventDefault();
+        this._sendScheduleChat();
         return;
       }
       if (e.target?.dataset?.form === "ha-theme") {
@@ -8203,6 +8211,7 @@
         `</header>` +
         this._renderRainLockoutBanner() +
         this._renderScheduleAdvice() +
+        this._renderScheduleChat() +
         (this._schedules.length === 0
           ? `<div class="empty"><p>No schedules yet. Click "+ Add Schedule" to create one.</p></div>`
           : `<div class="schedule-list">${this._schedules
@@ -8297,6 +8306,60 @@
       } catch (err) {
         alert("Failed to dismiss: " + (err?.message || err));
       }
+      this._renderNow();
+    }
+
+    _renderScheduleChat() {
+      // v1.57 — propose-only chat with the scheduling LLM. Only shown when a model
+      // looks configured (the server enforces it too); replies here, and any change
+      // it suggests lands in the Apply card above.
+      const c = this._config || {};
+      const hasModel = !!(c.vision_url || c.llm_external_url || c.llm_external_api_key_set);
+      if (!hasModel) return "";
+      const log = (this._scheduleChat || [])
+        .map(
+          (m) =>
+            `<div class="chat-msg chat-${m.role === "you" ? "you" : "bot"}">` +
+            `<span class="chat-who">${m.role === "you" ? "You" : "Scheduler"}</span>` +
+            `${escapeHtml(String(m.text))}</div>`
+        )
+        .join("");
+      return (
+        `<section class="card chat-card">` +
+        `<h3>💬 Ask the scheduler</h3>` +
+        `<p class="section-hint">Ask about your schedules or request a change (e.g. &ldquo;move the grass earlier and split the bird bath&rdquo;). It answers here; any change it suggests appears above as a one-tap Apply &mdash; nothing changes on its own.</p>` +
+        (log ? `<div class="chat-log">${log}</div>` : "") +
+        `<form class="chat-input-row" data-form="schedule-chat">` +
+        `<input class="chat-input" type="text" autocomplete="off" placeholder="${
+          this._scheduleChatBusy ? "Thinking…" : "Ask about your schedule…"
+        }"${this._scheduleChatBusy ? " disabled" : ""} />` +
+        `<button type="submit" class="btn btn-primary"${
+          this._scheduleChatBusy ? " disabled" : ""
+        }>${this._scheduleChatBusy ? "…" : "Send"}</button>` +
+        `</form>` +
+        `</section>`
+      );
+    }
+
+    async _sendScheduleChat() {
+      if (this._scheduleChatBusy) return;
+      const input = this.shadowRoot?.querySelector(".chat-input");
+      const text = (input?.value || "").trim();
+      if (!text) return;
+      this._scheduleChat.push({ role: "you", text });
+      this._scheduleChatBusy = true;
+      this._renderNow();
+      try {
+        const res = await this._hass.callWS({
+          type: "complete_irrigation/schedule_chat",
+          message: text,
+        });
+        this._scheduleChat.push({ role: "bot", text: (res && res.reply) || "(no reply)" });
+        if (res && res.proposed > 0) await this._fetchConfig(); // Apply card picks up items
+      } catch (err) {
+        this._scheduleChat.push({ role: "bot", text: "Error: " + (err?.message || err) });
+      }
+      this._scheduleChatBusy = false;
       this._renderNow();
     }
 
@@ -9041,6 +9104,14 @@
         `.plant-row-actions{display:flex;gap:8px;flex-shrink:0}` +
         `.area-survey-row{display:flex;align-items:center;gap:10px;justify-content:space-between;padding:9px 0;border-top:1px solid var(--ci-border)}` +
         `.area-survey-name{font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}` +
+        // v1.57 — schedule chat
+        `.chat-log{display:flex;flex-direction:column;gap:8px;margin:10px 0;max-height:340px;overflow-y:auto}` +
+        `.chat-msg{padding:8px 11px;border-radius:12px;font-size:14px;line-height:1.4;max-width:92%;white-space:pre-wrap;word-wrap:break-word}` +
+        `.chat-you{align-self:flex-end;background:var(--ci-accent,#2f7d3a);color:#fff;border-bottom-right-radius:4px}` +
+        `.chat-bot{align-self:flex-start;background:var(--ci-card-2,rgba(127,127,127,0.16));border-bottom-left-radius:4px}` +
+        `.chat-who{display:block;font-size:11px;opacity:0.7;margin-bottom:2px}` +
+        `.chat-input-row{display:flex;gap:8px;align-items:center}` +
+        `.chat-input{flex:1;min-width:0}` +
         `@media (max-width:520px){.plant-row{flex-direction:column;align-items:stretch}.plant-row-actions .btn{flex:1}}` +
         // v1.40.7 — "Scheduled for this loop" info section (was a warning)
         `.yard-scheds{margin:8px 0 4px;padding:8px 11px;border:1px solid var(--ci-border);border-radius:10px}` +

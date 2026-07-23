@@ -44,6 +44,90 @@ DETECTED CONFLICTS:
 """
 
 
+_CHAT_PROMPT = """You are the user's irrigation SCHEDULING assistant. Answer their \
+question about their schedules conversationally and concisely (2-5 sentences). The \
+controller runs ONE zone at a time, so overlapping run windows collide; ESSENTIAL runs \
+are protected while NON-ESSENTIAL runs are moved or split to fit around them, and nothing \
+is ever dropped.
+
+Only if the user is asking you to CHANGE the schedule, ALSO include propose-only \
+adjustments -- they review and apply them; you never change anything directly. Hard \
+rules: never drop a run, never change a run's total minutes, a split's parts sum EXACTLY \
+to the duration and each part >= that schedule's min_chunk.
+
+Return ONLY JSON: {"reply":"<your conversational answer>","items":[...],"summary":"..."} \
+where each item is
+ {"type":"shift","schedule_id":"<id>","proposed_start":"HH:MM","reason":"..."} or
+ {"type":"split","schedule_id":"<id>","parts":[{"start":"HH:MM","minutes":N},...],"reason":"..."}.
+Use an empty items list when no change is requested or needed.
+
+SCHEDULES:
+{SCHEDULES}
+
+USER QUESTION: {MESSAGE}
+"""
+
+
+async def schedule_chat(hass, coord, message: str) -> dict[str, Any]:
+    """Propose-only chat with the scheduling LLM. Returns {"reply", "proposed"}: a
+    conversational answer plus a count of any change proposals, which are validated
+    (never-drop) and stored as schedule_advice for the user to apply. Defensive:
+    returns a friendly reply on any failure rather than raising."""
+    try:
+        from homeassistant.helpers.aiohttp_client import async_get_clientsession
+        from homeassistant.util import dt as dt_util
+
+        from .llm_client import call_chat, resolve_targets
+        from .schedule_advisor import validate_schedule_advice
+
+        msg = str(message or "").strip()[:1000]
+        if not msg:
+            return {"reply": "Ask me anything about your schedules.", "proposed": 0}
+        targets = resolve_targets(coord.config)
+        if not targets:
+            return {
+                "reply": "Attach an AI model first (Settings → Plant identification) "
+                "and I can answer questions about your schedules.",
+                "proposed": 0,
+            }
+        sched_text, by_id = _schedule_context(coord)
+        prompt = _CHAT_PROMPT.replace("{SCHEDULES}", sched_text).replace("{MESSAGE}", msg)
+        session = async_get_clientsession(hass)
+        result = await call_chat(
+            session,
+            targets,
+            [{"role": "user", "content": prompt}],
+            timeout_s=120,
+            max_tokens=4000,
+            # Chat: accept ANY non-empty answer (a conversational reply needn't be
+            # JSON) so a valid prose answer isn't rejected as "unreachable".
+            accept=lambda c: bool(c and c.strip()),
+        )
+        if not result.ok:
+            return {"reply": "I couldn't reach the model just now — try again.", "proposed": 0}
+        content = result.content or ""
+        obj = _extract_json_obj(content)
+        if isinstance(obj, dict) and obj.get("reply"):
+            # Structured envelope: use its reply + validate any proposals.
+            reply = str(obj.get("reply") or "").strip()[:2000] or "(no reply)"
+            advice = validate_schedule_advice(obj, schedules_by_id=by_id)
+        else:
+            # Prose-only answer: show it verbatim, no proposals.
+            reply = content.strip()[:2000] or "(no reply)"
+            advice = None
+        proposed = 0
+        if advice and advice.get("items"):
+            advice["model"] = result.model or "llm"
+            advice["created_at"] = dt_util.utcnow().isoformat()
+            coord.config["schedule_advice"] = advice
+            await coord.async_save_config()
+            proposed = len(advice["items"])
+        return {"reply": reply, "proposed": proposed}
+    except Exception:
+        _LOGGER.exception("schedule chat failed")
+        return {"reply": "Something went wrong handling that — try again.", "proposed": 0}
+
+
 def _schedule_context(coord) -> tuple[str, dict[str, dict[str, Any]]]:
     """Compact per-schedule lines for the LLM + the id->meta map the validator needs."""
     lines: list[str] = []

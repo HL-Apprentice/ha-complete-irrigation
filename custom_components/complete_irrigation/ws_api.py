@@ -33,6 +33,7 @@ WS_TYPE_YARD_REPORT = f"{DOMAIN}/yard_report"
 WS_TYPE_GET_DAILY_PLAN = f"{DOMAIN}/get_daily_plan"
 WS_TYPE_LIST_CARE_TASKS = f"{DOMAIN}/list_care_tasks"  # v1.35
 WS_TYPE_WATERING_DIAGNOSIS = f"{DOMAIN}/watering_diagnosis"  # v1.35
+WS_TYPE_SCHEDULE_CHAT = f"{DOMAIN}/schedule_chat"  # v1.57 — propose-only LLM chat
 
 
 def _find_coordinator(hass: HomeAssistant):
@@ -363,6 +364,28 @@ async def get_daily_plan(hass, connection, msg):
     connection.send_result(msg["id"], serialize_daily_plan(coord.build_today_plan()))
 
 
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): WS_TYPE_SCHEDULE_CHAT,
+        vol.Required("message"): str,
+    }
+)
+@websocket_api.async_response
+async def schedule_chat(hass, connection, msg):
+    """v1.57 — propose-only chat with the scheduling LLM. Returns a conversational
+    reply plus a count of any change proposals (validated + stored as schedule_advice
+    for the user to apply). Never actuates; admin-only."""
+    coord = _find_coordinator(hass)
+    if coord is None:
+        connection.send_result(msg["id"], {"reply": "Not ready yet.", "proposed": 0})
+        return
+    from .schedule_review import schedule_chat as _run_chat
+
+    out = await _run_chat(hass, coord, msg.get("message", ""))
+    connection.send_result(msg["id"], out)
+
+
 def async_register_ws_commands(hass: HomeAssistant) -> None:
     """Register all WS commands. Idempotent."""
     websocket_api.async_register_command(hass, list_schedules)
@@ -375,3 +398,4 @@ def async_register_ws_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, get_daily_plan)
     websocket_api.async_register_command(hass, list_care_tasks)
     websocket_api.async_register_command(hass, watering_diagnosis)
+    websocket_api.async_register_command(hass, schedule_chat)
