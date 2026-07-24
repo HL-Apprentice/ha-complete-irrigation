@@ -665,11 +665,15 @@ _ASSIGN_AREA_REGION_SCHEMA = vol.Schema(
 )
 
 # v1.30 — fetch + cache the aerial backdrop. Center defaults to the HA location.
+# v1.58.1 — offset_north_m/offset_east_m nudge the frame in meters (persisted, so
+# refreshes/zooms keep the shifted framing; omitted = keep the stored offset).
 _SET_YARD_MAP_SCHEMA = vol.Schema(
     {
         vol.Optional("latitude"): vol.All(vol.Coerce(float), vol.Range(min=-90, max=90)),
         vol.Optional("longitude"): vol.All(vol.Coerce(float), vol.Range(min=-180, max=180)),
         vol.Optional("span_m"): vol.All(vol.Coerce(float), vol.Range(min=10, max=500)),
+        vol.Optional("offset_north_m"): vol.All(vol.Coerce(float), vol.Range(min=-200, max=200)),
+        vol.Optional("offset_east_m"): vol.All(vol.Coerce(float), vol.Range(min=-200, max=200)),
     }
 )
 
@@ -3468,12 +3472,32 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             safe_export_size,
         )
 
-        lat = data.get("latitude", hass.config.latitude)
-        lon = data.get("longitude", hass.config.longitude)
+        # v1.58.1 — center resolution: explicit lat/lon wins; else the map's
+        # CURRENT center (a refresh/nudge must not snap back to the HA home);
+        # else the HA home location (first setup).
+        prev_cfg = coord.config.get("yard_map") or {}
+        if "latitude" in data or "longitude" in data:
+            lat = data.get("latitude", hass.config.latitude)
+            lon = data.get("longitude", hass.config.longitude)
+        elif prev_cfg.get("center_lat") is not None and prev_cfg.get("center_lon") is not None:
+            lat = prev_cfg["center_lat"]
+            lon = prev_cfg["center_lon"]
+        else:
+            lat = hass.config.latitude
+            lon = hass.config.longitude
         span = float(data.get("span_m", 60.0))
         if lat is None or lon is None:
             _LOGGER.warning("set_yard_map: no location — set HA latitude/longitude or pass them")
             return
+        # v1.58.1 — frame nudge: one-shot meter DELTAS from the resolved center
+        # ("the yard is clipped on the north — shift 3 m north"). The shifted
+        # center is what gets stored, so the framing sticks with no re-apply.
+        from .yard_map import offset_center
+
+        off_n = float(data.get("offset_north_m") or 0.0)
+        off_e = float(data.get("offset_east_m") or 0.0)
+        if off_n or off_e:
+            lat, lon = offset_center(float(lat), float(lon), off_n, off_e)
 
         bbox = bbox_from_center(float(lat), float(lon), span)
         width, height = image_size_for_bbox(bbox)

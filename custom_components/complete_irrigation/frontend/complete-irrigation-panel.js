@@ -72,7 +72,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.58.0";
+  const PANEL_VERSION = "v1.58.1";
   // v1.41 — external plant-ID providers (mirrors llm_client.PROVIDERS). URL is
   // auto-filled when a provider is picked; model is an editable hint. All speak
   // the same OpenAI /v1/chat/completions shape, so one settings form covers them.
@@ -998,6 +998,11 @@
         if (action === "apply-eto") return this._applyEto();
         if (action === "setup-yard-map") return this._setupYardMap();
         if (action === "map-zoom-in") return this._zoomMapButton(1);
+        if (action === "map-nudge")
+          return this._nudgeYardMap(
+            parseFloat(node.dataset.dn) || 0,
+            parseFloat(node.dataset.de) || 0
+          );
         if (action === "map-zoom-out") return this._zoomMapButton(-1);
         if (action === "map-reset-view") return this._resetMapView();
         if (action === "toggle-measure") return this._toggleMeasure();
@@ -3316,6 +3321,25 @@
       }
     }
 
+    async _nudgeYardMap(dNorthM, dEastM) {
+      // v1.58.1 — shift the aerial frame by meters (server re-fetches with the
+      // current span; markers are re-projected so plants keep ground position).
+      if (this._mapBusy || (!dNorthM && !dEastM)) return;
+      const span = Number(this._yardMap?.span_m);
+      this._mapBusy = true;
+      this._renderNow();
+      try {
+        const data = { offset_north_m: dNorthM, offset_east_m: dEastM };
+        if (Number.isFinite(span)) data.span_m = span;
+        await this._hass.callService("complete_irrigation", "set_yard_map", data);
+        await this._fetchYard();
+      } catch (err) {
+        alert("Failed to shift the aerial: " + (err?.message || err));
+      }
+      this._mapBusy = false;
+      this._renderNow();
+    }
+
     async _setupYardMap(spanM, lat, lon) {
       // v1.30 — fetch + cache the aerial backdrop (centered on the HA location).
       // v1.43 — spanM zooms. When it's omitted (plain "Refresh aerial") KEEP the
@@ -3487,8 +3511,14 @@
 
     _onMapWheel(e) {
       const wrap = e.target?.closest?.(".yard-map-wrap");
-      if (!wrap || this._canopyBox || this._mapPan) return;
-      e.preventDefault(); // don't scroll the page while zooming the aerial
+      if (!wrap) return;
+      // v1.58.1 — ISOLATION ZONE: any wheel over the aerial belongs to the map.
+      // preventDefault + stopPropagation FIRST (even mid-measure/pan, and even
+      // when the zoom clamps at min/max) so the page never scrolls underneath;
+      // off the map, the page scrolls normally.
+      e.preventDefault();
+      e.stopPropagation();
+      if (this._canopyBox || this._mapPan) return;
       const r = wrap.getBoundingClientRect();
       this._zoomMapAt(e.clientX - r.left, e.clientY - r.top, e.deltaY < 0 ? 1.15 : 1 / 1.15, r);
     }
@@ -7335,6 +7365,15 @@
             `<button class="map-zbtn" data-action="map-zoom-in" title="Zoom in">+</button>` +
             `<button class="map-zbtn" data-action="map-zoom-out" title="Zoom out">−</button>` +
             `<button class="map-zbtn map-zreset" data-action="map-reset-view" title="Reset view (fit)">⤢</button>` +
+            // v1.58.1 — nudge the aerial FRAME 1 m per tap (re-fetches; markers
+            // keep their true ground position). Fixes "the yard is clipped on one
+            // side" without touching the HA home location.
+            `<button class="map-zbtn" data-action="map-nudge" data-dn="1" data-de="0" title="Shift the frame 1 m north">▲</button>` +
+            `<div class="map-nudge-row">` +
+            `<button class="map-zbtn" data-action="map-nudge" data-dn="0" data-de="-1" title="Shift the frame 1 m west">◀</button>` +
+            `<button class="map-zbtn" data-action="map-nudge" data-dn="0" data-de="1" title="Shift the frame 1 m east">▶</button>` +
+            `</div>` +
+            `<button class="map-zbtn" data-action="map-nudge" data-dn="-1" data-de="0" title="Shift the frame 1 m south">▼</button>` +
             `</div>`) +
         `</div>` +
         measurePanel +
@@ -9266,13 +9305,14 @@
         `.yard-map-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}` +
         `.map-zoom{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--ci-text-2)}` +
         `.map-zoom select{font-size:13px;padding:4px 6px}` +
-        `.yard-map-wrap{position:relative;width:100%;border-radius:8px;overflow:hidden;background:#1b1b1b;touch-action:none;user-select:none;cursor:grab}` +
+        `.yard-map-wrap{position:relative;width:100%;border-radius:8px;overflow:hidden;background:#1b1b1b;touch-action:none;user-select:none;cursor:grab;overscroll-behavior:contain}` +
         `.yard-map-wrap.panning{cursor:grabbing}` +
         // v1.48 — the transformed layer that pans/zooms (image + markers + overlays).
         `.yard-map-view{position:absolute;inset:0;will-change:transform}` +
         `.yard-map-img{display:block;width:100%;height:100%;object-fit:cover;pointer-events:none}` +
         // v1.48 — zoom controls (fixed corner, outside the transformed layer).
-        `.map-zoom-btns{position:absolute;z-index:5;right:8px;bottom:8px;display:flex;flex-direction:column;gap:4px}` +
+        `.map-zoom-btns{position:absolute;z-index:5;right:8px;bottom:8px;display:flex;flex-direction:column;gap:4px;align-items:flex-end}` +
+        `.map-nudge-row{display:flex;gap:4px}` +
         `.map-zbtn{width:34px;height:34px;min-width:34px;padding:0;border:none;border-radius:8px;background:rgba(0,0,0,0.5);color:#fff;font-size:20px;line-height:34px;text-align:center;cursor:pointer;touch-action:manipulation}` +
         `.map-zbtn:hover{background:rgba(0,0,0,0.75)}` +
         `.map-zreset{font-size:15px}` +
@@ -10178,6 +10218,10 @@
       "Set up yard map": "Gartenkarte einrichten",
       "Settings": "Einstellungen",
       "Shift existing earlier to make room": "Bestehende Läufe nach vorn verschieben, um Platz zu schaffen",
+      "Shift the frame 1 m east": "Ausschnitt 1 m nach Osten verschieben",
+      "Shift the frame 1 m north": "Ausschnitt 1 m nach Norden verschieben",
+      "Shift the frame 1 m south": "Ausschnitt 1 m nach Süden verschieben",
+      "Shift the frame 1 m west": "Ausschnitt 1 m nach Westen verschieben",
       "Shrub": "Strauch",
       "Shrub (min)": "Strauch (min)",
       "Signs": "Anzeichen",
@@ -10574,6 +10618,7 @@
       [new RegExp("\\bFri\\b"), "Fr"],
       [new RegExp("\\bSat\\b"), "Sa"],
       [new RegExp("\\bSun\\b"), "So"],
+      [new RegExp("^Failed to shift the aerial: ([\\s\\S]*)$"), "Verschieben des Luftbilds fehlgeschlagen: $1"],
     ],
   };
   // CI-I18N-PACKS-END

@@ -5,7 +5,16 @@
     "Combined (lowest)": "Kombiniert (Minimum)",
     "Shift existing earlier to make room": "Bestehende Läufe nach vorn verschieben, um Platz zu schaffen",
     "Enter both Lux low and Lux high, or clear both to remove the range.": "Gib den unteren und oberen Lux-Wert ein, oder leere beide Felder, um den Bereich zu entfernen.",
-    "Add drips for delivered-water math.": "Füge Tropfer für die Berechnung des gelieferten Wassers hinzu."
+    "Add drips for delivered-water math.": "Füge Tropfer für die Berechnung des gelieferten Wassers hinzu.",
+    "Shift the frame 1 m north": "Ausschnitt 1 m nach Norden verschieben",
+    "Shift the frame 1 m south": "Ausschnitt 1 m nach Süden verschieben",
+    "Shift the frame 1 m east": "Ausschnitt 1 m nach Osten verschieben",
+    "Shift the frame 1 m west": "Ausschnitt 1 m nach Westen verschieben"
   },
-  "patterns": []
+  "patterns": [
+    [
+      "^Failed to shift the aerial: ([\\s\\S]*)$",
+      "Verschieben des Luftbilds fehlgeschlagen: $1"
+    ]
+  ]
 }

@@ -4,6 +4,21 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.58.1 — 2026-07-24 — patch
+
+**Yard-map polish: a real scroll isolation zone + frame nudge.**
+
+- **Scroll-zoom isolation** -- with the cursor over the aerial, the wheel now ONLY
+  zooms the map (the page never scrolls underneath, even mid-pan/measure or when
+  the zoom is at its limit); off the image, the page scrolls normally.
+- **Nudge the frame** -- new ▲ ◀ ▶ ▼ buttons beside the zoom controls shift the
+  aerial 1 m per tap (e.g. the yard clipped on the north side -> tap ▲ three
+  times). Markers are re-projected so plants keep their true ground position, and
+  the framing sticks across refreshes and zoom changes. Also available on the
+  service: `set_yard_map` with `offset_north_m` / `offset_east_m` meter deltas.
+- Fix: a plain **Refresh aerial** now keeps the map's current center instead of
+  snapping back to the Home Assistant home location.
+
 ## v1.58.0 — 2026-07-24 — minor
 
 **German translation + a multilingual framework.** The panel now follows your Home

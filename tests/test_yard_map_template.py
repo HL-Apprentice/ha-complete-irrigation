@@ -69,6 +69,31 @@ def test_export_host_rejects_junk():
         assert export_host_allowed(bad) is False
 
 
+# ── frame nudge (v1.58.1) ───────────────────────────────────────────
+
+
+def test_offset_center_north_and_east():
+    from custom_components.complete_irrigation.yard_map import offset_center
+
+    lat, lon = 33.30, -111.84  # Chandler-ish
+    lat2, lon2 = offset_center(lat, lon, 3.0, 0.0)  # 3 m north
+    assert abs((lat2 - lat) * 111_320.0 - 3.0) < 0.01  # ~3 m in latitude
+    assert lon2 == lon
+    lat3, lon3 = offset_center(lat, lon, 0.0, -10.0)  # 10 m west
+    assert lat3 == lat
+    import math
+
+    east_m = (lon3 - lon) * 111_320.0 * math.cos(math.radians(lat))
+    assert abs(east_m + 10.0) < 0.01
+
+
+def test_offset_center_zero_and_none_are_identity():
+    from custom_components.complete_irrigation.yard_map import offset_center
+
+    assert offset_center(33.3, -111.8, 0.0, 0.0) == (33.3, -111.8)
+    assert offset_center(33.3, -111.8, None, None) == (33.3, -111.8)
+
+
 def test_rejects_partial_edge_set():
     # west+south only — would fetch the wrong ground area
     assert not valid_export_template("https://x/y?w={west}&s={south}&px={width}&py={height}")
