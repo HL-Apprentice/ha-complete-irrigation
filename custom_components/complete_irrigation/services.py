@@ -674,6 +674,10 @@ _SET_YARD_MAP_SCHEMA = vol.Schema(
         vol.Optional("span_m"): vol.All(vol.Coerce(float), vol.Range(min=10, max=500)),
         vol.Optional("offset_north_m"): vol.All(vol.Coerce(float), vol.Range(min=-200, max=200)),
         vol.Optional("offset_east_m"): vol.All(vol.Coerce(float), vol.Range(min=-200, max=200)),
+        # v1.59 — display rotation of the aerial (degrees clockwise). Purely
+        # presentational: the bbox and every marker's ground position are
+        # untouched, so it never re-fetches and is losslessly reversible.
+        vol.Optional("rotation_deg"): vol.All(vol.Coerce(float), vol.Range(min=-360, max=360)),
     }
 )
 
@@ -2254,6 +2258,17 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             )
             if k in data
         }
+        # v1.59 — placing or dragging a marker also stamps the plant's GROUND
+        # ANCHOR from the current frame. That anchor, not the frame-relative
+        # map_x/map_y, is what survives a later move/zoom/rotate of the aerial.
+        if "map_x" in overrides and "map_y" in overrides:
+            from .yard_map import bbox_from_cfg, norm_to_latlon
+
+            _bb = bbox_from_cfg(coord.config.get("yard_map"))
+            if _bb is not None:
+                overrides["anchor_lat"], overrides["anchor_lon"] = norm_to_latlon(
+                    float(overrides["map_x"]), float(overrides["map_y"]), _bb
+                )
         # v1.45 — auto-apply curated care when the species is CHANGED to one our
         # offline table covers, so "correct the name -> care follows" works with
         # NO LLM. Only fills the derived care fields (water-use/sun/temps/cadence),
@@ -2408,6 +2423,9 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             )
             if xy is not None:
                 overrides["map_x"], overrides["map_y"] = xy
+                # v1.59 — the photo's GPS IS the ground anchor (no frame round-trip).
+                overrides["anchor_lat"] = float(data["latitude"])
+                overrides["anchor_lon"] = float(data["longitude"])
                 _LOGGER.info("add_plant_photo: auto-placed %s from photo GPS", existing.id)
 
         merged = replace(existing, **overrides)
@@ -3468,7 +3486,8 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             export_host_allowed,
             export_url,
             image_size_for_bbox,
-            remap_norm,
+            latlon_to_norm_raw,
+            norm_to_latlon,
             safe_export_size,
         )
 
@@ -3476,6 +3495,23 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         # CURRENT center (a refresh/nudge must not snap back to the HA home);
         # else the HA home location (first setup).
         prev_cfg = coord.config.get("yard_map") or {}
+
+        # v1.59 — ROTATION-ONLY fast path. Rotation is a display transform, so
+        # spinning the aerial must not re-download it (or a ↻ tap would cost a
+        # fetch and a fresh image version). Only when rotation is the ONLY thing
+        # asked for: update the stored angle and return.
+        from .yard_map import normalize_rotation
+
+        raw_keys = set(call.data)
+        if "rotation_deg" in raw_keys and not (raw_keys - {"rotation_deg"}):
+            if not prev_cfg:
+                _LOGGER.warning("set_yard_map: no aerial yet — fetch one before rotating")
+                return
+            new_cfg = dict(prev_cfg)
+            new_cfg["rotation_deg"] = normalize_rotation(data["rotation_deg"])
+            coord.config["yard_map"] = new_cfg
+            await coord.async_save_config()
+            return
         if "latitude" in data or "longitude" in data:
             lat = data.get("latitude", hass.config.latitude)
             lon = data.get("longitude", hass.config.longitude)
@@ -3604,15 +3640,37 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             old_bbox.as_tuple() != bbox.as_tuple()
         ):  # only when the frame actually changed
             for plant in list(coord.plants.all()):
-                if plant.map_x is None or plant.map_y is None:
-                    continue
-                new_xy = remap_norm(float(plant.map_x), float(plant.map_y), old_bbox, bbox)
-                if new_xy is None:
-                    coord.plants.upsert(replace(plant, map_x=None, map_y=None))
-                    dropped += 1
-                else:
-                    coord.plants.upsert(replace(plant, map_x=new_xy[0], map_y=new_xy[1]))
+                # v1.59 — re-project from the plant's GROUND ANCHOR, and never
+                # destroy it. Pre-v1.59 this nulled map_x/map_y for anything that
+                # fell outside the new frame, so one zoom-in (or a refresh that
+                # snapped to the HA home) permanently erased every placement with
+                # no undo. Now the anchor is the truth: leaving the view only
+                # stops it being DRAWN, and it returns intact when the view
+                # covers that ground again.
+                alat, alon = plant.anchor_lat, plant.anchor_lon
+                if (alat is None or alon is None) and (
+                    plant.map_x is not None and plant.map_y is not None
+                ):
+                    # Legacy record: mint the anchor from where it sat in the OLD
+                    # frame, so existing placements become durable in passing.
+                    alat, alon = norm_to_latlon(float(plant.map_x), float(plant.map_y), old_bbox)
+                if alat is None or alon is None:
+                    continue  # genuinely never placed — nothing to carry over
+                nx, ny = latlon_to_norm_raw(float(alat), float(alon), bbox)
+                inside = 0.0 <= nx <= 1.0 and 0.0 <= ny <= 1.0
+                coord.plants.upsert(
+                    replace(
+                        plant,
+                        map_x=nx if inside else None,
+                        map_y=ny if inside else None,
+                        anchor_lat=float(alat),
+                        anchor_lon=float(alon),
+                    )
+                )
+                if inside:
                     moved += 1
+                else:
+                    dropped += 1
             if moved or dropped:
                 await coord.async_save_plants()
                 _LOGGER.info(
@@ -3637,6 +3695,12 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             "height": height,
             "image_path": f"/local/complete_irrigation/yard_map.jpg?v={version}",
             "version": version,
+            # v1.59 — a refresh/nudge/zoom must not silently straighten a map the
+            # user deliberately turned, so the angle SURVIVES a re-fetch (an
+            # explicit rotation_deg in this same call still wins).
+            "rotation_deg": normalize_rotation(
+                data.get("rotation_deg", prev_cfg.get("rotation_deg", 0.0))
+            ),
         }
         await coord.async_save_config()
         _LOGGER.info(
@@ -3646,8 +3710,9 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         # just silently vanish from the map with no explanation.
         if dropped and coord.notifier is not None:
             await coord.notifier.notify(
-                f"Yard map is now {span:.0f} m across. {dropped} plant marker(s) fell outside "
-                "the new view and were un-placed — zoom back out, or drag them on again.",
+                f"Yard map is now {span:.0f} m across. {dropped} plant marker(s) are outside "
+                "this view, so they aren't drawn — their positions are kept, and they "
+                "reappear when the view covers them again.",
                 title="Yard map zoomed",
                 event_type="yard_map_zoom",
             )

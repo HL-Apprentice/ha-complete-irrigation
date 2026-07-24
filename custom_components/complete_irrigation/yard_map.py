@@ -318,3 +318,52 @@ def norm_from_yard_map(lat, lon, yard_map_cfg) -> tuple[float, float] | None:
         return latlon_to_norm(float(lat), float(lon), bbox)
     except (KeyError, TypeError, ValueError):
         return None
+
+
+# ── v1.59 aerial rotation ────────────────────────────────────────────
+# Esri (and any bbox export) hands back a NORTH-UP, axis-aligned image, so a
+# property whose lot sits at an angle to true north reads as crooked. Rotation
+# is therefore a pure DISPLAY transform over that image: the bbox, the stored
+# normalized marker coords, and every ground position are untouched — only the
+# presentation turns. That keeps it lossless and instantly reversible (unlike
+# the frame nudge, which re-fetches different ground).
+
+
+def normalize_rotation(deg) -> float:
+    """Wrap a rotation to the half-open range (-180, 180]; junk/None -> 0.0.
+
+    Wrapping (rather than clamping) means repeated ↻ taps never jam at a limit
+    and -181 == 179 rather than being rejected.
+    """
+    try:
+        d = float(deg)
+    except (TypeError, ValueError):
+        return 0.0
+    if d != d or d in (float("inf"), float("-inf")):  # NaN / inf
+        return 0.0
+    d = math.fmod(d, 360.0)
+    if d <= -180.0:
+        d += 360.0
+    elif d > 180.0:
+        d -= 360.0
+    return d + 0.0  # normalize -0.0 -> 0.0
+
+
+def cover_scale(width: float, height: float, deg) -> float:
+    """Scale factor so a width x height image rotated by ``deg`` still covers its
+    own width x height frame (no empty triangles at the corners).
+
+    Rotating the FRAME by -deg gives an axis-aligned box of
+    (W|cos| + H|sin|) x (W|sin| + H|cos|); requiring that to fit inside the
+    scaled image on both axes reduces to |cos| + max(W/H, H/W) * |sin|.
+    """
+    try:
+        w = float(width)
+        h = float(height)
+    except (TypeError, ValueError):
+        return 1.0
+    if not (w > 0 and h > 0):
+        return 1.0
+    r = math.radians(normalize_rotation(deg))
+    c, s = abs(math.cos(r)), abs(math.sin(r))
+    return c + max(w / h, h / w) * s

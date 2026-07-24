@@ -1518,6 +1518,22 @@ set_yard_map:
           step: 1
           mode: box
           unit_of_measurement: "m"
+    rotation_deg:
+      name: Rotate aerial (degrees)
+      description: >
+        Turn the aerial clockwise so a lot that sits at an angle to north reads
+        straight (negative = counter-clockwise). Display only - the ground data,
+        the bbox and every plant's true position are unchanged, and no new image
+        is fetched. The compass on the map turns with it so north stays obvious.
+      required: false
+      example: 12
+      selector:
+        number:
+          min: -360
+          max: 360
+          step: 1
+          mode: box
+          unit_of_measurement: "°"
     offset_east_m:
       name: Shift east (meters)
       description: Nudge the frame this many meters east (negative = west) from its current center.

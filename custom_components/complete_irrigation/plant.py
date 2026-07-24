@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from .hydraulics import WUCOLS_FACTORS, Plant
@@ -50,6 +50,16 @@ class PlantRecord:
     # edge, each in [0, 1]). None = not placed yet. Independent of pixel size.
     map_x: float | None = None
     map_y: float | None = None
+    # v1.59 — the plant's GROUND anchor (WGS84), captured when it is placed.
+    # map_x/map_y are only where it falls in the CURRENT frame, so they are a
+    # derived cache: re-fetching the aerial at a different centre/zoom used to
+    # null them, silently losing every placement. The anchor is the durable
+    # truth — the frame can move, zoom or rotate and the plant stays put; a
+    # plant outside the current view just isn't drawn until the view covers it
+    # again. None on records placed before v1.59 (backfilled from the stored
+    # bbox on first load, see PlantStore.backfill_anchors).
+    anchor_lat: float | None = None
+    anchor_lon: float | None = None
     # v1.54 — free-text light-AREA label grouping co-located plants (e.g. "Front
     # Bed"). Plants sharing an area are surveyed together (one lux reading applies
     # to all). "" = ungrouped. Assigned per-plant or by drawing a region on the
@@ -179,6 +189,8 @@ class PlantRecord:
             "zone_entity_id": self.zone_entity_id,
             "map_x": self.map_x,
             "map_y": self.map_y,
+            "anchor_lat": self.anchor_lat,
+            "anchor_lon": self.anchor_lon,
             "area": self.area,
             "photos": [dict(p) for p in self.photos],
             "health": dict(self.health) if isinstance(self.health, dict) else None,
@@ -213,6 +225,18 @@ class PlantRecord:
         def _coord(key: str) -> float | None:
             v = data.get(key)
             return None if v is None else float(v)
+
+        def _anchor(key: str, limit: float) -> float | None:
+            # v1.59 — ground anchor. A junk/out-of-range value degrades to "no
+            # anchor" rather than dropping the whole plant record on load.
+            v = data.get(key)
+            if v is None:
+                return None
+            try:
+                f = float(v)
+            except (TypeError, ValueError):
+                return None
+            return f if math.isfinite(f) and -limit <= f <= limit else None
 
         raw_photos = data.get("photos") or []
         # Photo paths are ALWAYS the server-set "/local/complete_irrigation/plants/..."
@@ -281,6 +305,8 @@ class PlantRecord:
             zone_entity_id=str(data["zone_entity_id"]),
             map_x=_coord("map_x"),
             map_y=_coord("map_y"),
+            anchor_lat=_anchor("anchor_lat", 90.0),
+            anchor_lon=_anchor("anchor_lon", 180.0),
             area=str(data.get("area") or "")[:60],
             photos=photos,
             health=data.get("health") if isinstance(data.get("health"), dict) else None,
@@ -347,6 +373,36 @@ class PlantStore:
     def all(self) -> list[PlantRecord]:
         """All plants in insertion order."""
         return list(self._items.values())
+
+    def backfill_anchors(self, bbox: Any) -> int:
+        """v1.59 — give every already-placed plant a durable GROUND anchor.
+
+        Placements made before v1.59 exist only as map_x/map_y, i.e. relative to
+        whatever frame was current when they were dropped — so the next re-fetch
+        at a different centre/zoom silently erased them. Converting them once,
+        against the frame they were placed in, makes existing yards durable
+        immediately instead of only on the next map change.
+
+        Returns the number of records upgraded. Idempotent: plants that already
+        carry an anchor, and unplaced plants, are left alone.
+        """
+        from .yard_map import norm_to_latlon
+
+        if bbox is None:
+            return 0
+        upgraded = 0
+        for plant in list(self._items.values()):
+            if plant.anchor_lat is not None and plant.anchor_lon is not None:
+                continue
+            if plant.map_x is None or plant.map_y is None:
+                continue
+            try:
+                lat, lon = norm_to_latlon(float(plant.map_x), float(plant.map_y), bbox)
+            except (TypeError, ValueError):
+                continue
+            self._items[plant.id] = replace(plant, anchor_lat=lat, anchor_lon=lon)
+            upgraded += 1
+        return upgraded
 
     def by_zone(self, zone_entity_id: str) -> list[PlantRecord]:
         """Plants attached to one zone/loop, in insertion order."""

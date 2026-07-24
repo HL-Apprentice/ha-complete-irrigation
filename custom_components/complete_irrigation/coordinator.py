@@ -399,6 +399,24 @@ class ScheduleCoordinator:
         self._run_history = await _async_load_run_history(self._hass, self._entry_id)
         self._plants = await _async_load_plants(self._hass, self._entry_id)
         self._care_tasks = await _async_load_care_tasks(self._hass, self._entry_id)
+        # v1.59 — one-time upgrade: give placements made before v1.59 a durable
+        # GROUND anchor, computed against the frame they were placed in. Without
+        # it they stay frame-relative, and the next aerial re-fetch at a
+        # different centre/zoom would erase them (the bug this replaces).
+        # Idempotent, so it is a no-op on every later start.
+        try:
+            from .yard_map import bbox_from_cfg
+
+            upgraded = self._plants.backfill_anchors(bbox_from_cfg(self._config.get("yard_map")))
+            if upgraded:
+                await _async_save_plants(self._hass, self._entry_id, self._plants)
+                _LOGGER.info(
+                    "Anchored %d existing plant marker(s) to their ground position "
+                    "— they now survive moving, zooming or rotating the aerial",
+                    upgraded,
+                )
+        except Exception:  # never block startup on a migration
+            _LOGGER.exception("plant anchor backfill failed (placements left as-is)")
         # Prune on load — drops anything past the 90-day window so the
         # store file shrinks over time even if the user rarely opens
         # the History tab.

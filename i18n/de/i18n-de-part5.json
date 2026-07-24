@@ -22,7 +22,11 @@
     "marker": "Marker",
     "to move a plant ·": "zum Verschieben einer Pflanze ·",
     "measures a canopy ·": "misst eine Kronenfläche ·",
-    "groups plants into a light area.": "gruppiert Pflanzen in einen Lichtbereich."
+    "groups plants into a light area.": "gruppiert Pflanzen in einen Lichtbereich.",
+    "Rotate the aerial 1° counter-clockwise (hold Shift for 5°; double-click to reset to north-up)": "Luftbild um 1° gegen den Uhrzeigersinn drehen (Umschalt für 5°; Doppelklick setzt auf Norden zurück)",
+    "Rotate the aerial 1° clockwise (hold Shift for 5°; double-click to reset to north-up)": "Luftbild um 1° im Uhrzeigersinn drehen (Umschalt für 5°; Doppelklick setzt auf Norden zurück)",
+    "turn the aerial to straighten an angled lot (1° per tap, Shift for 5°, double-click to reset — the compass shows north)": "das Luftbild drehen, um ein schräg liegendes Grundstück gerade auszurichten (1° pro Klick, Umschalt für 5°, Doppelklick setzt zurück — der Kompass zeigt Norden)",
+    "Failed to save the aerial rotation: ": "Drehung des Luftbilds konnte nicht gespeichert werden: "
   },
   "patterns": [
     [
