@@ -1,0 +1,11 @@
+{
+  "strings": {
+    "▶ Run": "▶ Starten",
+    "Combined (highest)": "Kombiniert (Maximum)",
+    "Combined (lowest)": "Kombiniert (Minimum)",
+    "Shift existing earlier to make room": "Bestehende Läufe nach vorn verschieben, um Platz zu schaffen",
+    "Enter both Lux low and Lux high, or clear both to remove the range.": "Gib den unteren und oberen Lux-Wert ein, oder leere beide Felder, um den Bereich zu entfernen.",
+    "Add drips for delivered-water math.": "Füge Tropfer für die Berechnung des gelieferten Wassers hinzu."
+  },
+  "patterns": []
+}

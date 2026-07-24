@@ -1,0 +1,7 @@
+{
+  "strings": {},
+  "patterns": [
+    ["Water every 1 day\\b", "Jeden Tag gießen"],
+    ["Fertilize every 1 day\\b", "Jeden Tag düngen"]
+  ]
+}

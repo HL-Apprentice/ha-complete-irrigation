@@ -1,0 +1,28 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "HA Complete Irrigation Integration",
+        "description": "Wähle den Bewässerungscontroller, den diese Integration verwalten soll. Erkannte Integrationen werden zuerst aufgeführt; falls dein Controller nicht in der Liste ist, wähle „Manuell“ und wir zeigen dir alle Schalter.\n\n⚠️ Hinweis: Sobald du hier Zeitpläne erstellst, wird dies zur maßgeblichen Quelle für die Bewässerung. Zeitpläne in der App deines Controllers (Rachio, Hydrawise usw.) solltest du pausieren oder entfernen – sonst laufen sie zusätzlich zu unseren.",
+        "data": {
+          "controller": "Bewässerungscontroller"
+        }
+      },
+      "zones": {
+        "title": "Wähle deine Bewässerungszonen",
+        "description": "Wir haben Schalter vorausgewählt, die wie echte Zonen aussehen (Hauptventile, Zeitplan-Schalter und deaktivierte Entitäten ausgenommen). Deaktiviere alles, was keine Zone ist, und bestätige dann.",
+        "data": {
+          "zones": "Zonen"
+        }
+      },
+      "aliases": {
+        "title": "Benenne deine Zonen",
+        "description": "Gib jeder deiner {zone_count} Zone(n) einen sprechenden Namen. Standard ist der aktuelle HA-Name. Wir schlagen automatisch eine Pflanzenkategorie vor (Rasen / Gemüse / Sträucher / Zitrus / Bäume) anhand des Namens – du kannst sie später im Tab „Sensoren“ ändern."
+      }
+    },
+    "abort": {
+      "already_configured": "Complete Irrigation ist bereits konfiguriert.",
+      "no_zones_found": "Es wurden keine Bewässerungszonen gefunden. Wenn du einen benutzerdefinierten Controller verwendest, stelle zuerst sicher, dass seine Schalter in Home Assistant verfügbar sind."
+    }
+  }
+}

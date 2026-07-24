@@ -4,6 +4,22 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.58.0 — 2026-07-24 — minor
+
+**German translation + a multilingual framework.** The panel now follows your Home
+Assistant profile language automatically. **Deutsch** ships first: the full panel UI
+(~700 strings + 178 dynamic patterns -- tabs, cards, buttons, dialogs, tooltips,
+composite lines like the schedule row) plus the setup wizard
+(`translations/de.json`). Anything untranslated falls back to English, and a
+translation problem can never break the panel (the translator runs after render,
+fully error-guarded, with a capped memo cache for performance).
+
+More languages are easy to add -- each is a set of JSON packs compiled in with
+`scripts/i18n_assemble.py`; sources + a how-to live in `i18n/`. Contributions
+welcome. Multi-model verified (Claude + Grok + Gemini + Qwen): all confirmed
+findings fixed, including cumulative pattern application for composite lines and
+keeping backend-bound attributes (light-area labels) untranslated.
+
 ## v1.57.0 — 2026-07-23 — minor
 
 **Ask-the-scheduler chat + a complete docs walkthrough.** With an AI model attached, a

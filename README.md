@@ -50,6 +50,7 @@ A Home Assistant custom integration for complete, sensor-driven irrigation contr
 - **Watering diagnosis (v1.35)** — 🩺 per zone: cross-checks moisture, 14-day run history, and vision concerns into a Signs → Confirm → Suggestions card. Advisory only.
 - **Custom sidebar panel** with Today / Schedules / Zones / Yard / History / Sensors / Weather / Notifications / Settings.
 - **Light + Dark themes** — Auto follows HA/OS preference; ☀️/🌙 toggle on Today cycles Light → Dark → Auto. All text WCAG AA contrast verified.
+- **Multilingual (v1.58)** — the panel follows your HA profile language automatically. **German** ships first (full UI + setup wizard); anything untranslated falls back to English. More languages are easy to add — the whole UI translates through per-language packs (contributions welcome: one JSON table per language).
 - **User-arrangeable weather banner** — ⚙️ gear opens a modal to show/hide and reorder cells (condition, temp, humidity, wind, UV, sunrise/sunset, etc.). Layout persists in browser.
 - **Modern 3-day forecast** — uses `weather.get_forecasts` service (HA 2024+ API) instead of the deprecated forecast attribute.
 - **Iframe-sandboxed panel** so any future panel JS bug physically cannot affect HA's main frontend.

@@ -1,0 +1,12 @@
+{
+  "strings": {},
+  "patterns": [
+    ["\\bMon\\b", "Mo"],
+    ["\\bTue\\b", "Di"],
+    ["\\bWed\\b", "Mi"],
+    ["\\bThu\\b", "Do"],
+    ["\\bFri\\b", "Fr"],
+    ["\\bSat\\b", "Sa"],
+    ["\\bSun\\b", "So"]
+  ]
+}
