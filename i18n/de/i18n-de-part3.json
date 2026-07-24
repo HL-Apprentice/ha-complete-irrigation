@@ -1,0 +1,614 @@
+{
+  "strings": {
+    "Checked: this sensor's reading counts in the combine/average used for watering decisions. Unchecked: display-only — still shown on chips and tiles, but ignored by the moisture gate and auto-soak.": "Aktiviert: Der Messwert dieses Sensors zählt in den Kombinations-/Durchschnittswert für Bewässerungsentscheidungen. Deaktiviert: nur Anzeige — wird weiter auf Chips und Kacheln angezeigt, aber von der Bodenfeuchte-Sperre und dem Auto-Soak ignoriert.",
+    "Checked: this sensor's reading counts in the combine/average used for watering decisions. Unchecked: display-only — still shown on chips and tiles, but ignored by the moisture gate and auto-soak. For sensors that read consistently wrong.": "Aktiviert: Der Messwert dieses Sensors zählt in den Kombinations-/Durchschnittswert für Bewässerungsentscheidungen. Deaktiviert: nur Anzeige — wird weiter auf Chips und Kacheln angezeigt, aber von der Bodenfeuchte-Sperre und dem Auto-Soak ignoriert. Für Sensoren, die dauerhaft falsch messen.",
+    "in avg": "im Schnitt",
+    "Filter sensors — type a name or entity id": "Sensoren filtern — Name oder Entitäts-ID eingeben",
+    "No sensors match your filter.": "Keine Sensoren entsprechen deinem Filter.",
+    "No matching sensors found in HA.": "Keine passenden Sensoren in HA gefunden.",
+    "Pick at least one moisture sensor.": "Wähle mindestens einen Bodenfeuchte-Sensor.",
+    "Pick a combine mode for multiple sensors.": "Wähle einen Kombinationsmodus für mehrere Sensoren.",
+    "Every selected sensor is excluded from the analysis (\"in avg\" unchecked).\n\nKeep at least one sensor in the average, or use the \"Ignore moisture for watering decisions\" toggle below instead.": "Jeder ausgewählte Sensor ist von der Analyse ausgeschlossen („im Schnitt“ abgewählt).\n\nBehalte mindestens einen Sensor im Durchschnitt oder nutze stattdessen den Schalter „Bodenfeuchte bei Bewässerungsentscheidungen ignorieren“ unten.",
+    "Auto-soak run time must be 1–60 minutes.": "Die Auto-Soak-Laufzeit muss 1–60 Minuten betragen.",
+    "Auto-soak wait time must be 5–240 minutes.": "Die Auto-Soak-Wartezeit muss 5–240 Minuten betragen.",
+    "Auto-soak max cycles must be 1–10.": "Die maximalen Auto-Soak-Zyklen müssen 1–10 sein.",
+    "Runs multiple short cycles per day for N days to keep newly-planted grass seed, shrubs, trees, or other plantings consistently moist. The zone's normal schedule is paused while establishment is active; moisture min/max thresholds are bypassed (the soil is intentionally kept wet).": "Führt mehrere kurze Zyklen pro Tag über N Tage aus, um frisch gesäten Rasen, Sträucher, Bäume oder andere Pflanzungen gleichmäßig feucht zu halten. Der normale Zeitplan der Zone ist pausiert, solange die Anwachsphase aktiv ist; Bodenfeuchte-Min/Max-Schwellen werden umgangen (der Boden wird absichtlich feucht gehalten).",
+    "Cycles per day": "Zyklen pro Tag",
+    "How many short waterings each day. 3 is a good default for cool-season grass.": "Wie viele kurze Bewässerungen pro Tag. 3 ist ein guter Standard für Kühlsaison-Gras.",
+    "Minutes per cycle": "Minuten pro Zyklus",
+    "Length of each cycle. Keep short to avoid runoff on bare soil.": "Länge jedes Zyklus. Kurz halten, um Abfluss auf nacktem Boden zu vermeiden.",
+    "Total days": "Tage gesamt",
+    "Establishment window. 12-14 days is typical until germination.": "Zeitfenster der Anwachsphase. 12-14 Tage sind bis zur Keimung typisch.",
+    "First cycle hour (0-23)": "Stunde des ersten Zyklus (0-23)",
+    "When the first cycle of the day fires. Subsequent cycles spread evenly through the daylight hours.": "Wann der erste Zyklus des Tages startet. Weitere Zyklen verteilen sich gleichmäßig über die Tagesstunden.",
+    "Cancel": "Abbrechen",
+    "Start establishment": "Anwachsphase starten",
+    "Weather": "Wetter",
+    "Override": "Aufheben",
+    "End this rain lockout now — the next rain re-arms it": "Diese Regensperre jetzt beenden — der nächste Regen aktiviert sie wieder",
+    "Rain lockout": "Regensperre",
+    "Rain sensors": "Regensensoren",
+    "Pick one or more rainfall sensors (accumulation today / yesterday / duration / intensity, etc.). The first checked sensor is used for the lockout calc; the others show on the Today banner. Check the boxes in your preferred priority order.": "Wähle einen oder mehrere Regensensoren (Menge heute / gestern / Dauer / Intensität usw.). Der erste angehakte Sensor wird für die Sperren-Berechnung verwendet; die anderen erscheinen im Heute-Banner. Hake die Kästchen in deiner bevorzugten Prioritätsreihenfolge an.",
+    "No sensors found in HA.": "Keine Sensoren in HA gefunden.",
+    "Minimum rain to lock out (inches)": "Mindestregen für Sperre (Zoll)",
+    "Rainfall below this never pauses watering (0 = disabled). Default 0.10\". Raise it (e.g. 0.20\") outside monsoon so brief desert cells dropping a fraction of an inch don't strand plants in summer heat. The lockout DURATION then scales with live ETo, and its ceiling shrinks with the day's heat (never more than ~1 day when it's very hot).": "Regen unterhalb dieses Werts pausiert die Bewässerung nie (0 = deaktiviert). Standard 0,10\". Erhöhe ihn (z. B. 0,20\") außerhalb des Monsuns, damit kurze Wüstenschauer mit Bruchteilen eines Zolls die Pflanzen in der Sommerhitze nicht im Stich lassen. Die DAUER der Sperre skaliert dann mit dem Live-ETo, und ihre Obergrenze schrumpft mit der Tageshitze (nie mehr als ~1 Tag, wenn es sehr heiß ist).",
+    "Hot weather boost": "Hitze-Boost",
+    "Temperature sensor": "Temperatursensor",
+    "Sensor reporting outdoor temp in °F. Hot days trigger a runtime boost.": "Sensor, der die Außentemperatur in °F meldet. Heiße Tage lösen einen Laufzeit-Boost aus.",
+    "— None —": "— Keiner —",
+    "Hot threshold (°F)": "Hitze-Schwelle (°F)",
+    "Boost runtime when temp meets or exceeds this.": "Laufzeit boosten, wenn die Temperatur diesen Wert erreicht oder überschreitet.",
+    "Boost (%)": "Boost (%)",
+    "Increase runtime by this percent on hot days.": "Laufzeit an heißen Tagen um diesen Prozentsatz erhöhen.",
+    "Wind defer": "Wind-Aufschub",
+    "Wind sensor (optional)": "Windsensor (optional)",
+    "Sensor reporting current wind speed in mph. If omitted, falls back to any weather.* entity's wind_speed attribute.": "Sensor, der die aktuelle Windgeschwindigkeit in mph meldet. Falls leer, wird das wind_speed-Attribut einer weather.*-Entität verwendet.",
+    "— None (auto from weather.*) —": "— Keiner (automatisch aus weather.*) —",
+    "Wind defer threshold (mph)": "Wind-Aufschub-Schwelle (mph)",
+    "Skip scheduled runs when current wind meets or exceeds this. 0 disables wind defer.": "Geplante Läufe überspringen, wenn der aktuelle Wind diesen Wert erreicht oder überschreitet. 0 deaktiviert den Wind-Aufschub.",
+    "Save weather config": "Wetter-Konfiguration speichern",
+    "primary": "primär",
+    "3-day forecast": "3-Tage-Vorhersage",
+    "Weather config saved.": "Wetter-Konfiguration gespeichert.",
+    "Very low": "Sehr niedrig",
+    "Low": "Niedrig",
+    "Moderate": "Mittel",
+    "High": "Hoch",
+    "Loading yard…": "Garten wird geladen…",
+    "🪴 Yard": "🪴 Garten",
+    "Place each plant on its zone (drip loop) and the calculator sizes emitters so every plant gets the right water — even when they share a loop.": "Setze jede Pflanze auf ihre Zone (Tropfschleife), und der Rechner dimensioniert die Tropfer so, dass jede Pflanze das richtige Wasser bekommt — auch wenn sie sich eine Schleife teilen.",
+    "Auto reference ET from weather forecast (FAO-56)": "Automatische Referenz-ET aus der Wettervorhersage (FAO-56)",
+    "ET source": "ET-Quelle",
+    "Home Assistant weather entity": "Home-Assistant-Wetter-Entität",
+    "Open-Meteo — keyless, no setup": "Open-Meteo — ohne Schlüssel, keine Einrichtung",
+    "Fetches FAO ET0 for your Home Assistant location — no weather entity or API key needed.": "Ruft FAO-ET0 für deinen Home-Assistant-Standort ab — keine Wetter-Entität und kein API-Schlüssel nötig.",
+    "Manual fallback (inches / week)": "Manueller Fallback (Zoll / Woche)",
+    "Reference ET (inches / week)": "Referenz-ET (Zoll / Woche)",
+    "Apply": "Übernehmen",
+    "Currently": "Aktuell",
+    "📷 Add from photo": "📷 Aus Foto hinzufügen",
+    "+ Add plant manually": "+ Pflanze manuell hinzufügen",
+    "Fetching aerial…": "Luftbild wird geladen…",
+    "Refresh aerial": "Luftbild aktualisieren",
+    "Set up yard map": "Gartenkarte einrichten",
+    "Zoom": "Zoom",
+    "How much ground the map covers — smaller is more zoomed in": "Wie viel Fläche die Karte abdeckt — kleiner ist stärker gezoomt",
+    "🗺️ Yard map": "🗺️ Gartenkarte",
+    "Fetch an aerial photo of your property (centered on your Home Assistant location) to place plant markers on it.": "Hole ein Luftbild deines Grundstücks (zentriert auf deinen Home-Assistant-Standort), um Pflanzenmarker darauf zu platzieren.",
+    "✕ Done": "✕ Fertig",
+    "📐 Measure canopy": "📐 Kronenfläche messen",
+    "Draw a box around a plant's canopy to measure its footprint from the aerial": "Zeichne einen Rahmen um die Kronenfläche einer Pflanze, um ihre Fläche aus dem Luftbild zu messen",
+    "🗺️ Assign area": "🗺️ Bereich zuweisen",
+    "Draw a region on the aerial to group the enclosed plants into a light area for the lux survey": "Zeichne eine Region auf dem Luftbild, um die eingeschlossenen Pflanzen zu einem Lichtbereich für die Lichtmessung zu gruppieren",
+    "Apply to": "Übernehmen für",
+    "— pick a plant —": "— Pflanze wählen —",
+    "Set canopy": "Kronenfläche setzen",
+    "Drag a box around a plant's canopy on the aerial to measure it. Canopies are read as an ellipse fit to the box.": "Ziehe einen Rahmen um die Kronenfläche einer Pflanze auf dem Luftbild, um sie zu messen. Kronenflächen werden als in den Rahmen eingepasste Ellipse gelesen.",
+    "Drag a region around the plants that share a light spot — you'll name the area, and every marker inside joins it (one lux survey then covers them all).": "Ziehe eine Region um die Pflanzen, die sich einen Lichtplatz teilen — du benennst den Bereich, und jeder Marker darin tritt ihm bei (eine Lichtmessung deckt dann alle ab).",
+    "Aerial view of the yard": "Luftansicht des Gartens",
+    "Zoom in": "Hineinzoomen",
+    "Zoom out": "Herauszoomen",
+    "Reset view (fit)": "Ansicht zurücksetzen (einpassen)",
+    "Tap to place:": "Zum Platzieren antippen:",
+    "Drag the map to pan · scroll or +/− to zoom in · drag a marker to reposition.": "Karte ziehen zum Verschieben · Scrollen oder +/− zum Zoomen · Marker ziehen zum Umplatzieren.",
+    "📷 Add plant from photo": "📷 Pflanze aus Foto hinzufügen",
+    "Pick a zone, then": "Wähle eine Zone, dann",
+    "Take photo": "Foto aufnehmen",
+    "(allow camera access if the app asks) or": "(erlaube Kamerazugriff, falls die App fragt) oder",
+    "Choose photo": "Foto auswählen",
+    "from your library. You'll see a thumbnail — then tap": "aus deiner Mediathek. Du siehst ein Vorschaubild — tippe dann auf",
+    "Add plant": "Pflanze hinzufügen",
+    ". A library photo keeps its location, so the plant auto-places on the yard map; the vision endpoint names it and fills its care plan.": ". Ein Mediathek-Foto behält seinen Standort, sodass die Pflanze automatisch auf der Gartenkarte platziert wird; der Vision-Endpunkt benennt sie und füllt ihren Pflegeplan aus.",
+    "Zone / loop": "Zone / Schleife",
+    "— pick a zone —": "— Zone wählen —",
+    "Plant species (optional)": "Pflanzenart (optional)",
+    "auto-identified from photo": "automatisch aus Foto erkannt",
+    "Friendly name (optional)": "Anzeigename (optional)",
+    "e.g. Front-yard lemon": "z. B. Zitrone im Vorgarten",
+    "Drips (optional)": "Tropfer (optional)",
+    "count": "Anzahl",
+    "Custom…": "Benutzerdefiniert…",
+    "Selected plant photo": "Ausgewähltes Pflanzenfoto",
+    "⏳ Submitting…": "⏳ Wird gesendet…",
+    "✓ Photo ready": "✓ Foto bereit",
+    "Adding + identifying… this can take 30–60 seconds on the first model load.": "Hinzufügen + Erkennen… das kann beim ersten Modell-Laden 30–60 Sekunden dauern.",
+    "📷 Retake": "📷 Neu aufnehmen",
+    "🖼 Choose from library": "🖼 Aus Mediathek wählen",
+    "📷 Take photo": "📷 Foto aufnehmen",
+    "🖼 Choose photo": "🖼 Foto auswählen",
+    "Edit plant": "Pflanze bearbeiten",
+    "Friendly name": "Anzeigename",
+    "Plant species": "Pflanzenart",
+    "e.g. Citrus limon": "z. B. Citrus limon",
+    "Checking…": "Prüfe…",
+    "✓ Verify name": "✓ Namen prüfen",
+    "Researching…": "Recherchiere…",
+    "🔬 Research details": "🔬 Details recherchieren",
+    "Looks up sun, temperature, water-use, and a care plan for this species name.": "Schlägt Sonne, Temperatur, Wasserbedarf und einen Pflegeplan für diesen Artnamen nach.",
+    "Water-use category": "Wasserbedarfs-Kategorie",
+    "Canopy area (ft²)": "Kronenfläche (ft²)",
+    "e.g. 100": "z. B. 100",
+    "Light area": "Lichtbereich",
+    "e.g. Front Bed": "z. B. Vorderes Beet",
+    "Light preset": "Licht-Voreinstellung",
+    "Lux low": "Lux min",
+    "Lux high": "Lux max",
+    "e.g. 3000": "z. B. 3000",
+    "e.g. 10000": "z. B. 10000",
+    "Light range": "Lichtspanne",
+    "Save the plant first, then set its light range.": "Speichere die Pflanze zuerst, dann kannst du ihre Lichtspanne festlegen.",
+    "Drip count": "Tropfer-Anzahl",
+    "e.g. 2": "z. B. 2",
+    "Drip GPH": "Tropfer-GPH",
+    "e.g. 1": "z. B. 1",
+    "Set both drip fields or neither.": "Setze beide Tropfer-Felder oder keines.",
+    "Save": "Speichern",
+    "Plant photo": "Pflanzenfoto",
+    "Close": "Schließen",
+    "No photos yet — add one to track this plant's health over time.": "Noch keine Fotos — füge eins hinzu, um die Gesundheit dieser Pflanze über die Zeit zu verfolgen.",
+    "Uploading…": "Lade hoch…",
+    "+ Add photo": "+ Foto hinzufügen",
+    "Identifying…": "Erkenne…",
+    "🔍 Identify species": "🔍 Art erkennen",
+    "Add a photo first to identify the species.": "Füge zuerst ein Foto hinzu, um die Art zu erkennen.",
+    "A photo with location data places this plant on the map automatically (first photo only); after that, drag the marker to adjust.": "Ein Foto mit Standortdaten platziert diese Pflanze automatisch auf der Karte (nur beim ersten Foto); danach ziehst du den Marker zum Anpassen.",
+    "Health check": "Gesundheitscheck",
+    "Concerns": "Auffälligkeiten",
+    "Suggested care": "Empfohlene Pflege",
+    "Biannual vision check — advisory; it never changes watering.": "Halbjährlicher Vision-Check — nur beratend; er ändert nie die Bewässerung.",
+    "Unknown plant": "Unbekannte Pflanze",
+    "Fertilizing not necessary": "Düngen nicht nötig",
+    "✓ Apply": "✓ Übernehmen",
+    "Dismiss": "Verwerfen",
+    "No range set": "Keine Spanne festgelegt",
+    "No surveys yet — run one to see how much light this spot actually gets.": "Noch keine Messungen — starte eine, um zu sehen, wie viel Licht dieser Platz wirklich bekommt.",
+    "Illuminance sensor": "Beleuchtungsstärke-Sensor",
+    "Minutes": "Minuten",
+    "Start survey": "Messung starten",
+    "Light": "Licht",
+    "Pick a zone for the new plant first.": "Wähle zuerst eine Zone für die neue Pflanze.",
+    "Set both the drip count and the GPH, or leave both empty.": "Setze sowohl Tropfer-Anzahl als auch GPH, oder lass beides leer.",
+    "Drip count must be between 1 and 100.": "Die Tropfer-Anzahl muss zwischen 1 und 100 liegen.",
+    "Drip GPH must be between 0.1 and 50.": "Die Tropfer-GPH müssen zwischen 0,1 und 50 liegen.",
+    "No plants yet. Add one to see its watering needs.": "Noch keine Pflanzen. Füge eine hinzu, um ihren Wasserbedarf zu sehen.",
+    "species not set": "Art nicht festgelegt",
+    "Edit": "Bearbeiten",
+    "Duplicate": "Duplizieren",
+    "Copy this plant (species + care + drips), then add a photo": "Diese Pflanze kopieren (Art + Pflege + Tropfer), dann ein Foto hinzufügen",
+    "Delete": "Löschen",
+    "Add drips for delivered-water math.": "Füge Tropfer hinzu für die Berechnung des gelieferten Wassers.",
+    "Common name": "Trivialname",
+    "Sunlight": "Sonnenlicht",
+    "Temp tolerance": "Temperaturtoleranz",
+    "Water cadence": "Gießrhythmus",
+    "Fertilize": "Düngen",
+    "Care preset": "Pflege-Voreinstellung",
+    "Note": "Hinweis",
+    "not necessary": "nicht nötig",
+    "Identified attributes": "Erkannte Eigenschaften",
+    "Paused": "Pausiert",
+    "Due now": "Jetzt fällig",
+    "✓ Done": "✓ Erledigt",
+    "Care tasks": "Pflegeaufgaben",
+    "No care tasks yet — add a recurring reminder below.": "Noch keine Pflegeaufgaben — füge unten eine wiederkehrende Erinnerung hinzu.",
+    "Kind": "Art",
+    "Label": "Bezeichnung",
+    "Required for custom": "Bei Benutzerdefiniert erforderlich",
+    "Every (days)": "Alle (Tage)",
+    "Plant / zone": "Pflanze / Zone",
+    "Add": "Hinzufügen",
+    "Prune": "Schneiden",
+    "Mulch": "Mulchen",
+    "Inspect": "Kontrollieren",
+    "Custom": "Benutzerdefiniert",
+    "Tree": "Baum",
+    "Shrub": "Strauch",
+    "Flower": "Blume",
+    "Cactus & succulent": "Kaktus & Sukkulente",
+    "Grass": "Gras",
+    "Seed a starter plan:": "Starterplan anlegen:",
+    "Seed plan": "Plan anlegen",
+    "Add a schedule for these plants' zones to see the water report.": "Füge einen Zeitplan für die Zonen dieser Pflanzen hinzu, um den Wasserbericht zu sehen.",
+    "Per-loop design report": "Design-Bericht pro Schleife",
+    "Plant": "Pflanze",
+    "Needs": "Braucht",
+    "Emitters": "Tropfer",
+    "Gets": "Bekommt",
+    "Status": "Status",
+    "Scheduled for this loop": "Für diese Schleife geplant",
+    "💧 Top-up": "💧 Zusatzlauf für",
+    "Schedules": "Zeitpläne",
+    "+ Add Schedule": "+ Zeitplan hinzufügen",
+    "No schedules yet. Click \"+ Add Schedule\" to create one.": "Noch keine Zeitpläne. Klicke auf „+ Zeitplan hinzufügen“, um einen zu erstellen.",
+    "Move": "Verschiebe",
+    "to": "auf",
+    "Split": "Teile",
+    "✓ Applied": "✓ Übernommen",
+    "🗓️ Proposed schedule fixes": "🗓️ Vorgeschlagene Zeitplan-Korrekturen",
+    "Dismiss all": "Alle verwerfen",
+    "Nothing changes until you tap Apply — each runs through the same validated services you use by hand, and no run is ever dropped.": "Nichts ändert sich, bis du auf Übernehmen tippst — jede Korrektur läuft über dieselben validierten Dienste, die du auch von Hand nutzt, und kein Lauf fällt je weg.",
+    "You": "Du",
+    "Scheduler": "Planer",
+    "💬 Ask the scheduler": "💬 Frag den Planer",
+    "Ask about your schedules or request a change (e.g. “move the grass earlier and split the bird bath”). It answers here; any change it suggests appears above as a one-tap Apply — nothing changes on its own.": "Frag zu deinen Zeitplänen oder bitte um eine Änderung (z. B. „das Gras früher bewässern und das Vogelbad aufteilen“). Er antwortet hier; jede vorgeschlagene Änderung erscheint oben als Ein-Tipp-Übernehmen — nichts ändert sich von allein.",
+    "Thinking…": "Denke nach…",
+    "Ask about your schedule…": "Frag zu deinem Zeitplan…",
+    "Send": "Senden",
+    "(no reply)": "(keine Antwort)",
+    "▶ Run": "▶ Laufen lassen",
+    "Run this schedule now — fires the full zone sequence with inter-zone buffer, ignoring weather gates.": "Diesen Zeitplan jetzt laufen lassen — startet die volle Zonen-Sequenz mit Puffer zwischen den Zonen und ignoriert Wetter-Sperren.",
+    "Disable": "Deaktivieren",
+    "Enable": "Aktivieren",
+    "Copy": "Kopieren",
+    "Duplicate this schedule. Opens the editor pre-filled — change the start time (or anything else) and save.": "Diesen Zeitplan duplizieren. Öffnet den Editor vorausgefüllt — ändere die Startzeit (oder etwas anderes) und speichere.",
+    "Duration (minutes)": "Dauer (Minuten)",
+    "Run": "Laufen lassen",
+    "Custom (set minutes below)": "Benutzerdefiniert (Minuten unten festlegen)",
+    "Edit Schedule": "Zeitplan bearbeiten",
+    "New Schedule": "Neuer Zeitplan",
+    "Name": "Name",
+    "A friendly label, e.g. 'Morning Front Lawn'. Used in notifications and the calendar.": "Eine sprechende Bezeichnung, z. B. 'Vorgarten morgens'. Wird in Benachrichtigungen und im Kalender verwendet.",
+    "Color": "Farbe",
+    "Optional. Color-codes this schedule's left-edge stripe on the Schedules tab and its pills on the day calendar — useful for telling zones/areas apart at a glance.": "Optional. Färbt den linken Randstreifen dieses Zeitplans im Zeitpläne-Tab und seine Pillen im Tageskalender — praktisch, um Zonen/Bereiche auf einen Blick zu unterscheiden.",
+    "No color": "Keine Farbe",
+    "Zone": "Zone",
+    "Which switch entity this schedule controls. Comes from the zones picked at integration setup.": "Welche Schalter-Entität dieser Zeitplan steuert. Stammt aus den bei der Integrations-Einrichtung gewählten Zonen.",
+    "No zones configured": "Keine Zonen konfiguriert",
+    "Start timing": "Start-Zeitpunkt",
+    "Fixed time fires at the clock time below. At sunrise/sunset resolves the start daily from the sun ± offset; the clock time below becomes a fallback used only when sun data is unavailable.": "Feste Zeit startet zur Uhrzeit unten. Bei Sonnenauf-/-untergang wird der Start täglich aus der Sonne ± Versatz bestimmt; die Uhrzeit unten wird zum Fallback, der nur greift, wenn keine Sonnendaten verfügbar sind.",
+    "Fixed time": "Feste Zeit",
+    "At sunrise": "Bei Sonnenaufgang",
+    "At sunset": "Bei Sonnenuntergang",
+    "Offset (min)": "Versatz (min)",
+    "(negative = before)": "(negativ = davor)",
+    "Anchor": "Anker",
+    "Start = the run begins at the sun moment. Finish = the run is scheduled to COMPLETE at that moment (e.g. 'finish at sunrise').": "Start = der Lauf beginnt zum Sonnenmoment. Ende = der Lauf wird so geplant, dass er zu diesem Moment ABGESCHLOSSEN ist (z. B. 'endet bei Sonnenaufgang').",
+    "Start at this time": "Zu dieser Zeit starten",
+    "Finish at this time": "Zu dieser Zeit enden",
+    "Fallback time": "Fallback-Zeit",
+    "Used only if sun data is unavailable (e.g. the sun integration is down). 24h, local.": "Wird nur verwendet, wenn keine Sonnendaten verfügbar sind (z. B. Sonnen-Integration ausgefallen). 24h, lokal.",
+    "Start time": "Startzeit",
+    "Time of day (24h, local) the run starts. Defaults to 06:00.": "Uhrzeit (24h, lokal), zu der der Lauf startet. Standard 06:00.",
+    "Hour (0-23)": "Stunde (0-23)",
+    "Minute (0-59)": "Minute (0-59)",
+    "Duration": "Dauer",
+    "How long to run, up to 8 hours. Moisture sensors can adjust this up or down at runtime.": "Wie lange gelaufen wird, bis zu 8 Stunden. Bodenfeuchte-Sensoren können das zur Laufzeit nach oben oder unten anpassen.",
+    "Hours": "Stunden",
+    "Recurrence": "Wiederholung",
+    "Weekdays = fires on the days you pick. Every N days = fires once per N-day cycle (good for deep watering trees). Every N hours = fires multiple times per day, cycling across day boundaries.": "Wochentage = startet an den gewählten Tagen. Alle N Tage = startet einmal pro N-Tage-Zyklus (gut für tiefes Wässern von Bäumen). Alle N Stunden = startet mehrmals täglich, über Tagesgrenzen hinweg.",
+    "Weekdays": "Wochentage",
+    "Every N days": "Alle N Tage",
+    "Every N hours": "Alle N Stunden",
+    "Fires every N days from the first-run date. E.g. 5 = every 5 days.": "Startet alle N Tage ab dem Datum des ersten Laufs. Z. B. 5 = alle 5 Tage.",
+    "First run date": "Datum des ersten Laufs",
+    "The date of the first run. Subsequent runs step by the interval.": "Das Datum des ersten Laufs. Weitere Läufe folgen im Intervall.",
+    "Date of the first cycle.": "Datum des ersten Zyklus.",
+    "Every (hours)": "Alle (Stunden)",
+    "Fires every N hours starting at the start time on the first-run date.": "Startet alle N Stunden ab der Startzeit am Datum des ersten Laufs.",
+    "Stop firing after (optional)": "Nicht mehr starten nach (optional)",
+    "Cap on each day's firings. When set, every N hours fires from Start time until this time, then waits until the next day's Start. Leave blank to fire continuously across day boundaries.": "Obergrenze für die Starts pro Tag. Wenn gesetzt, startet Alle-N-Stunden von der Startzeit bis zu dieser Zeit und wartet dann bis zur Startzeit des nächsten Tages. Leer lassen, um über Tagesgrenzen hinweg durchzulaufen.",
+    "Clear": "Leeren",
+    "Pick the days this schedule fires. Defaults to Mon-Fri.": "Wähle die Tage, an denen dieser Zeitplan startet. Standard Mo-Fr.",
+    "Every day": "Jeden Tag",
+    "Weekdays only": "Nur Wochentage",
+    "Weekends only": "Nur Wochenenden",
+    "Active period": "Aktiver Zeitraum",
+    "Optional. Pick when the schedule should be active. Leave blank to start now / never end. 'Repeat every year' makes the date range apply seasonally each year.": "Optional. Lege fest, wann der Zeitplan aktiv sein soll. Leer lassen für Start jetzt / kein Ende. 'Jedes Jahr wiederholen' wendet den Datumsbereich saisonal in jedem Jahr an.",
+    "Start date": "Startdatum",
+    "(blank = start now)": "(leer = ab sofort)",
+    "End date": "Enddatum",
+    "(blank = never end)": "(leer = ohne Ende)",
+    "Repeat every year (same date range each year)": "Jedes Jahr wiederholen (gleicher Datumsbereich jedes Jahr)",
+    "Additional zones (run in order)": "Zusätzliche Zonen (laufen der Reihe nach)",
+    "Optional — add more zones to run after the primary one above. They fire back-to-back at run time, each waiting for the previous to finish + 30s valve buffer. Per-zone moisture saturation still skips individual zones.": "Optional — füge weitere Zonen hinzu, die nach der primären oben laufen. Sie starten zur Laufzeit direkt nacheinander; jede wartet, bis die vorherige fertig ist, + 30 s Ventilpuffer. Bodenfeuchte-Sättigung pro Zone überspringt einzelne Zonen weiterhin.",
+    "+ Add another zone": "+ Weitere Zone hinzufügen",
+    "Enabled": "Aktiviert",
+    "Toggle off to keep the schedule but stop it from firing. Useful while traveling.": "Ausschalten, um den Zeitplan zu behalten, aber Starts zu stoppen. Praktisch auf Reisen.",
+    "Scheduler priority": "Planer-Priorität",
+    "Only matters when schedules would collide on the one-zone controller. Essential runs are kept on time and whole; non-essential runs are moved/split first to fit around them. Nothing is ever missed either way.": "Nur relevant, wenn Zeitpläne auf dem Ein-Zonen-Controller kollidieren würden. Essenzielle Läufe bleiben pünktlich und am Stück; nicht essenzielle Läufe werden zuerst verschoben/aufgeteilt, um sich einzupassen. Es fällt so oder so nie etwas aus.",
+    "Essential run": "Essenzieller Lauf",
+    "On (default): protect this run — keep it on time and whole, disrupting non-essential runs first. Turn OFF for a low-priority run (e.g. a bird-bath fill) that may be moved and split to fit around the essential ones.": "An (Standard): diesen Lauf schützen — pünktlich und am Stück halten; nicht essenzielle Läufe werden zuerst umgeplant. AUSschalten für einen Lauf mit niedriger Priorität (z. B. Vogelbad-Füllung), der verschoben und aufgeteilt werden darf, um sich um die essenziellen herum einzupassen.",
+    "Split profile": "Aufteilungs-Profil",
+    "If this run is ever split to fit gaps, don't cut it below this floor. Pick the plant type to inherit that type's default (trees soak long / rarely split; grass splits fine) — customize the per-type defaults in Settings. Choose Custom to set an exact minimum here.": "Wenn dieser Lauf je aufgeteilt wird, um in Lücken zu passen, wird er nicht unter diese Untergrenze geschnitten. Wähle den Pflanzentyp, um dessen Standard zu erben (Bäume sickern lange / werden selten aufgeteilt; Gras lässt sich gut aufteilen) — passe die Typ-Standards in den Einstellungen an. Wähle Benutzerdefiniert, um hier ein exaktes Minimum festzulegen.",
+    "Minimum split chunk (min)": "Mindest-Teilstück (min)",
+    "(blank = default 5)": "(leer = Standard 5)",
+    "Ignore weather gates": "Wetter-Sperren ignorieren",
+    "Each toggle turns OFF a global gate for this schedule only. Other schedules still honor the gates normally. Default off (gates apply).": "Jeder Schalter deaktiviert eine globale Sperre nur für diesen Zeitplan. Andere Zeitpläne beachten die Sperren weiterhin normal. Standard aus (Sperren gelten).",
+    "Ignore wind defer": "Wind-Aufschub ignorieren",
+    "Skip the global wind-speed check. Useful for zones with no spray drift concern (e.g. drip irrigation, a bird bath fill).": "Die globale Windgeschwindigkeits-Prüfung überspringen. Praktisch für Zonen ohne Sprühdrift-Risiko (z. B. Tropfbewässerung, Vogelbad-Füllung).",
+    "Ignore hot-weather boost": "Hitze-Boost ignorieren",
+    "Skip the hot-weather runtime boost. Useful for fixed-volume zones (bird bath, fountain top-off) where extra water doesn't help.": "Den Hitze-Boost der Laufzeit überspringen. Praktisch für Zonen mit festem Volumen (Vogelbad, Brunnen-Nachfüllung), wo mehr Wasser nichts bringt.",
+    "Ignore rain lockout": "Regensperre ignorieren",
+    "Schedule still fires during a rain-lockout period. Useful for fills/top-offs that the rain doesn't replace.": "Der Zeitplan startet auch während einer Regensperre. Praktisch für Füllungen/Nachfüllungen, die der Regen nicht ersetzt.",
+    "Update": "Aktualisieren",
+    "Create": "Erstellen",
+    "No zones": "Keine Zonen",
+    "Remove": "Entfernen"
+  },
+  "patterns": [
+    [
+      "Water every (\\d+) days",
+      "Alle $1 Tage gießen"
+    ],
+    [
+      "Fertilize every (\\d+) days",
+      "Alle $1 Tage düngen"
+    ],
+    [
+      "Fertilizing not necessary",
+      "Düngen nicht nötig"
+    ],
+    [
+      "every 1 day\\b",
+      "jeden Tag"
+    ],
+    [
+      "every (\\d+) days",
+      "alle $1 Tage"
+    ],
+    [
+      "every 1 hour\\b",
+      "jede Stunde"
+    ],
+    [
+      "every (\\d+) hours",
+      "alle $1 Stunden"
+    ],
+    [
+      "finishes at sunrise",
+      "endet bei Sonnenaufgang"
+    ],
+    [
+      "finishes at sunset",
+      "endet bei Sonnenuntergang"
+    ],
+    [
+      "starts at sunrise",
+      "beginnt bei Sonnenaufgang"
+    ],
+    [
+      "starts at sunset",
+      "beginnt bei Sonnenuntergang"
+    ],
+    [
+      " \\+ (\\d+) more",
+      " + $1 weitere"
+    ],
+    [
+      "→ never",
+      "→ nie"
+    ],
+    [
+      "\\(yearly\\)",
+      "(jährlich)"
+    ],
+    [
+      "\\(disabled\\)",
+      "(deaktiviert)"
+    ],
+    [
+      "^Filter (\\w+) sensors$",
+      "$1-Sensoren filtern"
+    ],
+    [
+      "^Failed to save sensor config: (.*)$",
+      "Sensorkonfiguration konnte nicht gespeichert werden: $1"
+    ],
+    [
+      "^🌱 New planting establishment for (.+)$",
+      "🌱 Anwachsphase für neue Pflanzung: $1"
+    ],
+    [
+      "^Establishment started for (.+)\\.$",
+      "Anwachsphase für $1 gestartet."
+    ],
+    [
+      "^Failed to start establishment: (.*)$",
+      "Anwachsphase konnte nicht gestartet werden: $1"
+    ],
+    [
+      "^Rain lockout active until (.+)$",
+      "Regensperre aktiv bis $1"
+    ],
+    [
+      "^Failed to save: (.*)$",
+      "Speichern fehlgeschlagen: $1"
+    ],
+    [
+      "^Failed to clear lockout: (.*)$",
+      "Sperre konnte nicht aufgehoben werden: $1"
+    ],
+    [
+      "^(.+) in/week$",
+      "$1 Zoll/Woche"
+    ],
+    [
+      "^, computed from (.+) \\(updated (.+)\\)\\. Falls back to the manual value if the forecast is unavailable or stale\\.$",
+      ", berechnet aus $1 (aktualisiert $2). Fällt auf den manuellen Wert zurück, wenn die Vorhersage nicht verfügbar oder veraltet ist."
+    ],
+    [
+      "^, computed from (.+)\\. Falls back to the manual value if the forecast is unavailable or stale\\.$",
+      ", berechnet aus $1. Fällt auf den manuellen Wert zurück, wenn die Vorhersage nicht verfügbar oder veraltet ist."
+    ],
+    [
+      "^Waiting on a usable forecast from (.+) — using your manual value below until one is available\\. Falls back to the manual value if the forecast is unavailable or stale\\.$",
+      "Warte auf eine nutzbare Vorhersage von $1 — bis dahin wird dein manueller Wert unten verwendet. Fällt auf den manuellen Wert zurück, wenn die Vorhersage nicht verfügbar oder veraltet ist."
+    ],
+    [
+      "^Drives every plant's weekly need \\(drip efficiency (\\d+)%\\)\\. Used whenever the forecast can't be read\\.$",
+      "Bestimmt den Wochenbedarf jeder Pflanze (Tropf-Effizienz $1 %). Wird verwendet, wenn die Vorhersage nicht gelesen werden kann."
+    ],
+    [
+      "^Drives every plant's weekly need \\(drip efficiency (\\d+)%\\)\\. Raise it in summer, lower in winter\\.$",
+      "Bestimmt den Wochenbedarf jeder Pflanze (Tropf-Effizienz $1 %). Im Sommer erhöhen, im Winter senken."
+    ],
+    [
+      "^(\\d+) m across$",
+      "$1 m Breite"
+    ],
+    [
+      "^(.+) — drag to reposition$",
+      "$1 — zum Verschieben ziehen"
+    ],
+    [
+      "^Canopy ≈ (.+) sq ft\\.$",
+      "Kronenfläche ≈ $1 Quadratfuß."
+    ],
+    [
+      "^Photos \\((\\d+)\\)$",
+      "Fotos ($1)"
+    ],
+    [
+      "^(.+) photo$",
+      "Foto von $1"
+    ],
+    [
+      "^Health check — (.+)$",
+      "Gesundheitscheck — $1"
+    ],
+    [
+      "^(\\d+)% confidence$",
+      "$1 % Konfidenz"
+    ],
+    [
+      "^Suggested: (.+)$",
+      "Vorschlag: $1"
+    ],
+    [
+      "^Optimal (\\d+)–(\\d+) lux$",
+      "Optimal $1–$2 Lux"
+    ],
+    [
+      "^Avg (\\d+) lux · (\\d+) readings · (.+)$",
+      "Ø $1 Lux · $2 Messwerte · $3"
+    ],
+    [
+      "^(.+) · (\\d+) lux avg · (.+)$",
+      "$1 · Ø $2 Lux · $3"
+    ],
+    [
+      "^Surveying… (\\d+) readings so far \\(until (.+)\\)$",
+      "Messung läuft… bisher $1 Messwerte (bis $2)"
+    ],
+    [
+      "^Surveying… (\\d+) readings so far$",
+      "Messung läuft… bisher $1 Messwerte"
+    ],
+    [
+      "^Failed to add photo: (.*)$",
+      "Foto konnte nicht hinzugefügt werden: $1"
+    ],
+    [
+      "^Failed to add the plant from photo: (.*)$",
+      "Pflanze konnte nicht aus dem Foto hinzugefügt werden: $1"
+    ],
+    [
+      "^Hardy only to (.+)°F, but zone (.*) can reach (.+)°F — may need winter frost protection$",
+      "Winterhart nur bis $1 °F, aber Zone $2 kann $3 °F erreichen — braucht im Winter evtl. Frostschutz"
+    ],
+    [
+      "^Plants \\((\\d+)\\)$",
+      "Pflanzen ($1)"
+    ],
+    [
+      "^Drips: (\\d+) × (.+) GPH$",
+      "Tropfer: $1 × $2 GPH"
+    ],
+    [
+      "^(\\d+)% confident$",
+      "$1 % sicher"
+    ],
+    [
+      "^Auto-identified · (.+)$",
+      "Automatisch identifiziert · $1"
+    ],
+    [
+      "^Due (?!now$)(.+)$",
+      "Fällig: $1"
+    ],
+    [
+      "^· Very low$",
+      "· Sehr niedrig"
+    ],
+    [
+      "^· Low$",
+      "· Niedrig"
+    ],
+    [
+      "^· Moderate$",
+      "· Mittel"
+    ],
+    [
+      "^· High$",
+      "· Hoch"
+    ],
+    [
+      "^(\\d+) min · (.+)/wk · (.+) GPH / (.+) GPH line · suggested (\\d+) min$",
+      "$1 min · $2/Wo. · $3 GPH / $4-GPH-Leitung · empfohlen $5 min"
+    ],
+    [
+      "^(\\d+) min · (.+)/wk · (.+) GPH · suggested (\\d+) min$",
+      "$1 min · $2/Wo. · $3 GPH · empfohlen $4 min"
+    ],
+    [
+      "^Installed drips deliver (.+) gal/wk$",
+      "Installierte Tropfer liefern $1 gal/Wo."
+    ],
+    [
+      "^(.+) gal/wk$",
+      "$1 gal/Wo."
+    ],
+    [
+      "^is short (.+) gal/wk and watering more often can't close it — give it its own loop or a longer main run\\.$",
+      "hat ein Defizit von $1 gal/Wo., und häufigeres Gießen kann es nicht schließen — gib ihr eine eigene Schleife oder einen längeren Hauptlauf."
+    ],
+    [
+      "^: add (.+)×/wk × (\\d+) min on this loop to close its (.+) gal/wk shortfall\\.$",
+      ": füge $1×/Wo. × $2 min auf dieser Schleife hinzu, um das Defizit von $3 gal/Wo. zu schließen."
+    ],
+    [
+      "^: add (.+)×/wk × (\\d+) min on this loop to close its (.+) gal/wk shortfall$",
+      ": füge $1×/Wo. × $2 min auf dieser Schleife hinzu, um das Defizit von $3 gal/Wo. zu schließen"
+    ],
+    [
+      "^\\(also waters (.+)\\)$",
+      "(bewässert auch $1)"
+    ],
+    [
+      "^(\\d+) min · (.+)×/wk$",
+      "$1 min · $2×/Wo."
+    ],
+    [
+      "^Failed to apply the schedule fix: (.*)$",
+      "Zeitplan-Korrektur konnte nicht übernommen werden: $1"
+    ],
+    [
+      "^Failed to dismiss: (.*)$",
+      "Verwerfen fehlgeschlagen: $1"
+    ],
+    [
+      "^into (\\d+): (.+)$",
+      "in $1 auf: $2"
+    ],
+    [
+      "^Error: (.*)$",
+      "Fehler: $1"
+    ],
+    [
+      "^Run (.+)$",
+      "$1 laufen lassen"
+    ],
+    [
+      "^Default (\\d+) min\\. Maximum (\\d+) min\\. Change the default in Settings\\.$",
+      "Standard $1 min. Maximum $2 min. Ändere den Standard in den Einstellungen."
+    ],
+    [
+      "^⚠ Longer than your controller's (\\d+)-minute per-zone limit\\. Rachio caps each activation, so this run is delivered in (\\d+) blocks of up to (\\d+) min with a short gap between \\(off → reset → on\\), to comply with the Rachio integration\\.$",
+      "⚠ Länger als das $1-Minuten-Limit pro Zone deines Controllers. Rachio deckelt jede Aktivierung, daher wird dieser Lauf in $2 Blöcken von bis zu $3 min mit kurzer Pause dazwischen geliefert (aus → zurücksetzen → an), um der Rachio-Integration zu entsprechen."
+    ],
+    [
+      "^Uses the (.+) default \\((\\d+) min\\)\\. Change it in Settings › Split-chunk defaults\\.$",
+      "Verwendet den $1-Standard ($2 min). Ändere ihn unter Einstellungen › Teilstück-Standards."
+    ]
+  ]
+}

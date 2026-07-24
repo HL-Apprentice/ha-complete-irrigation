@@ -1,0 +1,559 @@
+{
+  "strings": {
+    "No placed plant markers inside that region.": "Keine platzierten Pflanzen-Marker in diesem Bereich.",
+    "Enter the illuminance sensor entity first (e.g. sensor.roaming_lux).": "Gib zuerst die Entität des Beleuchtungsstärke-Sensors ein (z. B. sensor.roaming_lux).",
+    "Minutes must be between 1 and 240.": "Minuten müssen zwischen 1 und 240 liegen.",
+    "Cancel": "Abbrechen",
+    "Survey": "Messen",
+    "Light areas": "Lichtbereiche",
+    "One lux survey covers every plant in an area. Set the roaming sensor in the area, pick it below, then Survey — each plant is verdicted against its own optimal range.": "Eine Lichtmessung deckt jede Pflanze in einem Bereich ab. Stelle den mobilen Sensor im Bereich auf, wähle ihn unten aus, dann Messen — jede Pflanze wird an ihrem eigenen Optimalbereich bewertet.",
+    "Illuminance sensor": "Beleuchtungsstärke-Sensor",
+    "Minutes": "Minuten",
+    "Pick which plant this canopy is for.": "Wähle aus, zu welcher Pflanze diese Kronenfläche gehört.",
+    "Toggle sidebar": "Seitenleiste umschalten",
+    "💧 Irrigation": "💧 Bewässerung",
+    "Section": "Bereich",
+    "Quick configuration UI lands in v1.2. For now, use Developer Tools → Services:": "Die Schnellkonfigurations-UI kommt in v1.2. Nutze vorerst Entwicklerwerkzeuge → Dienste:",
+    "— bind rain sensor, hot weather boost": "— Regensensor verbinden, Hitze-Boost",
+    "— bind moisture sensor(s) per zone": "— Bodenfeuchte-Sensor(en) pro Zone verbinden",
+    "— notify target, quiet hours": "— Benachrichtigungsziel, Ruhezeiten",
+    "— verify routing": "— Zustellung prüfen",
+    "Zones are configured at integration setup. Re-add via Settings → Devices & Services to change.": "Zonen werden bei der Integrationseinrichtung konfiguriert. Zum Ändern über Einstellungen → Geräte & Dienste neu hinzufügen.",
+    "Notifications": "Benachrichtigungen",
+    "— Pick a notify service —": "— Benachrichtigungsdienst wählen —",
+    "Remove this target": "Dieses Ziel entfernen",
+    "No": "Noch keine",
+    "services found in this HA instance yet. Install the Home Assistant Companion app on your phone (or another notify integration) and they'll appear here.": "Dienste in dieser HA-Instanz gefunden. Installiere die Home Assistant Companion App auf deinem Handy (oder eine andere Benachrichtigungs-Integration), dann erscheinen sie hier.",
+    "Notifications enabled": "Benachrichtigungen aktiviert",
+    "Master switch. Turn off to silence all push notifications without losing your config.": "Hauptschalter. Ausschalten, um alle Push-Benachrichtigungen stummzuschalten, ohne deine Konfiguration zu verlieren.",
+    "Notify targets": "Benachrichtigungsziele",
+    "Pick one or more HA notify services. Every notification this integration sends will fan out to all of them.": "Wähle einen oder mehrere HA-Benachrichtigungsdienste. Jede Benachrichtigung dieser Integration geht an alle davon.",
+    "+ Add target": "+ Ziel hinzufügen",
+    "Quiet hours": "Ruhezeiten",
+    "Non-urgent notifications received in this window are bundled into a single morning summary.": "Nicht dringende Benachrichtigungen in diesem Zeitfenster werden in einer einzigen Morgen-Zusammenfassung gebündelt.",
+    "Start": "Beginn",
+    "24h, e.g. 22:00": "24h, z. B. 22:00",
+    "End": "Ende",
+    "24h, e.g. 07:00 — morning summary fires at this time": "24h, z. B. 07:00 — die Morgen-Zusammenfassung wird zu dieser Zeit gesendet",
+    "Missed-run recovery": "Verpasste Läufe nachholen",
+    "Notify when a scheduled run is skipped": "Benachrichtigen, wenn ein geplanter Lauf übersprungen wird",
+    "Whenever the system drops a scheduled run (conflict resolver pushes it past its 2h deferral cap, a moisture/wind/rain gate skips it, or HA was down at the firing minute), a notification with a 'Run now' action button is sent. Tap the button to run the zone with its original planned duration. Only works on the Home Assistant Companion mobile app — other notify targets get plain text.": "Wenn das System einen geplanten Lauf fallen lässt (der Konfliktlöser schiebt ihn über die 2-h-Verschiebegrenze hinaus, eine Bodenfeuchte-/Wind-/Regen-Sperre überspringt ihn, oder HA war zur Startminute offline), wird eine Benachrichtigung mit einem 'Jetzt laufen lassen'-Aktionsbutton gesendet. Tippe auf den Button, um die Zone mit ihrer ursprünglich geplanten Dauer laufen zu lassen. Funktioniert nur mit der Home Assistant Companion App — andere Benachrichtigungsziele erhalten reinen Text.",
+    "Notify when a scheduled run is cut short": "Benachrichtigen, wenn ein geplanter Lauf vorzeitig beendet wird",
+    "When something outside this integration turns the zone switch off mid-run (controller safety timer, automation, manual toggle in HA, etc.) and the run ran less than 90% of its planned duration, send a notification with 'Run remainder' + 'Open Logbook' buttons. The Logbook button takes you straight to HA's audit trail filtered to that switch so you can see who/what turned it off.": "Wenn etwas außerhalb dieser Integration den Zonen-Schalter mitten im Lauf ausschaltet (Sicherheits-Timer des Controllers, Automatisierung, manuelles Umschalten in HA usw.) und der Lauf weniger als 90 % seiner geplanten Dauer lief, wird eine Benachrichtigung mit den Buttons 'Rest laufen lassen' + 'Logbuch öffnen' gesendet. Der Logbuch-Button führt dich direkt zu HAs Protokoll, gefiltert auf diesen Schalter, damit du siehst, wer oder was ihn ausgeschaltet hat.",
+    "Daily low-moisture summary": "Tägliche Zusammenfassung bei niedriger Bodenfeuchte",
+    "Send a daily summary when any zone sensor is below its minimum": "Tägliche Zusammenfassung senden, wenn ein Zonen-Sensor unter seinem Minimum liegt",
+    "Fires once per day at quiet-hours-end. Lists every zone whose moisture sensor has dropped below the configured min%.": "Wird einmal täglich zum Ende der Ruhezeiten gesendet. Listet jede Zone auf, deren Bodenfeuchte-Sensor unter das konfigurierte Minimum in % gefallen ist.",
+    "Send test": "Test senden",
+    "Save": "Speichern",
+    "Notification config saved.": "Benachrichtigungs-Konfiguration gespeichert.",
+    "Test sent. If you don't see it, check your notify target in HA Settings → Devices & Services.": "Test gesendet. Wenn er nicht ankommt, prüfe dein Benachrichtigungsziel unter HA Einstellungen → Geräte & Dienste.",
+    "Settings": "Einstellungen",
+    "Theme": "Design",
+    "Cycle Light/Dark/Auto with the ☀️/🌙 button on Today, or pick one of your HA-installed themes below.": "Wechsle Hell/Dunkel/Auto mit dem ☀️/🌙-Button auf Heute, oder wähle unten eines deiner in HA installierten Designs.",
+    "Light/Dark/Auto:": "Hell/Dunkel/Auto:",
+    "Dark": "Dunkel",
+    "Light": "Hell",
+    "Auto (follow HA)": "Auto (folgt HA)",
+    "HA theme override": "HA-Design-Überschreibung",
+    "— None (use Light/Dark above) —": "— Keins (Hell/Dunkel oben verwenden) —",
+    "Picks from themes installed in your HA (Settings → Themes). Applies to this panel; HA's main UI is unaffected.": "Wählt aus den in deinem HA installierten Designs (Einstellungen → Designs). Gilt für dieses Panel; die HA-Hauptoberfläche bleibt unberührt.",
+    "Apply theme": "Design übernehmen",
+    "Schedule conflicts": "Zeitplan-Konflikte",
+    "When two schedules' run windows overlap, this picks how the coordinator resolves them. Applies to all schedules.": "Wenn sich die Lauffenster zweier Zeitpläne überschneiden, legt dies fest, wie der Koordinator sie auflöst. Gilt für alle Zeitpläne.",
+    "Policy": "Richtlinie",
+    "Defer the new one (skip overlapping new run) — safest": "Den neuen zurückstellen (überlappenden neuen Lauf überspringen) — am sichersten",
+    "Shift existing earlier to make room": "Bestehenden nach vorn verschieben, um Platz zu schaffen",
+    "Split the difference (both move equally apart)": "Differenz aufteilen (beide rücken gleich weit auseinander)",
+    "Save policy": "Richtlinie speichern",
+    "Schedule timing": "Zeitplan-Timing",
+    "Inter-zone valve-settle buffer for multi-zone schedules. Default 30s lets the previous valve close fully before the next opens.": "Ventil-Beruhigungspuffer zwischen Zonen bei Mehrzonen-Zeitplänen. Standard 30 s lässt das vorherige Ventil vollständig schließen, bevor das nächste öffnet.",
+    "Inter-zone buffer (seconds)": "Puffer zwischen Zonen (Sekunden)",
+    "Valve verification (seconds)": "Ventil-Verifizierung (Sekunden)",
+    "Re-checks the switch after on/off commands; 0 disables.": "Prüft den Schalter nach Ein/Aus-Befehlen erneut; 0 deaktiviert.",
+    "Save timing": "Timing speichern",
+    "Split-chunk defaults by plant type": "Mindest-Teilstück-Standards nach Pflanzentyp",
+    "The smallest slice (minutes) the scheduler may cut each plant type into when it splits a run to fit around others. Tag a schedule with a plant type (in its editor) and it uses the value here — trees get long, uninterrupted soaks; grass tolerates small frequent pieces. Change a value and every schedule of that type follows.": "Das kleinste Teilstück (Minuten), in das der Planer jeden Pflanzentyp schneiden darf, wenn er einen Lauf aufteilt, um ihn um andere herum einzupassen. Weise einem Zeitplan (in seinem Editor) einen Pflanzentyp zu, und er verwendet den Wert hier — Bäume bekommen lange, ununterbrochene Wässerungen; Gras verträgt kleine, häufige Stücke. Ändere einen Wert, und jeder Zeitplan dieses Typs folgt.",
+    "Tree (min)": "Baum (min)",
+    "Shrub (min)": "Strauch (min)",
+    "Grass (min)": "Gras (min)",
+    "Flower (min)": "Blume (min)",
+    "Cactus & succulent (min)": "Kaktus & Sukkulente (min)",
+    "Save split defaults": "Mindest-Teilstück-Standards speichern",
+    "Weekly reminder": "Wöchentliche Erinnerung",
+    "Fires every Sunday at 8 AM with a per-zone summary. Snooze for 30 days if you're on vacation.": "Wird jeden Sonntag um 8 Uhr morgens mit einer Zusammenfassung pro Zone gesendet. Für 30 Tage stummschalten, wenn du im Urlaub bist.",
+    "Snoozed until": "Stummgeschaltet bis",
+    "Resume now": "Jetzt fortsetzen",
+    "Currently active.": "Derzeit aktiv.",
+    "Snooze 30 days": "30 Tage stummschalten",
+    "Security": "Sicherheit",
+    "Lock down hardware-actuating + data-mutating services to admin users only. Useful when you have non-admin HA accounts (kids, guests, dashboards) that you don't want triggering irrigation runs or editing schedules via Developer Tools.": "Beschränke hardware-auslösende und datenändernde Dienste auf Admin-Benutzer. Nützlich, wenn du Nicht-Admin-HA-Konten hast (Kinder, Gäste, Dashboards), die keine Bewässerungsläufe auslösen oder Zeitpläne über die Entwicklerwerkzeuge bearbeiten sollen.",
+    "Restrict services to admin users": "Dienste auf Admin-Benutzer beschränken",
+    "When ON: only HA admin accounts can call run_zone, stop_zone, add/update/delete schedules, edit weather/moisture config, change conflict policy, or test notifications via service calls. Non-admin user calls (from the panel by non-admins — although they can't see the panel — or from Developer Tools / scripts running under non-admin contexts) are rejected with a warning in the HA log. System-initiated calls (e.g. the 'Run now' button on missed-run notifications) always pass through. Default OFF for back-compat with existing scripts that run under non-admin contexts.": "Wenn AN: Nur HA-Admin-Konten können run_zone, stop_zone, Zeitpläne anlegen/ändern/löschen, Wetter-/Bodenfeuchte-Konfiguration bearbeiten, die Konflikt-Richtlinie ändern oder Benachrichtigungen per Dienstaufruf testen. Aufrufe von Nicht-Admin-Benutzern (aus dem Panel durch Nicht-Admins — obwohl sie das Panel nicht sehen können — oder aus Entwicklerwerkzeugen / Skripten in Nicht-Admin-Kontexten) werden mit einer Warnung im HA-Log abgelehnt. Systeminitiierte Aufrufe (z. B. der 'Jetzt laufen lassen'-Button bei Benachrichtigungen zu verpassten Läufen) gehen immer durch. Standard AUS für Rückwärtskompatibilität mit bestehenden Skripten in Nicht-Admin-Kontexten.",
+    "Save security setting": "Sicherheitseinstellung speichern",
+    "Manual run default": "Standard für manuellen Lauf",
+    "How many minutes the Run Now popup prefills with. You can always override per-run.": "Mit wie vielen Minuten das Jetzt-starten-Popup vorbelegt wird. Du kannst es pro Lauf jederzeit ändern.",
+    "Default duration (minutes)": "Standard-Dauer (Minuten)",
+    "Save default": "Standard speichern",
+    "Calendar feed": "Kalender-Feed",
+    "Subscribe from your phone's calendar app to see the next 30 days of planned runs.": "Abonniere ihn in der Kalender-App deines Handys, um die geplanten Läufe der nächsten 30 Tage zu sehen.",
+    "Copy": "Kopieren",
+    "About": "Über",
+    "Version": "Version",
+    "Repository": "Repository",
+    "Zones configured": "Konfigurierte Zonen",
+    "Schedules": "Zeitpläne",
+    "All configuration is also reachable via Developer Tools → Services — useful for advanced automations.": "Die gesamte Konfiguration ist auch über Entwicklerwerkzeuge → Dienste erreichbar — nützlich für fortgeschrittene Automatisierungen.",
+    "Plant identification": "Pflanzenbestimmung",
+    "Identify a plant from a photo and research its care.": "Bestimme eine Pflanze anhand eines Fotos und recherchiere ihre Pflege.",
+    "Identify engine": "Bestimmungs-Engine",
+    "AI vision model (local or cloud)": "KI-Bildmodell (lokal oder Cloud)",
+    "Pl@ntNet — plant-specific, no LLM": "Pl@ntNet — pflanzenspezifisch, ohne LLM",
+    "Pl@ntNet API key": "Pl@ntNet-API-Schlüssel",
+    "key saved — leave blank to keep it": "Schlüssel gespeichert — leer lassen, um ihn zu behalten",
+    "paste your Pl@ntNet API key": "füge deinen Pl@ntNet-API-Schlüssel ein",
+    "Free for non-commercial use (up to 500 IDs/day), stored only on your server. A key is saved.": "Kostenlos für nicht-kommerzielle Nutzung (bis zu 500 Bestimmungen/Tag), nur auf deinem Server gespeichert. Ein Schlüssel ist gespeichert.",
+    "Free for non-commercial use (up to 500 IDs/day), stored only on your server. Get one free at": "Kostenlos für nicht-kommerzielle Nutzung (bis zu 500 Bestimmungen/Tag), nur auf deinem Server gespeichert. Hol dir einen kostenlos auf",
+    "— see the README for step-by-step.": "— siehe README für die Schritt-für-Schritt-Anleitung.",
+    "Clear key": "Schlüssel löschen",
+    "Fallback tries the local model first and only calls the external AI when the local one fails or can't identify the plant.": "Fallback versucht zuerst das lokale Modell und ruft die externe KI nur auf, wenn das lokale fehlschlägt oder die Pflanze nicht bestimmen kann.",
+    "Mode": "Modus",
+    "Local endpoint URL": "Lokale Endpunkt-URL",
+    "Local model name": "Lokaler Modellname",
+    "e.g. qwen2.5-vl": "z. B. qwen2.5-vl",
+    "External provider": "Externer Anbieter",
+    "External endpoint URL": "Externe Endpunkt-URL",
+    "External model": "Externes Modell",
+    "model id": "Modell-ID",
+    "API key": "API-Schlüssel",
+    "paste your API key": "füge deinen API-Schlüssel ein",
+    "A key is saved on your Home Assistant server.": "Ein Schlüssel ist auf deinem Home-Assistant-Server gespeichert.",
+    "Stored on your Home Assistant server; never shown again.": "Wird auf deinem Home-Assistant-Server gespeichert; wird nie wieder angezeigt.",
+    "Perenual care lookup (optional)": "Perenual-Pflegeabfrage (optional)",
+    "paste your Perenual API key": "füge deinen Perenual-API-Schlüssel ein",
+    "When set, \"Research details\" checks Perenual for a species the built-in care table doesn't cover, before asking the AI. Free (100 lookups/day), stored only on your server. A key is saved.": "Wenn gesetzt, prüft \"Details recherchieren\" bei Perenual nach einer Art, die die eingebaute Pflegetabelle nicht abdeckt, bevor die KI gefragt wird. Kostenlos (100 Abfragen/Tag), nur auf deinem Server gespeichert. Ein Schlüssel ist gespeichert.",
+    "When set, \"Research details\" checks Perenual for a species the built-in care table doesn't cover, before asking the AI. Free (100 lookups/day), stored only on your server. Get one free at": "Wenn gesetzt, prüft \"Details recherchieren\" bei Perenual nach einer Art, die die eingebaute Pflegetabelle nicht abdeckt, bevor die KI gefragt wird. Kostenlos (100 Abfragen/Tag), nur auf deinem Server gespeichert. Hol dir einen kostenlos auf",
+    "✓ Saved": "✓ Gespeichert",
+    "Testing…": "Teste…",
+    "Test connection": "Verbindung testen",
+    "✓ endpoint responded": "✓ Endpunkt hat geantwortet",
+    "✗ no response payload": "✗ keine Antwortdaten",
+    "Hardiness zone": "Winterhärtezone",
+    "Your USDA plant-hardiness zone (from your ZIP, via the free keyless phzmapi service). Used to flag plants that may need winter frost protection here.": "Deine USDA-Winterhärtezone (aus deiner PLZ, über den kostenlosen, schlüssellosen phzmapi-Dienst). Wird genutzt, um Pflanzen zu markieren, die hier eventuell Winterfrostschutz brauchen.",
+    "ZIP code": "Postleitzahl (ZIP)",
+    "e.g. 85295": "z. B. 85295",
+    "Looking up…": "Suche…",
+    "Look up zone": "Zone nachschlagen",
+    "no zone found for that ZIP": "keine Zone für diese PLZ gefunden",
+    "Enter your ZIP code first.": "Gib zuerst deine Postleitzahl ein.",
+    "Yard map imagery": "Garten-Luftbild",
+    "Aerial export URL template": "URL-Vorlage für Luftbild-Export",
+    "Tokens:": "Platzhalter:",
+    "(or": "(oder",
+    "plus": "plus",
+    "and": "und",
+    ". Leave blank for the default Esri imagery. After saving, press": ". Leer lassen für das Standard-Esri-Bild. Nach dem Speichern drücke",
+    "Refresh aerial": "Luftbild aktualisieren",
+    "on the Yard tab to re-fetch.": "auf dem Garten-Tab, um es neu zu laden.",
+    "Toggle light / dark": "Hell / Dunkel umschalten",
+    "Today": "Heute",
+    "View today's skipped runs in the History tab": "Heutige übersprungene Läufe im Verlauf-Tab ansehen",
+    "1 run skipped today": "1 Lauf heute übersprungen",
+    "Tap to view details. If you enabled missed-run notifications, you should have received a \"Run now?\" alert on your phone.": "Tippen für Details. Wenn du Benachrichtigungen für verpasste Läufe aktiviert hast, solltest du eine \"Jetzt laufen lassen?\"-Meldung auf deinem Handy erhalten haben.",
+    "Rain lockout active": "Regensperre aktiv",
+    "End this rain lockout now — the next rain re-arms it": "Diese Regensperre jetzt beenden — der nächste Regen aktiviert sie erneut",
+    "Override": "Aufheben",
+    "Condition": "Wetterlage",
+    "Temp": "Temp.",
+    "Feels like": "Gefühlt",
+    "Humidity": "Luftfeuchte",
+    "Feels (heat idx)": "Gefühlt (Hitzeindex)",
+    "Dew pt": "Taupunkt",
+    "Rain": "Regen",
+    "Wind": "Wind",
+    "UV index": "UV-Index",
+    "Solar": "Solar",
+    "Pressure": "Luftdruck",
+    "Sunrise": "Sonnenaufgang",
+    "Sunset": "Sonnenuntergang",
+    "Hot boost": "Hitze-Boost",
+    "Unknown": "Unbekannt",
+    "Customize what shows here": "Anpassen, was hier angezeigt wird",
+    "No weather data found yet": "Noch keine Wetterdaten gefunden",
+    "Install a weather integration or bind sensors in the Weather tab.": "Installiere eine Wetter-Integration oder verbinde Sensoren im Wetter-Tab.",
+    "Customize weather banner": "Wetter-Banner anpassen",
+    "Toggle cells and reorder with ▲▼. Changes save when you hit Done.": "Zellen ein-/ausblenden und mit ▲▼ neu anordnen. Änderungen werden beim Klick auf Fertig gespeichert.",
+    "Done": "Fertig",
+    "No zones configured. Re-run setup from Settings → Devices & services.": "Keine Zonen konfiguriert. Führe die Einrichtung über Einstellungen → Geräte & Dienste erneut aus.",
+    "Unavailable": "Nicht verfügbar",
+    "Running": "Läuft",
+    "Idle": "Bereit",
+    "Running —": "Läuft —",
+    "left": "verbleibend",
+    "⏹ Stop": "⏹ Stopp",
+    "⏹ Stop (": "⏹ Stopp (",
+    "▶ Run Now": "▶ Jetzt starten",
+    "· gate off": "· Sperre aus",
+    "· not used": "· nicht verwendet",
+    "avg": "Ø",
+    "Zones": "Zonen",
+    "No zones configured. Add them via Settings → Devices & Services.": "Keine Zonen konfiguriert. Füge sie über Einstellungen → Geräte & Dienste hinzu.",
+    "Hidden zones still run on schedule — they're just hidden from the Today view.": "Ausgeblendete Zonen laufen weiterhin nach Zeitplan — sie sind nur in der Heute-Ansicht ausgeblendet.",
+    "👁️ Show in Today": "👁️ In Heute anzeigen",
+    "🚫 Hide from Today": "🚫 Aus Heute ausblenden",
+    "🌱 New Planting": "🌱 Neupflanzung",
+    "🩺 Diagnose": "🩺 Diagnose",
+    "Move up": "Nach oben",
+    "Move down": "Nach unten",
+    "HIDDEN": "AUSGEBLENDET",
+    "Running diagnosis…": "Diagnose läuft…",
+    "No watering issues detected": "Keine Bewässerungsprobleme erkannt",
+    "Possible overwatering": "Mögliche Überwässerung",
+    "Possible underwatering": "Mögliche Unterwässerung",
+    "Not enough data to diagnose": "Nicht genug Daten für eine Diagnose",
+    "Signs": "Anzeichen",
+    "How to confirm": "So bestätigst du es",
+    "Suggestions": "Vorschläge",
+    "Advisory only — no schedule was changed.": "Nur ein Hinweis — kein Zeitplan wurde geändert.",
+    "No runs scheduled": "Keine Läufe geplant",
+    "No runs scheduled.": "Keine Läufe geplant.",
+    "Previous day": "Vorheriger Tag",
+    "Next day": "Nächster Tag",
+    "Click to edit schedule": "Klicken, um den Zeitplan zu bearbeiten",
+    "Run history": "Laufverlauf",
+    "All zones": "Alle Zonen",
+    "All schedules": "Alle Zeitpläne",
+    "All": "Alle",
+    "Last 24 h": "Letzte 24 h",
+    "Last 7 days": "Letzte 7 Tage",
+    "Last 30 days": "Letzte 30 Tage",
+    "Last 90 days": "Letzte 90 Tage",
+    "Refresh": "Aktualisieren",
+    "Clear all": "Alle löschen",
+    "When": "Wann",
+    "Zone": "Zone",
+    "Schedule": "Zeitplan",
+    "Duration": "Dauer",
+    "Status": "Status",
+    "Triggers": "Auslöser",
+    "Range": "Bereich",
+    "No runs match these filters.": "Keine Läufe entsprechen diesen Filtern.",
+    "Loading…": "Lädt…",
+    "Manual": "Manuell",
+    "completed": "abgeschlossen",
+    "skipped": "übersprungen",
+    "aborted": "abgebrochen",
+    "running": "läuft",
+    "Sensors": "Sensoren",
+    "No zones configured.": "Keine Zonen konfiguriert.",
+    "Bind soil-moisture sensors to a zone so runtimes auto-adjust based on actual moisture. You can attach one sensor or several (combined as average, lowest, highest, or just the primary).": "Verbinde Bodenfeuchte-Sensoren mit einer Zone, damit sich Laufzeiten automatisch an die tatsächliche Bodenfeuchte anpassen. Du kannst einen oder mehrere Sensoren anhängen (kombiniert als Durchschnitt, niedrigster, höchster oder nur der primäre).",
+    "Combined (average)": "Kombiniert (Durchschnitt)",
+    "Combined (lowest)": "Kombiniert (niedrigster)",
+    "Combined (highest)": "Kombiniert (höchster)",
+    "Combined (primary)": "Kombiniert (primär)",
+    "No sensors bound — runtime is fixed at the scheduled duration.": "Keine Sensoren verbunden — die Laufzeit ist auf die geplante Dauer festgelegt.",
+    "Category": "Kategorie",
+    "Edit": "Bearbeiten",
+    "Configure": "Konfigurieren",
+    "Pick one or more soil-moisture sensors. If you pick multiple, choose how to combine their readings below.": "Wähle einen oder mehrere Bodenfeuchte-Sensoren. Wenn du mehrere wählst, lege unten fest, wie ihre Messwerte kombiniert werden.",
+    "No sensors found in HA. Add a moisture sensor first.": "Keine Sensoren in HA gefunden. Füge zuerst einen Bodenfeuchte-Sensor hinzu.",
+    "Combine mode": "Kombinationsmodus",
+    "How to combine multiple sensor readings. Required when you have more than one sensor.": "Wie mehrere Sensor-Messwerte kombiniert werden. Erforderlich, wenn du mehr als einen Sensor hast.",
+    "— Pick one —": "— Bitte wählen —",
+    "Average (mean of all sensors)": "Durchschnitt (Mittelwert aller Sensoren)",
+    "Lowest (most dry sensor wins — conservative)": "Niedrigster (trockenster Sensor gewinnt — konservativ)",
+    "Highest (wettest sensor wins — saves water)": "Höchster (feuchtester Sensor gewinnt — spart Wasser)",
+    "Primary (just use first sensor)": "Primär (nur den ersten Sensor verwenden)",
+    "Min %": "Min. %",
+    "Below this — urgent boost.": "Darunter — dringender Boost.",
+    "Target %": "Ziel %",
+    "Aim for this moisture.": "Diese Bodenfeuchte anstreben.",
+    "Max %": "Max. %",
+    "Above this — skip the run.": "Darüber — Lauf überspringen.",
+    "Skip run if no moisture reading": "Lauf überspringen, wenn kein Bodenfeuchte-Messwert vorliegt",
+    "When ON: if every moisture sensor for this zone is offline / unavailable at run time, the scheduled run is SKIPPED instead of watering blind (fail-closed). When OFF (default): the run proceeds normally if sensors are dark (fail-open). Note: individual offline sensors are always excluded from the combined reading — this only governs what happens when NONE are reporting.": "Wenn AN: Sind alle Bodenfeuchte-Sensoren dieser Zone zur Laufzeit offline / nicht verfügbar, wird der geplante Lauf ÜBERSPRUNGEN, statt blind zu bewässern (fail-closed). Wenn AUS (Standard): Der Lauf läuft normal weiter, wenn die Sensoren dunkel sind (fail-open). Hinweis: Einzelne Offline-Sensoren werden immer aus dem kombinierten Messwert ausgeschlossen — dies regelt nur, was passiert, wenn KEINER meldet.",
+    "Ignore moisture for watering decisions": "Bodenfeuchte bei Bewässerungsentscheidungen ignorieren",
+    "When ON: this zone's moisture readings are display-only. Schedules run at their full configured duration — no saturated-skip, no runtime boost or reduction, and 'Skip run if no moisture reading' is ignored too. The sensors stay bound, so the Zones tab chips and Today tile still show live readings. Useful when a sensor is misbehaving or you want fixed watering times for a while without unbinding everything.": "Wenn AN: Die Bodenfeuchte-Messwerte dieser Zone dienen nur der Anzeige. Zeitpläne laufen mit ihrer vollen konfigurierten Dauer — kein Überspringen bei Sättigung, keine Laufzeit-Erhöhung oder -Kürzung, und 'Lauf überspringen, wenn kein Bodenfeuchte-Messwert vorliegt' wird ebenfalls ignoriert. Die Sensoren bleiben verbunden, daher zeigen die Chips im Zonen-Tab und die Heute-Kachel weiterhin Live-Messwerte. Nützlich, wenn ein Sensor spinnt oder du eine Zeit lang feste Bewässerungszeiten willst, ohne alles zu trennen.",
+    "Auto-soak recovery": "Automatisches Nachwässern (Auto-Soak)",
+    "Closed-loop low-moisture fix: when this zone's moisture (from the sensors marked 'in avg') drops below Min %, run for the set minutes, wait for the water to soak in, re-read the sensors, and repeat until moisture is back above Min % — or the cycle cap is hit, in which case you're notified and the zone won't retry for 6 hours (so a stuck-low sensor can't water all day). Paused during rain lockout. Disabled while 'Ignore moisture' is on.": "Geschlossener Regelkreis gegen niedrige Bodenfeuchte: Fällt die Bodenfeuchte dieser Zone (aus den mit 'in avg' markierten Sensoren) unter Min. %, läuft sie die eingestellten Minuten, wartet, bis das Wasser eingesickert ist, liest die Sensoren erneut und wiederholt das, bis die Bodenfeuchte wieder über Min. % liegt — oder die Zyklusgrenze erreicht ist; dann wirst du benachrichtigt und die Zone versucht es 6 Stunden lang nicht erneut (damit ein hängender Sensor nicht den ganzen Tag bewässert). Während der Regensperre pausiert. Deaktiviert, solange 'Bodenfeuchte ignorieren' an ist.",
+    "Water automatically when below Min %": "Automatisch bewässern, wenn unter Min. %",
+    "Run (min)": "Lauf (min)",
+    "Length of each watering burst. Short bursts + soak pauses absorb better than one long run.": "Länge jedes Bewässerungsimpulses. Kurze Impulse mit Sickerpausen ziehen besser ein als ein langer Lauf.",
+    "Soak wait (min)": "Sickerpause (min)",
+    "Pause between bursts so water percolates down to the sensor depth before re-reading. 30 min suits most soils; clay needs longer.": "Pause zwischen den Impulsen, damit das Wasser bis zur Sensortiefe einsickert, bevor erneut gemessen wird. 30 min passen für die meisten Böden; Lehm braucht länger.",
+    "Max cycles": "Max. Zyklen",
+    "Safety cap. If moisture is still below Min % after this many run/soak rounds, stop, notify you, and wait 6 hours before trying again.": "Sicherheitsgrenze. Liegt die Bodenfeuchte nach so vielen Lauf-/Sicker-Runden immer noch unter Min. %, wird gestoppt, du wirst benachrichtigt und 6 Stunden gewartet, bevor es erneut versucht wird.",
+    "Plant category": "Pflanzenkategorie",
+    "Pick a category to see typical moisture ranges. The min/target/max above stay independent — you can change them after picking.": "Wähle eine Kategorie, um typische Feuchtebereiche zu sehen. Min/Ziel/Max oben bleiben unabhängig — du kannst sie nach der Auswahl ändern.",
+    "lawn": "Rasen",
+    "vegetable_garden": "Gemüsegarten",
+    "bushes": "Sträucher",
+    "citrus": "Zitrus",
+    "trees": "Bäume",
+    "custom": "Benutzerdefiniert",
+    "Pick a category for a typical moisture range.": "Wähle eine Kategorie für einen typischen Feuchtebereich.",
+    "Climate sensors (optional, display-only)": "Klimasensoren (optional, nur Anzeige)",
+    "Temperature sensors": "Temperatursensoren",
+    "One or more temperature sensors near this zone. Multiple sensors are averaged.": "Ein oder mehrere Temperatursensoren nahe dieser Zone. Mehrere Sensoren werden gemittelt.",
+    "Humidity sensors": "Luftfeuchtesensoren",
+    "One or more humidity sensors near this zone. Multiple sensors are averaged.": "Ein oder mehrere Luftfeuchtesensoren nahe dieser Zone. Mehrere Sensoren werden gemittelt.",
+    "No matching sensors found in HA.": "Keine passenden Sensoren in HA gefunden.",
+    "Copy this URL:": "Kopiere diese URL:",
+    "Service-level admin gate enabled. Non-admin user calls to run_zone, stop_zone, schedule CRUD, etc. will now be rejected with a warning in the HA log.": "Admin-Sperre auf Dienstebene aktiviert. Aufrufe von Nicht-Admin-Benutzern an run_zone, stop_zone, Zeitplan-CRUD usw. werden jetzt mit einer Warnung im HA-Log abgelehnt.",
+    "Service-level admin gate disabled. Any authenticated HA user can now call these services.": "Admin-Sperre auf Dienstebene deaktiviert. Jeder angemeldete HA-Benutzer kann diese Dienste jetzt aufrufen.",
+    "Split-chunk defaults saved.": "Mindest-Teilstück-Standards gespeichert.",
+    "Conflict policy saved.": "Konflikt-Richtlinie gespeichert.",
+    "Buffer must be 0–600 seconds.": "Puffer muss 0–600 Sekunden betragen.",
+    "Valve verification must be 0–300 seconds.": "Ventil-Verifizierung muss 0–300 Sekunden betragen.",
+    "The map defaults to Esri World Imagery, which is coarse at yard scale — it won't render sharper than ~0.3 m/px, so a small yard gets fetched tiny and upscaled. Many county assessors and city GIS offices publish much sharper aerials as a keyless ArcGIS export; paste that URL template here to use it instead.": "Die Karte verwendet standardmäßig Esri World Imagery, das auf Gartengröße grob ist — schärfer als ~0,3 m/px wird es nicht, ein kleiner Garten wird also winzig geladen und hochskaliert. Viele Kataster- und Stadt-GIS-Ämter veröffentlichen deutlich schärfere Luftbilder als schlüssellosen ArcGIS-Export; füge diese URL-Vorlage hier ein, um sie stattdessen zu verwenden."
+  },
+  "patterns": [
+    [
+      "^Failed to save marker position: ([\\s\\S]*)$",
+      "Speichern der Marker-Position fehlgeschlagen: $1"
+    ],
+    [
+      "^Failed to assign area: ([\\s\\S]*)$",
+      "Zuweisen des Bereichs fehlgeschlagen: $1"
+    ],
+    [
+      "^Failed to start the area survey: ([\\s\\S]*)$",
+      "Start der Bereichs-Lichtmessung fehlgeschlagen: $1"
+    ],
+    [
+      "^Failed to cancel the area survey: ([\\s\\S]*)$",
+      "Abbrechen der Bereichs-Lichtmessung fehlgeschlagen: $1"
+    ],
+    [
+      "^Failed to set canopy: ([\\s\\S]*)$",
+      "Setzen der Kronenfläche fehlgeschlagen: $1"
+    ],
+    [
+      "^Failed to run schedule: ([\\s\\S]*)$",
+      "Starten des Zeitplans fehlgeschlagen: $1"
+    ],
+    [
+      "^Failed to toggle: ([\\s\\S]*)$",
+      "Umschalten fehlgeschlagen: $1"
+    ],
+    [
+      "^Failed to clear the Pl@ntNet key: ([\\s\\S]*)$",
+      "Löschen des Pl@ntNet-Schlüssels fehlgeschlagen: $1"
+    ],
+    [
+      "^Failed to clear the Perenual key: ([\\s\\S]*)$",
+      "Löschen des Perenual-Schlüssels fehlgeschlagen: $1"
+    ],
+    [
+      "^Failed to clear the API key: ([\\s\\S]*)$",
+      "Löschen des API-Schlüssels fehlgeschlagen: $1"
+    ],
+    [
+      "^Failed to save plant identification settings: ([\\s\\S]*)$",
+      "Speichern der Pflanzenbestimmungs-Einstellungen fehlgeschlagen: $1"
+    ],
+    [
+      "^Failed to save split defaults: ([\\s\\S]*)$",
+      "Speichern der Mindest-Teilstück-Standards fehlgeschlagen: $1"
+    ],
+    [
+      "^Failed to save policy: ([\\s\\S]*)$",
+      "Speichern der Richtlinie fehlgeschlagen: $1"
+    ],
+    [
+      "^Failed to save the map imagery source: ([\\s\\S]*)$",
+      "Speichern der Luftbild-Quelle fehlgeschlagen: $1"
+    ],
+    [
+      "^Failed to save: ([\\s\\S]*)$",
+      "Speichern fehlgeschlagen: $1"
+    ],
+    [
+      "^Failed: ([\\s\\S]*)$",
+      "Fehlgeschlagen: $1"
+    ],
+    [
+      "^Test failed: ([\\s\\S]*)$",
+      "Test fehlgeschlagen: $1"
+    ],
+    [
+      "^Light area for (\\d+) plant\\(s\\) in this region \\(blank ungroups\\):$",
+      "Lichtbereich für $1 Pflanze(n) in diesem Bereich (leer hebt die Gruppierung auf):"
+    ],
+    [
+      "^Run \"([\\s\\S]+)\" now\\?\\n\\n(\\d+) zones, ~(\\d+) min total \\(plus inter-zone buffers\\)\\.\\nWeather gates \\(moisture / wind / hot-weather / rain lockout\\) are bypassed\\.$",
+      "\"$1\" jetzt laufen lassen?\n\n$2 Zonen, insgesamt ~$3 min (plus Puffer zwischen den Zonen).\nWetter-Sperren (Bodenfeuchte / Wind / Hitze / Regensperre) werden umgangen."
+    ],
+    [
+      "^Run \"([\\s\\S]+)\" now\\?\\n\\n(\\d+) min on the configured zone\\.\\nWeather gates \\(moisture / wind / hot-weather / rain lockout\\) are bypassed\\.$",
+      "\"$1\" jetzt laufen lassen?\n\n$2 min auf der konfigurierten Zone.\nWetter-Sperren (Bodenfeuchte / Wind / Hitze / Regensperre) werden umgangen."
+    ],
+    [
+      "^Run \"([\\s\\S]+)\" now\\?$",
+      "\"$1\" jetzt laufen lassen?"
+    ],
+    [
+      "^surveying… (\\d+) readings$",
+      "Messung läuft… $1 Messwerte"
+    ],
+    [
+      "^1 plant$",
+      "1 Pflanze"
+    ],
+    [
+      "^(\\d+) plants$",
+      "$1 Pflanzen"
+    ],
+    [
+      "^(notify\\.\\S+) \\(not loaded\\)$",
+      "$1 (nicht geladen)"
+    ],
+    [
+      "^These targets aren't valid notify services and won't be saved:\\n([\\s\\S]*)\\n\\nEach target must be of the form notify\\.<service>\\.$",
+      "Diese Ziele sind keine gültigen Benachrichtigungsdienste und werden nicht gespeichert:\n$1\n\nJedes Ziel muss die Form notify.<service> haben."
+    ],
+    [
+      "^Saved: inter-zone buffer (\\d+)s, valve verification (\\d+)s\\.$",
+      "Gespeichert: Puffer zwischen Zonen $1 s, Ventil-Verifizierung $2 s."
+    ],
+    [
+      "^Saved: inter-zone buffer (\\d+)s, valve verification off\\.$",
+      "Gespeichert: Puffer zwischen Zonen $1 s, Ventil-Verifizierung aus."
+    ],
+    [
+      "^Manual run default must be 1-(\\d+) min\\.$",
+      "Standard für manuellen Lauf muss 1–$1 min sein."
+    ],
+    [
+      "^Manual run default saved: (\\d+) minutes\\.$",
+      "Standard für manuellen Lauf gespeichert: $1 Minuten."
+    ],
+    [
+      "^iCal feed URL copied:\\n([\\s\\S]*)$",
+      "iCal-Feed-URL kopiert:\n$1"
+    ],
+    [
+      "^✗ couldn't save settings before testing: ([\\s\\S]*)$",
+      "✗ Einstellungen konnten vor dem Test nicht gespeichert werden: $1"
+    ],
+    [
+      "^Zones \\((\\d+)\\)$",
+      "Zonen ($1)"
+    ],
+    [
+      "^(\\d+) zone\\(s\\) hidden — manage in the Zones tab\\.$",
+      "$1 Zone(n) ausgeblendet — im Zonen-Tab verwalten."
+    ],
+    [
+      "^(\\d+) runs skipped today$",
+      "$1 Läufe heute übersprungen"
+    ],
+    [
+      "^All watering paused until (.+)$",
+      "Alle Bewässerung pausiert bis $1"
+    ],
+    [
+      "^([\\d.,]+) (\\S+) \\(gust ([\\d.,]+)\\)$",
+      "$1 $2 (Böen $3)"
+    ],
+    [
+      "^— coldest around (-?[\\d.]+)°F$",
+      "— Tiefstwerte um $1 °F"
+    ],
+    [
+      "^left of (\\d+) min$",
+      "von $1 min verbleibend"
+    ],
+    [
+      "^(.+) • Unavailable$",
+      "$1 • Nicht verfügbar"
+    ],
+    [
+      "^(.+) • Running$",
+      "$1 • Läuft"
+    ],
+    [
+      "^(.+) • Idle$",
+      "$1 • Bereit"
+    ],
+    [
+      "^· (\\d+) min · (\\d+) max · (\\d+) sensors$",
+      "· $1 min · $2 max · $3 Sensoren"
+    ],
+    [
+      "^Today — (.+)$",
+      "Heute — $1"
+    ],
+    [
+      "^Tomorrow — (.+)$",
+      "Morgen — $1"
+    ],
+    [
+      "^Yesterday — (.+)$",
+      "Gestern — $1"
+    ],
+    [
+      "^Now: (.+)$",
+      "Jetzt: $1"
+    ],
+    [
+      "^1 run$",
+      "1 Lauf"
+    ],
+    [
+      "^(\\d+) runs$",
+      "$1 Läufe"
+    ],
+    [
+      "^(.+) · (\\d+)m · Past$",
+      "$1 · $2m · Vorbei"
+    ],
+    [
+      "^(.+) · (\\d+)m · Running now$",
+      "$1 · $2m · Läuft jetzt"
+    ],
+    [
+      "^(.+) · (\\d+)m · Scheduled$",
+      "$1 · $2m · Geplant"
+    ],
+    [
+      "^(\\d+) min · skipped$",
+      "$1 min · übersprungen"
+    ],
+    [
+      "^(\\d+) min planned$",
+      "$1 min geplant"
+    ],
+    [
+      "^\\((\\d+) blocks\\)$",
+      "($1 Blöcke)"
+    ],
+    [
+      "^(\\d+) of (\\d+) blocks completed$",
+      "$1 von $2 Blöcken abgeschlossen"
+    ],
+    [
+      "^(\\d+)/(\\d+) blocks$",
+      "$1/$2 Blöcke"
+    ],
+    [
+      "^(\\d+) of (\\d+) records$",
+      "$1 von $2 Einträgen"
+    ],
+    [
+      "^(\\d+) of (\\d+) record$",
+      "$1 von $2 Eintrag"
+    ],
+    [
+      "^Moisture sensors for (.+)$",
+      "Bodenfeuchte-Sensoren für $1"
+    ],
+    [
+      "^Open (\\S+) in HA$",
+      "$1 in HA öffnen"
+    ],
+    [
+      "^min (.+)% • target (.+)% • max (.+)%$",
+      "min $1 % • Ziel $2 % • max $3 %"
+    ]
+  ]
+}
