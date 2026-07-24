@@ -72,7 +72,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.58.3";
+  const PANEL_VERSION = "v1.59.0";
   // v1.41 — external plant-ID providers (mirrors llm_client.PROVIDERS). URL is
   // auto-filled when a provider is picked; model is an editable hint. All speak
   // the same OpenAI /v1/chat/completions shape, so one settings form covers them.
@@ -1004,6 +1004,8 @@
             parseFloat(node.dataset.dn) || 0,
             parseFloat(node.dataset.de) || 0
           );
+        if (action === "map-rotate")
+          return this._rotateYardMap(parseFloat(node.dataset.deg) || 0, e);
         if (action === "map-zoom-out") return this._zoomMapButton(-1);
         if (action === "map-reset-view") return this._resetMapView();
         if (action === "toggle-measure") return this._toggleMeasure();
@@ -3512,10 +3514,68 @@
       const v = this._mapView;
       const w = rect.width || 1;
       const h = rect.height || 1;
-      return {
-        x: (clientX - rect.left - v.tx) / (v.scale * w),
-        y: (clientY - rect.top - v.ty) / (v.scale * h),
-      };
+      // Undo pan/zoom -> pixel coords in the (unrotated) view layer.
+      let px = (clientX - rect.left - v.tx) / v.scale;
+      let py = (clientY - rect.top - v.ty) / v.scale;
+      // v1.59 — then undo the display rotation, so a click still lands on the
+      // ground the user aimed at. MUST happen in PIXEL space: the frame is not
+      // square, so rotating normalized coords would skew every placement.
+      const deg = this._mapRotationDeg();
+      if (deg) {
+        const cx = w / 2;
+        const cy = h / 2;
+        const k = ciCoverScale(w, h, deg) || 1;
+        // 1) undo the cover-scale applied about the centre
+        px = cx + (px - cx) / k;
+        py = cy + (py - cy) / k;
+        // 2) rotate back by -deg about the centre
+        const a = (-deg * Math.PI) / 180;
+        const dx = px - cx;
+        const dy = py - cy;
+        px = cx + dx * Math.cos(a) - dy * Math.sin(a);
+        py = cy + dx * Math.sin(a) + dy * Math.cos(a);
+      }
+      return { x: px / w, y: py / h };
+    }
+
+    /** v1.59 — stored display rotation of the aerial, in degrees clockwise. */
+    _mapRotationDeg() {
+      const d = Number(this._yardMap?.rotation_deg);
+      return Number.isFinite(d) ? d : 0;
+    }
+
+    async _rotateYardMap(deltaDeg, ev) {
+      // v1.59 — rotation is a DISPLAY transform, so apply it locally at once and
+      // persist in the background: no re-fetch, no spinner, no waiting a round
+      // trip per tap. Shift = 5° steps; a double-click snaps back to north-up.
+      if (this._mapBusy || !this._yardMap) return;
+      let next;
+      if (ev && ev.detail >= 2) {
+        next = 0; // second click of a double-click -> straighten
+      } else {
+        const step = ev && ev.shiftKey ? 5 : 1;
+        next = this._mapRotationDeg() + Math.sign(deltaDeg) * step;
+      }
+      next = ciNormalizeRotation(next);
+      this._yardMap.rotation_deg = next;
+      if (this._config?.yard_map) this._config.yard_map.rotation_deg = next;
+      // Update the transforms IN PLACE rather than re-rendering: a full rebuild
+      // per tap destroys the very button being clicked, so a fast burst of taps
+      // lands on detached nodes and silently does nothing (same reasoning as the
+      // countdown tick). Also keeps rotation smooth instead of flickering.
+      this._applyMapRotation();
+      // Debounced persist — a burst of taps is one save, not one per degree.
+      if (this._rotSaveTimer) clearTimeout(this._rotSaveTimer);
+      this._rotSaveTimer = setTimeout(async () => {
+        this._rotSaveTimer = null;
+        try {
+          await this._hass.callService("complete_irrigation", "set_yard_map", {
+            rotation_deg: next,
+          });
+        } catch (err) {
+          alert("Failed to save the aerial rotation: " + (err?.message || err));
+        }
+      }, 400);
     }
 
     _applyMapTransform() {
@@ -3523,6 +3583,32 @@
       if (!view) return;
       const v = this._mapView;
       view.style.transform = `translate(${v.tx}px, ${v.ty}px) scale(${v.scale})`;
+    }
+
+    /** v1.59 — push the current rotation into the DOM without a re-render. */
+    _applyMapRotation() {
+      const root = this.shadowRoot;
+      const rot = root?.querySelector(".yard-map-rot");
+      if (!rot) return;
+      const deg = this._mapRotationDeg();
+      const m = this._yardMap || {};
+      rot.style.transform = deg
+        ? `rotate(${deg}deg) scale(${ciCoverScale(m.width, m.height, deg).toFixed(4)})`
+        : "";
+      const compass = root.querySelector(".map-compass");
+      if (compass) {
+        compass.style.transform = `rotate(${deg}deg)`;
+        compass.title = `North (aerial rotated ${Math.round(deg)}°)`;
+        compass.setAttribute("aria-label", `Compass: north is ${Math.round(deg)} degrees from up`);
+        // Cardinal letters ride the rose but stay upright, so they're readable
+        // at any angle instead of turning upside-down past 90°.
+        root
+          .querySelectorAll(".map-compass-pt")
+          .forEach((el) => (el.style.transform = `rotate(${-deg}deg)`));
+      }
+      root
+        .querySelectorAll(".yard-map-label")
+        .forEach((el) => (el.style.transform = deg ? `rotate(${-deg}deg)` : ""));
     }
 
     _clampMapView() {
@@ -7318,6 +7404,9 @@
       const plants = this._plants || [];
       const placed = plants.filter((p) => p.map_x != null && p.map_y != null);
       const unplaced = plants.filter((p) => p.map_x == null || p.map_y == null);
+      // v1.59 — display rotation of the aerial; needed here because the marker
+      // labels counter-rotate by it (declared before first use).
+      const rotDeg = this._mapRotationDeg();
       const markers = placed
         .map(
           (p) =>
@@ -7327,7 +7416,12 @@
               3
             )}%" title="${escapeAttr(p.name)} — drag to reposition">` +
             `<span class="yard-map-dot"></span>` +
-            `<span class="yard-map-label">${escapeHtml(p.name)}</span>` +
+            // v1.59 — markers ride inside the rotated layer (so they keep their
+            // true ground position for free), which would tip the text too;
+            // counter-rotate just the label so names stay upright and readable.
+            `<span class="yard-map-label"${
+              rotDeg ? ` style="transform:rotate(${-rotDeg}deg)"` : ""
+            }>${escapeHtml(p.name)}</span>` +
             `</button>`
         )
         .join("");
@@ -7384,6 +7478,17 @@
         : "";
       const v = this._mapView;
       const viewTransform = `transform:translate(${v.tx}px,${v.ty}px) scale(${v.scale});transform-origin:0 0`;
+      // v1.59 — display rotation lives on its OWN inner layer (origin = centre)
+      // so it composes cleanly with the pan/zoom layer above it. The image AND
+      // the markers sit inside it, so a marker keeps its true ground position
+      // for free; only the labels counter-rotate so text stays upright.
+      const rotTransform = rotDeg
+        ? `transform:rotate(${rotDeg}deg) scale(${ciCoverScale(
+            m.width,
+            m.height,
+            rotDeg
+          ).toFixed(4)});transform-origin:50% 50%`
+        : "";
       return (
         `<div class="card yard-map-card">` +
         `<div class="yard-map-head"><strong>🗺️ Yard map</strong>` +
@@ -7393,9 +7498,28 @@
         }" style="aspect-ratio:${m.width} / ${m.height}">` +
         // v1.48 — everything that pans/zooms lives in this transformed layer.
         `<div class="yard-map-view" style="${viewTransform}">` +
+        `<div class="yard-map-rot" style="${rotTransform}">` +
         `<img class="yard-map-img" src="${escapeAttr(m.image_path)}" alt="Aerial view of the yard" draggable="false" />` +
         markers +
         canopyOverlay +
+        `</div>` +
+        `</div>` +
+        // v1.59 — compass. Sits OUTSIDE the pan/zoom + rotation layers (fixed
+        // size in a corner) and turns by the same angle, so which way is north
+        // stays obvious once the aerial is off true north.
+        `<div class="map-compass" style="transform:rotate(${rotDeg}deg)" title="North (aerial rotated ${Math.round(
+          rotDeg
+        )}°)" aria-label="Compass: north is ${Math.round(
+          rotDeg
+        )} degrees from up">` +
+        `<span class="map-compass-needle"></span>` +
+        ["N", "E", "S", "W"]
+          .map(
+            (pt) =>
+              `<span class="map-compass-pt map-compass-${pt.toLowerCase()}" ` +
+              `style="transform:rotate(${-rotDeg}deg)">${pt}</span>`
+          )
+          .join("") +
         `</div>` +
         // v1.48 — zoom controls sit OUTSIDE the transformed layer (fixed).
         (this._mapBusy
@@ -7413,6 +7537,13 @@
             `<button class="map-zbtn" data-action="map-nudge" data-dn="0" data-de="1" title="Shift the frame 1 m east">▶</button>` +
             `</div>` +
             `<button class="map-zbtn" data-action="map-nudge" data-dn="-1" data-de="0" title="Shift the frame 1 m south">▼</button>` +
+            // v1.59 — rotate the aerial so an angled lot reads straight. Display
+            // only: no re-fetch, and double-click either arrow to snap back to
+            // north-up.
+            `<div class="map-nudge-row">` +
+            `<button class="map-zbtn" data-action="map-rotate" data-deg="-1" title="Rotate the aerial 1° counter-clockwise (hold Shift for 5°; double-click to reset to north-up)">↺</button>` +
+            `<button class="map-zbtn" data-action="map-rotate" data-deg="1" title="Rotate the aerial 1° clockwise (hold Shift for 5°; double-click to reset to north-up)">↻</button>` +
+            `</div>` +
             `</div>`) +
         `</div>` +
         measurePanel +
@@ -7426,6 +7557,7 @@
         `<strong>Map controls:</strong> scroll or <strong>+</strong>/<strong>&minus;</strong> to zoom &middot; ` +
         `once zoomed, <strong>drag</strong> the image to pan &middot; <strong>⤢</strong> fits the whole aerial &middot; ` +
         `<strong>▲◀▶▼</strong> shift the aerial frame 1 m per tap (changes what ground the photo covers &mdash; use when your yard is clipped on one side) &middot; ` +
+        `<strong>↺↻</strong> turn the aerial to straighten an angled lot (1&deg; per tap, Shift for 5&deg;, double-click to reset &mdash; the compass shows north) &middot; ` +
         `drag a <strong>marker</strong> to move a plant &middot; <strong>📐</strong> measures a canopy &middot; <strong>🗺️</strong> groups plants into a light area.` +
         `</p>` +
         `</div>`
@@ -9357,6 +9489,20 @@
         `.map-zoom select{font-size:13px;padding:4px 6px}` +
         `.yard-map-wrap{position:relative;width:100%;border-radius:8px;overflow:hidden;background:#1b1b1b;touch-action:none;user-select:none;cursor:grab;overscroll-behavior:contain}` +
         `.yard-map-wrap.panning{cursor:grabbing}` +
+        // v1.59 — aerial rotation layer + compass.
+        `.yard-map-rot{position:absolute;inset:0;will-change:transform}` +
+        `.map-compass{position:absolute;top:8px;left:8px;width:46px;height:46px;border-radius:50%;` +
+        `background:rgba(20,20,20,0.55);border:1px solid rgba(255,255,255,0.35);z-index:4;pointer-events:none;` +
+        `backdrop-filter:blur(2px)}` +
+        // North needle: a small triangle at the top of the rose.
+        `.map-compass-needle{position:absolute;top:3px;left:50%;width:0;height:0;margin-left:-5px;` +
+        `border-left:5px solid transparent;border-right:5px solid transparent;border-bottom:11px solid #e5484d}` +
+        `.map-compass-pt{position:absolute;font-size:9px;font-weight:700;color:#fff;line-height:1;` +
+        `text-shadow:0 1px 2px rgba(0,0,0,0.9)}` +
+        `.map-compass-n{top:15px;left:50%;margin-left:-3px}` +
+        `.map-compass-s{bottom:3px;left:50%;margin-left:-3px}` +
+        `.map-compass-w{left:4px;top:50%;margin-top:-4px}` +
+        `.map-compass-e{right:4px;top:50%;margin-top:-4px}` +
         // v1.48 — the transformed layer that pans/zooms (image + markers + overlays).
         `.yard-map-view{position:absolute;inset:0;will-change:transform}` +
         `.yard-map-img{display:block;width:100%;height:100%;object-fit:cover;pointer-events:none}` +
@@ -9764,6 +9910,28 @@
     return String(s).replace(/([^\w-])/g, "\\$1");
   }
 
+  // v1.59 — scale needed so a w x h aerial rotated by `deg` still covers its own
+  // frame (otherwise the corners show empty background). Mirrors the Python
+  // yard_map.cover_scale; see the derivation there.
+  // v1.59 — wrap a rotation to (-180, 180] so repeated taps never jam at a limit.
+  // Mirrors the Python yard_map.normalize_rotation.
+  function ciNormalizeRotation(deg) {
+    const d = Number(deg);
+    if (!Number.isFinite(d)) return 0;
+    let r = d % 360;
+    if (r <= -180) r += 360;
+    else if (r > 180) r -= 360;
+    return r === 0 ? 0 : r; // -0 -> 0
+  }
+
+  function ciCoverScale(w, h, deg) {
+    if (!(w > 0 && h > 0) || !Number.isFinite(deg) || !deg) return 1;
+    const r = (deg * Math.PI) / 180;
+    const c = Math.abs(Math.cos(r));
+    const s = Math.abs(Math.sin(r));
+    return c + Math.max(w / h, h / w) * s;
+  }
+
   function _formatRemaining(ms) {
     const total = Math.max(0, Math.round(ms / 1000));
     const m = Math.floor(total / 60);
@@ -9976,6 +10144,7 @@
       "External model": "Externes Modell",
       "External model only": "Nur externes Modell",
       "External provider": "Externer Anbieter",
+      "Failed to save the aerial rotation: ": "Drehung des Luftbilds konnte nicht gespeichert werden: ",
       "Fallback time": "Fallback-Zeit",
       "Fallback tries the local model first and only calls the external AI when the local one fails or can't identify the plant.": "Fallback versucht zuerst das lokale Modell und ruft die externe KI nur auf, wenn das lokale fehlschlägt oder die Pflanze nicht bestimmen kann.",
       "Feels (heat idx)": "Gefühlt (Hitzeindex)",
@@ -10221,6 +10390,8 @@
       "Reset view (fit)": "Ansicht zurücksetzen (einpassen)",
       "Restrict services to admin users": "Dienste auf Admin-Benutzer beschränken",
       "Resume now": "Jetzt fortsetzen",
+      "Rotate the aerial 1° clockwise (hold Shift for 5°; double-click to reset to north-up)": "Luftbild um 1° im Uhrzeigersinn drehen (Umschalt für 5°; Doppelklick setzt auf Norden zurück)",
+      "Rotate the aerial 1° counter-clockwise (hold Shift for 5°; double-click to reset to north-up)": "Luftbild um 1° gegen den Uhrzeigersinn drehen (Umschalt für 5°; Doppelklick setzt auf Norden zurück)",
       "Run": "Laufen lassen",
       "Run (min)": "Lauf (min)",
       "Run history": "Laufverlauf",
@@ -10451,6 +10622,7 @@
       "to move a plant ·": "zum Verschieben einer Pflanze ·",
       "to zoom ·": "zum Zoomen ·",
       "trees": "Bäume",
+      "turn the aerial to straighten an angled lot (1° per tap, Shift for 5°, double-click to reset — the compass shows north)": "das Luftbild drehen, um ein schräg liegendes Grundstück gerade auszurichten (1° pro Klick, Umschalt für 5°, Doppelklick setzt zurück — der Kompass zeigt Norden)",
       "vegetable_garden": "Gemüsegarten",
       "· gate off": "· Sperre aus",
       "· not used": "· nicht verwendet",

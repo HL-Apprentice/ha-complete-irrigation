@@ -4,6 +4,37 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.59.0 — 2026-07-24 — minor
+
+**Plant markers are now anchored to the GROUND, and the aerial can be rotated.**
+
+- **Fix (data loss): placements no longer vanish.** A plant's position was stored
+  only as a fraction of whatever aerial frame was current, so re-fetching at a
+  different centre or zoom re-projected every marker — and anything landing
+  outside the new frame had its position **permanently nulled**. One zoom-in, or
+  a refresh that snapped back to the Home Assistant home location, could silently
+  erase a whole yard of placements with no undo. Every plant now carries a
+  durable **ground anchor** (lat/lon) captured when you place it: the frame is
+  just a window onto it. Move, zoom, nudge or rotate the aerial and plants stay
+  exactly where you put them; one that falls outside the current view simply
+  isn't drawn, and returns intact when the view covers it again. Existing
+  placements are upgraded automatically on first start (and their positions are
+  kept), so nothing has to be re-placed.
+- **Rotate the aerial (new).** Bbox exports are always north-up, so a lot that
+  sits at an angle to north reads crooked. New **↺ ↻** buttons beside the zoom
+  controls turn the image 1° per tap (hold **Shift** for 5°, double-click to snap
+  back to north-up). It is purely presentational — no re-download, no change to
+  any stored position — and the angle survives a refresh, nudge or zoom. Also on
+  the service: `set_yard_map` with `rotation_deg`.
+- **Compass (new).** A compass rose on the map turns with the aerial, so which
+  way is north stays obvious once the image is off true north. Its cardinal
+  letters stay upright at any angle.
+- Marker labels counter-rotate so plant names stay readable on a turned map, and
+  clicks, drags, canopy measures and area draws all still land on the ground you
+  aimed at (the pointer maths inverts the rotation in pixel space — verified
+  exact at 0°, ±7°, ±20°, ±33° and 90°).
+- German translations for the new controls; 20 new tests.
+
 ## v1.58.3 — 2026-07-24 — patch
 
 **Ask-the-scheduler: no more focus loss while typing, and every change request
