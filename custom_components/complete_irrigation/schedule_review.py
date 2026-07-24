@@ -53,7 +53,9 @@ is ever dropped.
 Only if the user is asking you to CHANGE the schedule, ALSO include propose-only \
 adjustments -- they review and apply them; you never change anything directly. Hard \
 rules: never drop a run, never change a run's total minutes, a split's parts sum EXACTLY \
-to the duration and each part >= that schedule's min_chunk.
+to the duration and each part >= that schedule's min_chunk. When you include items, your \
+reply MUST say what you are proposing in plain words (e.g. "I've proposed moving Citrus \
+to 03:30") -- the reply is shown next to an Apply card carrying those items.
 
 Return ONLY JSON: {"reply":"<your conversational answer>","items":[...],"summary":"..."} \
 where each item is
@@ -66,6 +68,31 @@ SCHEDULES:
 
 USER QUESTION: {MESSAGE}
 """
+
+
+def augment_chat_reply(reply: str, requested: int, validated: int) -> str:
+    """Deterministic confirmation footer for a chat reply (v1.58.3).
+
+    The model is asked to confirm proposals in its own words, but the guarantee
+    lives here: state exactly what landed in the Apply card — including the
+    awkward truth when validation rejected everything it drafted — so the chat
+    never implies a change that didn't happen, or stays silent about one that did.
+    """
+    base = (reply or "").strip()
+    if validated > 0:
+        note = (
+            f"✅ {validated} proposed change{'s' if validated != 1 else ''} ready "
+            "in the card above — review and tap Apply to make it real."
+        )
+    elif requested > 0:
+        note = (
+            "⚠️ The changes I drafted didn't pass the safety rules (never drop a "
+            "run, never change total minutes, split-chunk floors), so nothing was "
+            "proposed. Try asking a different way."
+        )
+    else:
+        return base
+    return f"{base}\n\n{note}" if base else note
 
 
 async def schedule_chat(hass, coord, message: str) -> dict[str, Any]:
@@ -122,6 +149,10 @@ async def schedule_chat(hass, coord, message: str) -> dict[str, Any]:
             coord.config["schedule_advice"] = advice
             await coord.async_save_config()
             proposed = len(advice["items"])
+        # v1.58.3 — deterministic confirmation: the reply always states what
+        # actually landed in the Apply card (or that validation rejected it).
+        requested = len(obj.get("items") or []) if isinstance(obj, dict) else 0
+        reply = augment_chat_reply(reply, requested, proposed)
         return {"reply": reply, "proposed": proposed}
     except Exception:
         _LOGGER.exception("schedule chat failed")

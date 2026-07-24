@@ -72,7 +72,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.58.2";
+  const PANEL_VERSION = "v1.58.3";
   // v1.41 — external plant-ID providers (mirrors llm_client.PROVIDERS). URL is
   // auto-filled when a provider is picked; model is an editable hint. All speak
   // the same OpenAI /v1/chat/completions shape, so one settings form covers them.
@@ -602,6 +602,7 @@
       // v1.57 — propose-only chat with the scheduling LLM.
       this._scheduleChat = []; // [{role:"you"|"bot", text}]
       this._scheduleChatBusy = false;
+      this._scheduleChatDraft = ""; // v1.58.3 — unsent text survives re-renders
 
       // Sensor (moisture) modal state
       this._sensorModalOpen = false;
@@ -1506,6 +1507,11 @@
       if (!t) return;
       // v2 — Yard plant editor: keep draft current per keystroke so a
       // background re-render doesn't blow away unsaved typing.
+      // v1.58.3 — Ask-the-scheduler draft: same keep-typing-alive treatment.
+      if (t.classList?.contains("chat-input")) {
+        this._scheduleChatDraft = t.value;
+        return;
+      }
       // v1.55 — area-survey sensor/minutes draft (survives background re-renders).
       if (t.dataset?.action === "area-survey-field") {
         if (t.name === "area_survey_sensor") this._areaSurveyDraft.sensor = t.value;
@@ -1705,6 +1711,30 @@
         // long scroll, which nobody notices — unlike the viewport
         // snapping to the top, which everybody notices.
         if (Date.now() - this._lastScrollAt < 1000) {
+          if (this._deferredRenderTimer) clearTimeout(this._deferredRenderTimer);
+          this._deferredRenderTimer = setTimeout(() => {
+            this._deferredRenderTimer = null;
+            this._scheduleRender();
+          }, 1100);
+          return;
+        }
+        // v1.58.3 — same deal for active typing. A background render while a
+        // text field is focused destroys the field mid-keystroke: focus and
+        // caret are gone, and any value not mirrored into a draft is wiped
+        // (the Ask-the-scheduler box was the visible victim — weather-sensor
+        // ticks re-render Schedules every few seconds). Defer until focus
+        // leaves the field; user-triggered renders still land via _renderNow.
+        const ae = this.shadowRoot?.activeElement;
+        const aeTag = ae?.tagName ? ae.tagName.toUpperCase() : "";
+        const typing =
+          aeTag === "TEXTAREA" ||
+          aeTag === "SELECT" ||
+          (ae && ae.isContentEditable) ||
+          (aeTag === "INPUT" &&
+            !/^(checkbox|radio|button|submit|reset|range|color|file)$/i.test(
+              ae.type || "text"
+            ));
+        if (typing) {
           if (this._deferredRenderTimer) clearTimeout(this._deferredRenderTimer);
           this._deferredRenderTimer = setTimeout(() => {
             this._deferredRenderTimer = null;
@@ -8502,7 +8532,9 @@
         `<p class="section-hint">Ask about your schedules or request a change (e.g. &ldquo;move the grass earlier and split the bird bath&rdquo;). It answers here; any change it suggests appears above as a one-tap Apply &mdash; nothing changes on its own.</p>` +
         (log ? `<div class="chat-log">${log}</div>` : "") +
         `<form class="chat-input-row" data-form="schedule-chat">` +
-        `<input class="chat-input" type="text" autocomplete="off" placeholder="${
+        `<input class="chat-input" type="text" autocomplete="off" value="${escapeAttr(
+          this._scheduleChatDraft || ""
+        )}" placeholder="${
           this._scheduleChatBusy ? "Thinking…" : "Ask about your schedule…"
         }"${this._scheduleChatBusy ? " disabled" : ""} />` +
         `<button type="submit" class="btn btn-primary"${
@@ -8519,6 +8551,7 @@
       const text = (input?.value || "").trim();
       if (!text) return;
       this._scheduleChat.push({ role: "you", text });
+      this._scheduleChatDraft = ""; // sent — clear the surviving draft
       this._scheduleChatBusy = true;
       this._renderNow();
       try {

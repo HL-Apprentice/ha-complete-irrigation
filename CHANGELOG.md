@@ -4,6 +4,25 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.58.3 — 2026-07-24 — patch
+
+**Ask-the-scheduler: no more focus loss while typing, and every change request
+gets a confirmed answer.**
+
+- The panel re-renders whenever a watched sensor updates (on a Tempest that is
+  every few seconds), and the rebuild destroyed whatever you were typing in the
+  chat box — focus gone, text wiped. Two-part fix: background renders now
+  **defer while any text field is focused** (same idiom as the v1.19 scroll
+  guard — user actions still render instantly), and the chat box keeps a
+  **draft** like the plant/care forms, so unsent text also survives renders
+  that happen after you click away. Sent messages still clear the box.
+- The chat now **always confirms what happened to a change request**: a
+  deterministic footer states exactly how many validated proposals landed in
+  the Apply card ("✅ 1 proposed change ready…"), or admits when the model's
+  drafts failed the never-drop validation so nothing was proposed — the reply
+  can no longer imply a change that didn't land. The model is also instructed
+  to state its proposal in plain words.
+
 ## v1.58.2 — 2026-07-24 — patch
 
 **Yard-map drag fix, an always-visible map legend, and refreshed screenshots.**
