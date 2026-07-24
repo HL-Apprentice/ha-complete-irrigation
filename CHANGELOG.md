@@ -4,6 +4,23 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.58.2 — 2026-07-24 — patch
+
+**Yard-map drag fix, an always-visible map legend, and refreshed screenshots.**
+
+- Fix: **marker/view drag could die after an interrupted gesture** — a pointer
+  stranded in the pinch tracker made the panel think a two-finger gesture was
+  still in progress, so single-pointer drags were ignored until reload. The
+  tracker now resets when a new primary pointer arrives.
+- **Map legend** — a one-line legend under the aerial explains every control
+  (zoom, pan, fit, the 1 m ▲◀▶▼ frame nudge, marker drag, 📐 canopy measure,
+  🗺️ light areas). Previously a hint only appeared when there were no unplaced
+  plants, so most yards never saw it. German translations included.
+- **README screenshots refreshed** — all 7 panels re-captured on v1.58.2 (clean
+  panel-only chrome), plus two new shots: the schedule editor's scheduler-
+  priority section (Essential run / split profile / ignore-weather-gates) and
+  the Notifications tab.
+
 ## v1.58.1 — 2026-07-24 — patch
 
 **Yard-map polish: a real scroll isolation zone + frame nudge.**

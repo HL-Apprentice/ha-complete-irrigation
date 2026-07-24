@@ -8,17 +8,19 @@ A Home Assistant custom integration for complete, sensor-driven irrigation contr
 
 > **Smoke-tested against a real HA container per the [3-check protocol](CONTRIBUTING.md) every release.** Back up your HA before installing; report bugs at the [issues page](https://github.com/HL-Apprentice/ha-complete-irrigation/issues). Security issues: see [SECURITY.md](SECURITY.md). See [CHANGELOG.md](CHANGELOG.md) for what's new.
 
-<img width="1160" height="1284" alt="Today tab: weather banner, per-zone Run Now tiles, and the today/tomorrow run timeline" src="https://raw.githubusercontent.com/HL-Apprentice/ha-complete-irrigation/main/assets/screenshots/panel-1.png" />
+<img width="1157" height="1063" alt="Today tab: weather banner, per-zone Run Now tiles, and the today/tomorrow run timeline" src="https://raw.githubusercontent.com/HL-Apprentice/ha-complete-irrigation/main/assets/screenshots/panel-1.png" />
 
 <details>
 <summary>More screenshots</summary>
 
-<img width="1168" height="437" alt="Schedules tab: schedule list with recurrence, duration, and enable/edit/delete controls" src="https://raw.githubusercontent.com/HL-Apprentice/ha-complete-irrigation/main/assets/screenshots/panel-2.png" />
-<img width="1163" height="498" alt="Zones tab: per-zone week-at-a-glance run dots with New Planting and Hide from Today buttons" src="https://raw.githubusercontent.com/HL-Apprentice/ha-complete-irrigation/main/assets/screenshots/panel-3.png" />
-<img width="1168" height="459" alt="History tab: run history filtered by zone, schedule, status, and date range" src="https://raw.githubusercontent.com/HL-Apprentice/ha-complete-irrigation/main/assets/screenshots/panel-4.png" />
-<img width="1163" height="651" alt="Sensors tab: per-zone moisture sensors with live readings and the combined value used for decisions" src="https://raw.githubusercontent.com/HL-Apprentice/ha-complete-irrigation/main/assets/screenshots/panel-5.png" />
-<img width="1164" height="999" alt="Weather tab: 3-day forecast, rain-lockout sensor picker, hot weather boost, and wind defer" src="https://raw.githubusercontent.com/HL-Apprentice/ha-complete-irrigation/main/assets/screenshots/panel-6.png" />
-<img width="900" height="1284" alt="Settings tab: theme, schedule conflicts, inter-zone buffer, manual run default, and calendar feed" src="https://raw.githubusercontent.com/HL-Apprentice/ha-complete-irrigation/main/assets/screenshots/panel-7.png" />
+<img width="1157" height="1063" alt="Schedules tab: proposed schedule fixes with one-tap Apply, the Ask-the-scheduler chat box, and the schedule list" src="https://raw.githubusercontent.com/HL-Apprentice/ha-complete-irrigation/main/assets/screenshots/panel-2.png" />
+<img width="1157" height="1063" alt="Zones tab: per-zone week-at-a-glance run dots with New Planting, Diagnose, and Hide from Today buttons" src="https://raw.githubusercontent.com/HL-Apprentice/ha-complete-irrigation/main/assets/screenshots/panel-3.png" />
+<img width="1157" height="1063" alt="History tab: run history filtered by zone, schedule, status, and date range, with block progress and trigger tags" src="https://raw.githubusercontent.com/HL-Apprentice/ha-complete-irrigation/main/assets/screenshots/panel-4.png" />
+<img width="1157" height="1063" alt="Sensors tab: per-zone moisture sensors with live readings and the combined value used for decisions" src="https://raw.githubusercontent.com/HL-Apprentice/ha-complete-irrigation/main/assets/screenshots/panel-5.png" />
+<img width="1157" height="1063" alt="Weather tab: 3-day forecast, rain-lockout sensor picker, hot weather boost, and wind defer" src="https://raw.githubusercontent.com/HL-Apprentice/ha-complete-irrigation/main/assets/screenshots/panel-6.png" />
+<img width="1157" height="1063" alt="Settings tab: theme, schedule-conflict policy, schedule timing, and split-chunk defaults by plant type" src="https://raw.githubusercontent.com/HL-Apprentice/ha-complete-irrigation/main/assets/screenshots/panel-7.png" />
+<img width="1157" height="1063" alt="Schedule editor: scheduler priority with Essential run, split profile, minimum split chunk, and ignore-weather-gates toggles" src="https://raw.githubusercontent.com/HL-Apprentice/ha-complete-irrigation/main/assets/screenshots/panel-8.png" />
+<img width="1157" height="1063" alt="Notifications tab: notify targets, quiet hours, missed-run recovery, and the daily low-moisture summary" src="https://raw.githubusercontent.com/HL-Apprentice/ha-complete-irrigation/main/assets/screenshots/panel-9.png" />
 
 </details>
 
