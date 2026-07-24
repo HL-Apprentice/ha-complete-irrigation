@@ -9,7 +9,20 @@
     "Shift the frame 1 m north": "Ausschnitt 1 m nach Norden verschieben",
     "Shift the frame 1 m south": "Ausschnitt 1 m nach Süden verschieben",
     "Shift the frame 1 m east": "Ausschnitt 1 m nach Osten verschieben",
-    "Shift the frame 1 m west": "Ausschnitt 1 m nach Westen verschieben"
+    "Shift the frame 1 m west": "Ausschnitt 1 m nach Westen verschieben",
+    "Map controls:": "Kartensteuerung:",
+    "scroll or": "Scrollen oder",
+    "to zoom ·": "zum Zoomen ·",
+    "once zoomed,": "wenn gezoomt,",
+    "drag": "ziehe",
+    "the image to pan ·": "das Bild zum Verschieben ·",
+    "fits the whole aerial ·": "passt das ganze Luftbild ein ·",
+    "shift the aerial frame 1 m per tap (changes what ground the photo covers — use when your yard is clipped on one side) ·": "verschiebt den Bildausschnitt 1 m pro Tipp (ändert, welchen Bereich das Foto abdeckt — nützlich, wenn dein Garten an einer Seite abgeschnitten ist) ·",
+    "drag a": "ziehe einen",
+    "marker": "Marker",
+    "to move a plant ·": "zum Verschieben einer Pflanze ·",
+    "measures a canopy ·": "misst eine Kronenfläche ·",
+    "groups plants into a light area.": "gruppiert Pflanzen in einen Lichtbereich."
   },
   "patterns": [
     [

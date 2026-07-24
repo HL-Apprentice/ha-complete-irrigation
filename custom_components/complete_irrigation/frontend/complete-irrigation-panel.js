@@ -72,7 +72,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.58.1";
+  const PANEL_VERSION = "v1.58.2";
   // v1.41 — external plant-ID providers (mirrors llm_client.PROVIDERS). URL is
   // auto-filled when a provider is picked; model is an editable hint. All speak
   // the same OpenAI /v1/chat/completions shape, so one settings form covers them.
@@ -3432,6 +3432,15 @@
       // the press lands on the aerial layer, not a button/chip.
       if (wrap && e.target?.closest?.(".yard-map-view")) {
         e.preventDefault();
+        // v1.58.2 — a PRIMARY pointer starting a fresh gesture flushes any stale
+        // tracked pointers (an alert/modal mid-drag can swallow pointerup, and a
+        // stranded entry makes every later mouse drag look like a 2-finger pinch,
+        // killing pan until reload). Mouse is always primary; the first touch is
+        // primary; a real second finger (isPrimary=false) still joins the pinch.
+        if (e.isPrimary) {
+          this._mapPointers.clear();
+          this._mapPinch = null;
+        }
         this._mapPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
         try {
           wrap.setPointerCapture?.(e.pointerId);
@@ -7380,7 +7389,15 @@
         areaAssignPanel +
         (chips
           ? `<div class="yard-map-unplaced"><span class="muted">Tap to place:</span> ${chips}</div>`
-          : `<p class="muted yard-map-hint">Drag the map to pan &middot; scroll or +/&minus; to zoom in &middot; drag a marker to reposition.</p>`) +
+          : "") +
+        // v1.58.2 — ALWAYS-visible legend (the old hint hid whenever unplaced
+        // chips rendered, so most users never saw what the controls do).
+        `<p class="muted yard-map-hint">` +
+        `<strong>Map controls:</strong> scroll or <strong>+</strong>/<strong>&minus;</strong> to zoom &middot; ` +
+        `once zoomed, <strong>drag</strong> the image to pan &middot; <strong>⤢</strong> fits the whole aerial &middot; ` +
+        `<strong>▲◀▶▼</strong> shift the aerial frame 1 m per tap (changes what ground the photo covers &mdash; use when your yard is clipped on one side) &middot; ` +
+        `drag a <strong>marker</strong> to move a plant &middot; <strong>📐</strong> measures a canopy &middot; <strong>🗺️</strong> groups plants into a light area.` +
+        `</p>` +
         `</div>`
       );
     }
@@ -10036,6 +10053,7 @@
       "Manual": "Manuell",
       "Manual fallback (inches / week)": "Manueller Fallback (Zoll / Woche)",
       "Manual run default": "Standard für manuellen Lauf",
+      "Map controls:": "Kartensteuerung:",
       "Master switch. Turn off to silence all push notifications without losing your config.": "Hauptschalter. Ausschalten, um alle Push-Benachrichtigungen stummzuschalten, ohne deine Konfiguration zu verlieren.",
       "Max %": "Max. %",
       "Max cycles": "Max. Zyklen",
@@ -10359,6 +10377,8 @@
       "completed": "abgeschlossen",
       "count": "Anzahl",
       "custom": "Benutzerdefiniert",
+      "drag": "ziehe",
+      "drag a": "ziehe einen",
       "e.g. 1": "z. B. 1",
       "e.g. 100": "z. B. 100",
       "e.g. 10000": "z. B. 10000",
@@ -10369,24 +10389,34 @@
       "e.g. Front Bed": "z. B. Vorderes Beet",
       "e.g. Front-yard lemon": "z. B. Zitrone im Vorgarten",
       "e.g. qwen2.5-vl": "z. B. qwen2.5-vl",
+      "fits the whole aerial ·": "passt das ganze Luftbild ein ·",
       "from your library. You'll see a thumbnail — then tap": "aus deiner Mediathek. Du siehst ein Vorschaubild — tippe dann auf",
+      "groups plants into a light area.": "gruppiert Pflanzen in einen Lichtbereich.",
       "in avg": "im Schnitt",
       "key saved — leave blank to keep it": "Schlüssel gespeichert — leer lassen, um ihn zu behalten",
       "lawn": "Rasen",
       "left": "verbleibend",
+      "marker": "Marker",
+      "measures a canopy ·": "misst eine Kronenfläche ·",
       "model id": "Modell-ID",
       "no zone found for that ZIP": "keine Zone für diese PLZ gefunden",
       "not necessary": "nicht nötig",
       "on the Yard tab to re-fetch.": "auf dem Garten-Tab, um es neu zu laden.",
+      "once zoomed,": "wenn gezoomt,",
       "paste your API key": "füge deinen API-Schlüssel ein",
       "paste your Perenual API key": "füge deinen Perenual-API-Schlüssel ein",
       "paste your Pl@ntNet API key": "füge deinen Pl@ntNet-API-Schlüssel ein",
       "primary": "primär",
       "running": "läuft",
+      "scroll or": "Scrollen oder",
       "services found in this HA instance yet. Install the Home Assistant Companion app on your phone (or another notify integration) and they'll appear here.": "Dienste in dieser HA-Instanz gefunden. Installiere die Home Assistant Companion App auf deinem Handy (oder eine andere Benachrichtigungs-Integration), dann erscheinen sie hier.",
+      "shift the aerial frame 1 m per tap (changes what ground the photo covers — use when your yard is clipped on one side) ·": "verschiebt den Bildausschnitt 1 m pro Tipp (ändert, welchen Bereich das Foto abdeckt — nützlich, wenn dein Garten an einer Seite abgeschnitten ist) ·",
       "skipped": "übersprungen",
       "species not set": "Art nicht festgelegt",
+      "the image to pan ·": "das Bild zum Verschieben ·",
       "to": "auf",
+      "to move a plant ·": "zum Verschieben einer Pflanze ·",
+      "to zoom ·": "zum Zoomen ·",
       "trees": "Bäume",
       "vegetable_garden": "Gemüsegarten",
       "· gate off": "· Sperre aus",
