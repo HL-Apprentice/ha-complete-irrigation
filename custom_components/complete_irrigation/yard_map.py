@@ -252,6 +252,19 @@ def valid_export_template(template: Any) -> bool:
     return has_bbox and "{width}" in t and "{height}" in t
 
 
+def offset_center(lat: float, lon: float, north_m: float, east_m: float) -> tuple[float, float]:
+    """v1.58.1 — shift a map center by meters (north positive, east positive).
+
+    Lets the aerial frame be nudged (e.g. "the yard is clipped on the north side
+    — shift 3 m north") without touching the configured/HA home coordinates.
+    Local flat-earth math, exact at yard scale."""
+    lat2 = lat + (north_m or 0.0) / _M_PER_DEG_LAT
+    # Longitude meters shrink with latitude; guard the cos for pole edge cases.
+    scale = max(0.01, math.cos(math.radians(lat)))
+    lon2 = lon + (east_m or 0.0) / (_M_PER_DEG_LAT * scale)
+    return lat2, lon2
+
+
 # Hostnames that must never be an aerial-export target — resolving the HA server
 # at these is SSRF, never a real imagery source.
 _BLOCKED_EXPORT_HOSTNAMES = frozenset({"localhost", "metadata", "metadata.google.internal"})

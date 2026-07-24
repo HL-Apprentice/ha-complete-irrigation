@@ -1470,8 +1470,10 @@ set_yard_map:
   name: Set yard map
   description: >
     Fetch an aerial image of the property (Esri World Imagery, no API key) and cache it
-    as the yard-map backdrop. Centers on your Home Assistant location unless you pass
-    coordinates. The plant markers are positioned over this image.
+    as the yard-map backdrop. Centers on the map's CURRENT center (or your Home
+    Assistant location on first setup) unless you pass coordinates. Optional meter
+    offsets nudge the frame (e.g. 3 m north when the yard is clipped). The plant
+    markers are positioned over this image and re-projected on every change.
   fields:
     latitude:
       name: Center latitude
@@ -1502,6 +1504,29 @@ set_yard_map:
           min: 10
           max: 500
           step: 5
+          mode: box
+          unit_of_measurement: "m"
+    offset_north_m:
+      name: Shift north (meters)
+      description: Nudge the frame this many meters north (negative = south) from its current center.
+      required: false
+      example: 3
+      selector:
+        number:
+          min: -200
+          max: 200
+          step: 1
+          mode: box
+          unit_of_measurement: "m"
+    offset_east_m:
+      name: Shift east (meters)
+      description: Nudge the frame this many meters east (negative = west) from its current center.
+      required: false
+      selector:
+        number:
+          min: -200
+          max: 200
+          step: 1
           mode: box
           unit_of_measurement: "m"
 
