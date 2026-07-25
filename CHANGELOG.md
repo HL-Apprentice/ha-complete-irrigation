@@ -4,6 +4,39 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.60.0 — 2026-07-25 — minor
+
+**Tag a patch of ground with the loop that waters it — then tap it to ask
+"what drives this?"**
+
+- **Loop areas (new).** Grass has no plant markers — a lawn is not a row of
+  plant records — so nothing on the map keyed the grass zones and the yard
+  report skipped them entirely. Now: hit **💧 Tag loop area**, drag a box round
+  the grass (or a bed), pick the loop that waters it, and it is drawn on the
+  aerial in that loop's colour with its name. **Tap any area** and the panel
+  answers underneath: which loop drives it, its ground area in sq ft, and every
+  schedule that waters it — *including disabled ones*, badged as such, because
+  "nothing waters this" would be the wrong answer for a paused schedule.
+- **Regions are ground truth, not frame state.** A region stores four real
+  WGS84 degrees and nothing else; where it lands on the photo is derived per
+  render. So moving, zooming, nudging or rotating the aerial cannot displace,
+  shrink or lose one — a region wider than the current view keeps its true
+  size and simply extends past the edge instead of being clamped into a
+  smaller lie. (This is the v1.59 anchor lesson applied from the start: no
+  second, staler copy of the same fact.)
+- Areas are measured as the full rectangle, not the π/4 ellipse used for
+  canopies — an ellipse would under-report a lawn by ~21%.
+- Stored in their own file with per-record validation, so one corrupt row can
+  never take down the yard view. New services `add_zone_region` /
+  `delete_zone_region`.
+- **Fix (v1.59 regression):** the live drag box was drawn in the pan/zoom layer
+  while the finished overlay sat in the rotation layer, so on a rotated aerial
+  the rubber band skewed away from the cursor and a canopy measure or area draw
+  landed somewhere other than where you dragged. Both now live in the same
+  layer. Also, the start corner of a drag is clamped (only the end corner was),
+  and a too-small loop area now says so instead of silently vanishing.
+- German translations for the new controls; 17 new tests.
+
 ## v1.59.0 — 2026-07-24 — minor
 
 **Plant markers are now anchored to the GROUND, and the aerial can be rotated.**

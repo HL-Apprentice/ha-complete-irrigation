@@ -26,7 +26,18 @@
     "Rotate the aerial 1° counter-clockwise (hold Shift for 5°; double-click to reset to north-up)": "Luftbild um 1° gegen den Uhrzeigersinn drehen (Umschalt für 5°; Doppelklick setzt auf Norden zurück)",
     "Rotate the aerial 1° clockwise (hold Shift for 5°; double-click to reset to north-up)": "Luftbild um 1° im Uhrzeigersinn drehen (Umschalt für 5°; Doppelklick setzt auf Norden zurück)",
     "turn the aerial to straighten an angled lot (1° per tap, Shift for 5°, double-click to reset — the compass shows north)": "das Luftbild drehen, um ein schräg liegendes Grundstück gerade auszurichten (1° pro Klick, Umschalt für 5°, Doppelklick setzt zurück — der Kompass zeigt Norden)",
-    "Failed to save the aerial rotation: ": "Drehung des Luftbilds konnte nicht gespeichert werden: "
+    "Failed to save the aerial rotation: ": "Drehung des Luftbilds konnte nicht gespeichert werden: ",
+    "💧 Tag loop area": "💧 Kreis-Bereich markieren",
+    "Draw a patch of ground (e.g. the grass) and tag which loop waters it — then tap it any time to see what drives it": "Eine Fläche (z. B. den Rasen) einzeichnen und den Bewässerungskreis zuordnen — dann jederzeit antippen, um zu sehen, was sie versorgt",
+    "Drag a box around the area — the grass, a bed — then pick the loop that waters it.": "Ziehen Sie einen Rahmen um die Fläche — Rasen oder Beet — und wählen Sie dann den Kreis, der sie bewässert.",
+    "— pick a loop —": "— Kreis wählen —",
+    "Pick which loop waters this area.": "Wählen Sie, welcher Kreis diese Fläche bewässert.",
+    "Remove this area": "Diese Fläche entfernen",
+    "drives this area": "versorgt diese Fläche",
+    "No schedule waters this loop yet.": "Noch kein Zeitplan bewässert diesen Kreis.",
+    "That region is too small to save — drag a box around the area you want.": "Diese Fläche ist zu klein zum Speichern — ziehen Sie einen Rahmen um den gewünschten Bereich.",
+    "Failed to save the area: ": "Fläche konnte nicht gespeichert werden: ",
+    "Failed to remove the area: ": "Fläche konnte nicht entfernt werden: "
   },
   "patterns": [
     [

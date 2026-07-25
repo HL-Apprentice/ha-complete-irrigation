@@ -149,6 +149,19 @@ def canopy_sqft_from_box(dx_norm: float, dy_norm: float, span_m: float) -> float
     return round(area_m2 * _SQFT_PER_SQM, 1)
 
 
+def region_sqft_from_box(dx_norm: float, dy_norm: float, span_m: float) -> float:
+    """Ground area in ft² for a REGION box drawn on the aerial (v1.60).
+
+    Same inputs as ``canopy_sqft_from_box`` but the full RECTANGLE, not the
+    inscribed ellipse: a lawn or bed covers the area you dragged, whereas a
+    canopy is round-ish. Using the canopy formula here would under-report every
+    region by ~21% (1 - pi/4) and quietly skew any water math built on it.
+    """
+    w_m = abs(float(dx_norm)) * float(span_m)
+    h_m = abs(float(dy_norm)) * float(span_m)
+    return round(w_m * h_m * _SQFT_PER_SQM, 1)
+
+
 def bbox_from_cfg(cfg: Any) -> Bbox | None:
     """Bbox from a stored yard_map config dict, or None if absent/malformed."""
     if not isinstance(cfg, dict):

@@ -86,6 +86,7 @@ from .weather_gate import (
     rain_to_inches,
     temp_to_fahrenheit,
 )
+from .zone_region import ZoneRegionStore
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -219,6 +220,31 @@ async def _async_save_care_tasks(hass: HomeAssistant, entry_id: str, store: Care
     await helper.async_save({"care_tasks": store.to_serializable()})
 
 
+async def _async_load_zone_regions(hass: HomeAssistant, entry_id: str) -> ZoneRegionStore:
+    """v1.60 — load the drawn zone/loop regions.
+
+    Its OWN store file, deliberately not coord.config: the tick re-serializes
+    config every 60 s, and config loads with no validation straight into the
+    browser payload. Regions change twice a year and get per-record validation.
+    """
+    from homeassistant.helpers.storage import Store
+
+    helper = Store(hass, STORAGE_VERSION, _storage_key(entry_id, "zone_regions"))
+    data = await helper.async_load()
+    if not data:
+        return ZoneRegionStore()
+    return ZoneRegionStore.from_serializable(data.get("zone_regions", []))
+
+
+async def _async_save_zone_regions(
+    hass: HomeAssistant, entry_id: str, store: ZoneRegionStore
+) -> None:
+    from homeassistant.helpers.storage import Store
+
+    helper = Store(hass, STORAGE_VERSION, _storage_key(entry_id, "zone_regions"))
+    await helper.async_save({"zone_regions": store.to_serializable()})
+
+
 async def _async_save_plants(hass: HomeAssistant, entry_id: str, store: PlantStore) -> None:
     from homeassistant.helpers.storage import Store
 
@@ -311,6 +337,7 @@ class ScheduleCoordinator:
         # async_setup; mutated via the care-task services. Due-check runs on the
         # tick, throttled to ~hourly.
         self._care_tasks: CareTaskStore = CareTaskStore()
+        self._zone_regions: ZoneRegionStore = ZoneRegionStore()
         self._last_care_check: datetime | None = None
         # v1.35 — active light-survey sessions, keyed by plant id. In-memory by
         # design (a restart abandons the survey; the sensor stake is unharmed and
@@ -351,6 +378,10 @@ class ScheduleCoordinator:
     @property
     def care_tasks(self) -> CareTaskStore:
         return self._care_tasks
+
+    @property
+    def zone_regions(self) -> ZoneRegionStore:
+        return self._zone_regions
 
     def sun_times(self, day):
         """v1.40 — (sunrise, sunset) local-aware datetimes for `day`, or None.
@@ -399,6 +430,7 @@ class ScheduleCoordinator:
         self._run_history = await _async_load_run_history(self._hass, self._entry_id)
         self._plants = await _async_load_plants(self._hass, self._entry_id)
         self._care_tasks = await _async_load_care_tasks(self._hass, self._entry_id)
+        self._zone_regions = await _async_load_zone_regions(self._hass, self._entry_id)
         # v1.59 — one-time upgrade: give placements made before v1.59 a durable
         # GROUND anchor, computed against the frame they were placed in. Without
         # it they stay frame-relative, and the next aerial re-fetch at a
@@ -751,6 +783,9 @@ class ScheduleCoordinator:
 
     async def async_save_care_tasks(self) -> None:
         await _async_save_care_tasks(self._hass, self._entry_id, self._care_tasks)
+
+    async def async_save_zone_regions(self) -> None:
+        await _async_save_zone_regions(self._hass, self._entry_id, self._zone_regions)
 
     # ── Light surveys (v1.35) ──────────────────────────────────────
 
