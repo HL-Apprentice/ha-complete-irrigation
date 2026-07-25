@@ -108,6 +108,8 @@ SERVICE_UPDATE_PLANT = "update_plant"
 SERVICE_DELETE_PLANT = "delete_plant"
 SERVICE_DUPLICATE_PLANT = "duplicate_plant"  # v1.40.11 — copy a plant (minus photos)
 SERVICE_ASSIGN_AREA_REGION = "assign_area_region"  # v1.54 — bulk-assign a light area by map region
+SERVICE_ADD_ZONE_REGION = "add_zone_region"  # v1.60 — tag a patch of ground with its loop
+SERVICE_DELETE_ZONE_REGION = "delete_zone_region"  # v1.60
 SERVICE_SET_YARD_MAP = "set_yard_map"  # v1.30 — fetch + cache the aerial backdrop
 SERVICE_ADD_PLANT_PHOTO = "add_plant_photo"  # v1.32 — per-plant photo + EXIF-GPS place
 SERVICE_SET_PLANT_HEALTH = "set_plant_health"  # v1.33 — store a vision-health verdict
@@ -626,6 +628,23 @@ _ADD_PLANT_SCHEMA = vol.Schema(
 )
 
 _MAP_COORD = vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0))
+
+_ADD_ZONE_REGION_SCHEMA = vol.Schema(
+    {
+        vol.Required("zone_entity_id"): cv.entity_id,
+        # The drag, in CURRENT-frame normalized coords. Converted to ground
+        # degrees before storage — the frame-relative numbers are never kept.
+        vol.Required("x0"): _MAP_COORD,
+        vol.Required("y0"): _MAP_COORD,
+        vol.Required("x1"): _MAP_COORD,
+        vol.Required("y1"): _MAP_COORD,
+        vol.Optional("label", default=""): vol.All(
+            cv.string, vol.Length(max=60), _no_control_chars
+        ),
+    }
+)
+
+_DELETE_ZONE_REGION_SCHEMA = vol.Schema({vol.Required("region_id"): cv.string})
 
 _UPDATE_PLANT_SCHEMA = vol.Schema(
     {
@@ -2313,6 +2332,61 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         await coord.async_save_plants()
         _LOGGER.info("Updated plant %s", merged.id)
 
+    async def handle_add_zone_region(call: ServiceCall) -> None:
+        """v1.60 — tag a drawn patch of ground with the loop that waters it.
+
+        Grass zones have no plant records at all, so nothing on the map keys
+        them; this is what lets the map answer "which loop drives this?".
+        """
+        if not await _require_admin(hass, call):
+            return
+        data = _ADD_ZONE_REGION_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None:
+            return
+        from uuid import uuid4
+
+        from .yard_map import bbox_from_cfg, norm_to_latlon
+        from .zone_region import ZoneRegion
+
+        # Converting the drag to ground degrees IS the record — unlike a plant
+        # there is no backfill path that could rescue an anchorless region, so
+        # this is a hard precondition rather than an optional enrichment.
+        bbox = bbox_from_cfg(coord.config.get("yard_map"))
+        if bbox is None:
+            _LOGGER.warning("add_zone_region: no aerial yet — fetch the yard map first")
+            return
+        lat0, lon0 = norm_to_latlon(float(data["x0"]), float(data["y0"]), bbox)
+        lat1, lon1 = norm_to_latlon(float(data["x1"]), float(data["y1"]), bbox)
+        try:
+            region = ZoneRegion(
+                id=uuid4().hex[:12],
+                zone_entity_id=data["zone_entity_id"],
+                north=lat0,
+                south=lat1,
+                east=lon0,
+                west=lon1,
+                label=data.get("label", ""),
+            )
+        except ValueError as err:
+            _LOGGER.warning("add_zone_region: rejected (%s)", err)
+            return
+        coord.zone_regions.add(region)
+        await coord.async_save_zone_regions()
+        _LOGGER.info(
+            "add_zone_region: %.0f sq ft tagged to %s", region.area_sqft, region.zone_entity_id
+        )
+
+    async def handle_delete_zone_region(call: ServiceCall) -> None:
+        if not await _require_admin(hass, call):
+            return
+        data = _DELETE_ZONE_REGION_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None:
+            return
+        if coord.zone_regions.delete(data["region_id"]):
+            await coord.async_save_zone_regions()
+
     async def handle_assign_area_region(call: ServiceCall) -> None:
         """v1.54 — set a light-area label on every placed plant inside a drawn map
         region (the panel draws a box on the aerial; this bulk-assigns the enclosed
@@ -3762,6 +3836,15 @@ async def _async_register_services(hass: HomeAssistant) -> None:
     )
     hass.services.async_register(
         DOMAIN, SERVICE_UPDATE_PLANT, handle_update_plant, schema=_UPDATE_PLANT_SCHEMA
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_ADD_ZONE_REGION, handle_add_zone_region, schema=_ADD_ZONE_REGION_SCHEMA
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_DELETE_ZONE_REGION,
+        handle_delete_zone_region,
+        schema=_DELETE_ZONE_REGION_SCHEMA,
     )
     hass.services.async_register(
         DOMAIN,

@@ -323,6 +323,41 @@ async def watering_diagnosis(hass, connection, msg):
     connection.send_result(msg["id"], {"diagnosis": card.to_dict()})
 
 
+def _serialize_zone_regions(coord) -> list[dict]:
+    """v1.60 — each region plus where it falls on the CURRENT frame.
+
+    The normalized box is DERIVED here, never stored: that is what makes a region
+    immune to the aerial being moved, zoomed, nudged or rotated. Coordinates are
+    intentionally unclamped — a lawn loop often runs past the edge of the photo,
+    and clamping would redraw it as a smaller rectangle glued to the border.
+    """
+    from .yard_map import bbox_from_cfg
+    from .zone_region import box_intersects_frame, derive_box
+
+    bbox = bbox_from_cfg(coord.config.get("yard_map"))
+    out: list[dict] = []
+    for r in coord.zone_regions.all():
+        item = {
+            "id": r.id,
+            "zone_entity_id": r.zone_entity_id,
+            "label": r.label,
+            "area_sqft": r.area_sqft,
+        }
+        if bbox is not None:
+            x0, y0, x1, y1 = derive_box(r, bbox)
+            item.update(
+                {
+                    "x0": x0,
+                    "y0": y0,
+                    "x1": x1,
+                    "y1": y1,
+                    "visible": box_intersects_frame((x0, y0, x1, y1)),
+                }
+            )
+        out.append(item)
+    return out
+
+
 @websocket_api.require_admin
 @websocket_api.websocket_command({vol.Required("type"): WS_TYPE_YARD_REPORT})
 @websocket_api.async_response
@@ -346,6 +381,9 @@ async def yard_report(hass, connection, msg):
             "reports": [serialize_loop_report(r) for r in reports],
             "drip_efficiency": eff,
             "yard_map": coord.config.get("yard_map"),  # v1.30 — aerial backdrop config
+            # v1.60 — drawn loop regions, projected against the SAME bbox shipped
+            # above so the panel can never pair regions with a stale frame.
+            "zone_regions": _serialize_zone_regions(coord),
             **status,
         },
     )

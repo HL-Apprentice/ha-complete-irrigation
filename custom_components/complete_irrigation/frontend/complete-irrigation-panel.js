@@ -72,7 +72,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.59.0";
+  const PANEL_VERSION = "v1.60.0";
   // v1.41 — external plant-ID providers (mirrors llm_client.PROVIDERS). URL is
   // auto-filled when a provider is picked; model is an editable hint. All speak
   // the same OpenAI /v1/chat/completions shape, so one settings form covers them.
@@ -558,6 +558,10 @@
       this._mapPinch = null; // v1.53 — in-progress two-finger pinch {dist}
       this._measureMode = false; // v1.47 — draw-a-box canopy measure mode
       this._areaAssignMode = false; // v1.54 — draw-a-region light-area assign mode
+      this._zoneRegions = []; // v1.60 — saved loop regions (from yard_report)
+      this._zoneRegionMode = false; // v1.60 — draw-a-region loop-tag mode
+      this._zoneRegionDraft = null; // v1.60 — finished drag awaiting a loop choice
+      this._zoneRegionPick = null; // v1.60 — region tapped for the read-out card
       this._canopyBox = null; // v1.47 — in-progress drag box {rect,x0,y0,x1,y1}
       this._canopyResult = null; // v1.47 — finalized {sqft,x0,y0,x1,y1,plantId}
       this._yardLoaded = false;
@@ -1010,6 +1014,18 @@
         if (action === "map-reset-view") return this._resetMapView();
         if (action === "toggle-measure") return this._toggleMeasure();
         if (action === "toggle-area-assign") return this._toggleAreaAssign();
+        if (action === "toggle-zone-region") return this._toggleZoneRegion();
+        if (action === "zone-region-save") return this._saveZoneRegion();
+        if (action === "zone-region-cancel") {
+          this._zoneRegionDraft = null;
+          return this._renderNow();
+        }
+        if (action === "zone-region-close") {
+          this._zoneRegionPick = null;
+          return this._renderNow();
+        }
+        if (action === "zone-region-delete")
+          return this._deleteZoneRegion(node.dataset.regionId);
         if (action === "survey-area") return this._surveyArea(t.dataset.area);
         if (action === "cancel-area-survey") return this._cancelAreaSurvey(t.dataset.area);
         if (action === "apply-canopy") return this._applyCanopy();
@@ -1285,6 +1301,10 @@
       // v2 — Yard plant editor fields keep the draft in sync (selects fire
       // change; text/number also handled in _onInput so typing survives a
       // background re-render).
+      if (action === "zone-region-pick") {
+        if (this._zoneRegionDraft) this._zoneRegionDraft.zone = t.value;
+        return; // value already shown by the control; no re-render
+      }
       if (action === "plant-field") {
         if (this._plantEditor && t.name in this._plantEditor) {
           this._plantEditor[t.name] = t.value;
@@ -2169,6 +2189,9 @@
             }
           : null;
         this._yardMap = reportRes ? reportRes.yard_map || null : null; // v1.30
+        // v1.60 — loop regions ride the SAME payload as the bbox they were
+        // projected against, so they can never be paired with a stale frame.
+        this._zoneRegions = reportRes ? reportRes.zone_regions || [] : [];
         this._yardLoaded = true;
         // v1.35 — start/stop the 30s survey-status poll to match the
         // just-fetched active_light_surveys (idempotent).
@@ -3427,11 +3450,15 @@
     _onMapPointerDown(e) {
       const wrap = e.target?.closest?.(".yard-map-wrap");
       // v1.47/v1.54 — draw-a-box mode: canopy measure OR light-area assign.
-      if ((this._measureMode || this._areaAssignMode) && wrap) {
+      if ((this._measureMode || this._areaAssignMode || this._zoneRegionMode) && wrap) {
         e.preventDefault();
         const rect = wrap.getBoundingClientRect();
         const n = this._screenToNorm(e.clientX, e.clientY, rect);
-        this._canopyBox = { rect, x0: n.x, y0: n.y, x1: n.x, y1: n.y };
+        // v1.60 — clamp the START corner too. Only x1/y1 were clamped, so a drag
+        // begun outside the image sent an out-of-range coord to the service; for
+        // a persisted region that is a rejected save, not just a stray pixel.
+        const c0 = (v) => Math.min(1, Math.max(0, v));
+        this._canopyBox = { rect, x0: c0(n.x), y0: c0(n.y), x1: c0(n.x), y1: c0(n.y) };
         this._canopyResult = null;
         try {
           wrap.setPointerCapture?.(e.pointerId);
@@ -3711,8 +3738,16 @@
       }
       // v1.48 — end a background pan (client-only view; nothing to persist).
       if (this._mapPan) {
+        const pan = this._mapPan;
         this._mapPan = null;
         this.shadowRoot?.querySelector(".yard-map-wrap")?.classList.remove("panning");
+        // v1.60 — a TAP (not a drag) on the aerial asks "what drives this ground?".
+        // It has to live here: .yard-map-wrap captures the pointer, so the click
+        // event is retargeted away from the region node and a data-action handler
+        // would never fire (same reason marker drags have no _onClick case).
+        if (Math.hypot(e.clientX - pan.sx, e.clientY - pan.sy) <= 5) {
+          this._identifyRegionAt(e.clientX, e.clientY);
+        }
         return;
       }
       // v1.47 — finalize a canopy-measure box: compute ft² from the map's span.
@@ -3721,6 +3756,33 @@
         this._canopyBox = null;
         const dx = Math.abs(b.x1 - b.x0);
         const dy = Math.abs(b.y1 - b.y0);
+        if (this._zoneRegionMode) {
+          // v1.60 — reject on AREA, not on either edge: a narrow strip of grass
+          // along a wall is a legitimate region that an edge floor would discard
+          // silently. And say so, rather than just clearing the box.
+          const span = Number(this._yardMap?.span_m) || 60;
+          const sqft = Math.round(dx * span * dy * span * 10.7639 * 10) / 10;
+          if (sqft < 10) {
+            this._zoneRegionMode = false;
+            this._zoneRegionDraft = null;
+            this._zoneRegionPick = null;
+            alert("That region is too small to save — drag a box around the area you want.");
+            this._renderNow();
+            return;
+          }
+          this._zoneRegionMode = false;
+          this._zoneRegionPick = null;
+          this._zoneRegionDraft = {
+            x0: Math.min(b.x0, b.x1),
+            y0: Math.min(b.y0, b.y1),
+            x1: Math.max(b.x0, b.x1),
+            y1: Math.max(b.y0, b.y1),
+            sqft,
+            zone: "",
+          };
+          this._renderNow();
+          return;
+        }
         if (dx < 0.01 || dy < 0.01) {
           this._renderNow(); // too small — clear the stray overlay
           return;
@@ -3765,10 +3827,101 @@
     _toggleMeasure() {
       // v1.47 — enter/leave canopy-measure mode.
       this._measureMode = !this._measureMode;
-      this._areaAssignMode = false; // the two draw modes are mutually exclusive
+      this._areaAssignMode = false; // the draw modes are mutually exclusive
+      this._zoneRegionMode = false;
       this._canopyBox = null;
       this._canopyResult = null;
       this._renderNow();
+    }
+
+    _toggleZoneRegion() {
+      // v1.60 — enter/leave "tag this ground with its loop" mode.
+      const on = !this._zoneRegionMode;
+      this._measureMode = false;
+      this._areaAssignMode = false;
+      this._zoneRegionMode = on;
+      this._canopyBox = null;
+      this._canopyResult = null;
+      this._zoneRegionDraft = null;
+      this._zoneRegionPick = null;
+      this._renderNow();
+    }
+
+    _identifyRegionAt(clientX, clientY) {
+      const wrap = this.shadowRoot?.querySelector(".yard-map-wrap");
+      const regions = this._zoneRegions || [];
+      if (!wrap || !regions.length) return;
+      const n = this._screenToNorm(clientX, clientY, wrap.getBoundingClientRect());
+      // Smallest containing region wins, else a whole-yard region would swallow
+      // every tap and nothing drawn inside it could ever be selected.
+      let best = null;
+      for (const r of regions) {
+        if (r.x0 == null) continue;
+        if (n.x >= r.x0 && n.x <= r.x1 && n.y >= r.y0 && n.y <= r.y1) {
+          const area = (r.x1 - r.x0) * (r.y1 - r.y0);
+          if (!best || area < best.area) best = { area, region: r };
+        }
+      }
+      const picked = best ? best.region : null;
+      if (picked === this._zoneRegionPick) return;
+      this._zoneRegionPick = picked;
+      this._zoneRegionDraft = null;
+      this._renderNow();
+    }
+
+    /** v1.60 — every schedule that waters a zone, INCLUDING disabled ones (the
+     * honest answer to "what drives this" is not "nothing" just because a
+     * schedule is paused). */
+    _schedulesForZone(zoneEntityId) {
+      return (this._schedules || []).filter(
+        (s) =>
+          s.zone_entity_id === zoneEntityId ||
+          (s.zone_steps || []).some((st) => st.zone_entity_id === zoneEntityId)
+      );
+    }
+
+    /** Stable per-zone hue so a region and its loop always read as the same
+     * colour, with no stored colour field to migrate when a zone is renamed. */
+    _zoneHue(zoneEntityId) {
+      let h = 0;
+      const str = String(zoneEntityId || "");
+      for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) % 360;
+      return h;
+    }
+
+    async _saveZoneRegion() {
+      const d = this._zoneRegionDraft;
+      if (!d) return;
+      if (!d.zone) {
+        alert("Pick which loop waters this area.");
+        return;
+      }
+      try {
+        await this._hass.callService("complete_irrigation", "add_zone_region", {
+          zone_entity_id: d.zone,
+          x0: d.x0,
+          y0: d.y0,
+          x1: d.x1,
+          y1: d.y1,
+        });
+        this._zoneRegionDraft = null;
+        await this._fetchYard();
+      } catch (err) {
+        alert("Failed to save the area: " + (err?.message || err));
+      }
+    }
+
+    async _deleteZoneRegion(regionId) {
+      if (!regionId) return;
+      try {
+        await this._hass.callService("complete_irrigation", "delete_zone_region", {
+          region_id: regionId,
+        });
+        this._zoneRegionPick = null;
+        await this._fetchYard();
+      } catch (err) {
+        alert("Failed to remove the area: " + (err?.message || err));
+      }
     }
 
     _toggleAreaAssign() {
@@ -3776,6 +3929,7 @@
       // bulk-assign the enclosed markers). Shares the box-draw with measure mode.
       this._areaAssignMode = !this._areaAssignMode;
       this._measureMode = false;
+      this._zoneRegionMode = false;
       this._canopyBox = null;
       this._canopyResult = null;
       this._renderNow();
@@ -3907,12 +4061,21 @@
     _drawCanopyBox() {
       // Imperative overlay during the drag (no re-render, so it stays smooth).
       const b = this._canopyBox;
-      const view = this.shadowRoot?.querySelector(".yard-map-view");
+      // v1.60 — the live band MUST live in the ROTATION layer, next to the image
+      // and markers. _screenToNorm already un-rotates the pointer into north-up
+      // normalized space, so drawing those coords in the pan/zoom-only layer
+      // (as v1.59 did) made the rubber band skew away from the cursor and land
+      // somewhere other than what got saved whenever the aerial was rotated.
+      // Scoped to a direct child so the finalized .canopy-box overlay rendered
+      // inside this same layer can't be hijacked as the live node.
+      const view =
+        this.shadowRoot?.querySelector(".yard-map-rot") ||
+        this.shadowRoot?.querySelector(".yard-map-view");
       if (!b || !view) return;
-      let box = view.querySelector(".canopy-box");
+      let box = view.querySelector(":scope > .canopy-box-live");
       if (!box) {
         box = document.createElement("div");
-        box.className = "canopy-box";
+        box.className = "canopy-box canopy-box-live";
         view.appendChild(box);
       }
       const l = Math.min(b.x0, b.x1) * 100;
@@ -7407,6 +7570,32 @@
       // v1.59 — display rotation of the aerial; needed here because the marker
       // labels counter-rotate by it (declared before first use).
       const rotDeg = this._mapRotationDeg();
+      // v1.60 — saved loop regions. Inside the rotation layer so they stay glued
+      // to the ground, BEFORE the markers so a big lawn can't bury 49 plant dots,
+      // and pointer-events:none so they never steal a drag or a marker grab.
+      const regionEls = (this._zoneRegions || [])
+        .filter((r) => r.visible && r.x0 != null)
+        .map((r) => {
+          const hue = this._zoneHue(r.zone_entity_id);
+          const l = r.x0 * 100;
+          const t = r.y0 * 100;
+          const w = (r.x1 - r.x0) * 100;
+          const h = (r.y1 - r.y0) * 100;
+          const sel = this._zoneRegionPick && this._zoneRegionPick.id === r.id;
+          return (
+            `<div class="zone-region${sel ? " selected" : ""}" data-region-id="${escapeAttr(r.id)}" ` +
+            `style="left:${l.toFixed(2)}%;top:${t.toFixed(2)}%;width:${w.toFixed(2)}%;` +
+            `height:${h.toFixed(2)}%;--zr-hue:${hue}">` +
+            // The label sits in a wrapper that owns the centring transform:
+            // _applyMapRotation overwrites .yard-map-label's transform outright,
+            // so a translate() on the label itself would be wiped on every turn.
+            `<span class="zone-region-labelwrap">` +
+            `<span class="yard-map-label"${rotDeg ? ` style="transform:rotate(${-rotDeg}deg)"` : ""}>` +
+            `${escapeHtml(this._zoneName(r.zone_entity_id))}</span></span>` +
+            `</div>`
+          );
+        })
+        .join("");
       const markers = placed
         .map(
           (p) =>
@@ -7449,6 +7638,13 @@
           }" data-action="toggle-area-assign" title="Draw a region on the aerial to group the enclosed plants into a light area for the lux survey">${
             this._areaAssignMode ? "✕ Done" : "🗺️ Assign area"
           }</button>`;
+      const zoneRegionBtn = this._mapBusy
+        ? ""
+        : `<button class="btn btn-small${
+            this._zoneRegionMode ? " btn-primary" : ""
+          }" data-action="toggle-zone-region" title="Draw a patch of ground (e.g. the grass) and tag which loop waters it — then tap it any time to see what drives it">${
+            this._zoneRegionMode ? "✕ Done" : "💧 Tag loop area"
+          }</button>`;
       const r = this._canopyResult;
       const canopyOverlay = r
         ? `<div class="canopy-box canopy-box-final" data-area="${r.sqft} sq ft" style="left:${(
@@ -7472,6 +7668,54 @@
             .join("") +
           `</select> <button class="btn btn-small btn-primary" data-action="apply-canopy">Set canopy</button></div>`
         : `<div class="canopy-panel muted">Drag a box around a plant's canopy on the aerial to measure it. Canopies are read as an ellipse fit to the box.</div>`;
+      // v1.60 — one inline panel below the map with two states. Deliberately NOT
+      // an on-map popover: the wrap preventDefaults every wheel and sets
+      // touch-action:none, so anything scrollable rendered inside it is dead.
+      const zoneOpts = this._zonePickOptions();
+      let zoneRegionPanel = "";
+      if (this._zoneRegionMode) {
+        zoneRegionPanel =
+          `<div class="canopy-panel muted">Drag a box around the area — the grass, a bed — ` +
+          `then pick the loop that waters it.</div>`;
+      } else if (this._zoneRegionDraft) {
+        const d = this._zoneRegionDraft;
+        zoneRegionPanel =
+          `<div class="canopy-panel"><strong>Area ≈ ${d.sqft} sq ft.</strong> Watered by ` +
+          `<select data-action="zone-region-pick"><option value="">— pick a loop —</option>` +
+          zoneOpts
+            .map(
+              (z) =>
+                `<option value="${escapeAttr(z)}"${d.zone === z ? " selected" : ""}>` +
+                `${escapeHtml(this._zoneName(z))}</option>`
+            )
+            .join("") +
+          `</select> ` +
+          `<button class="btn btn-small btn-primary" data-action="zone-region-save">Save</button> ` +
+          `<button class="btn btn-small" data-action="zone-region-cancel">Cancel</button></div>`;
+      } else if (this._zoneRegionPick) {
+        const r = this._zoneRegionPick;
+        const scheds = this._schedulesForZone(r.zone_entity_id);
+        const list = scheds.length
+          ? scheds
+              .map(
+                (sc) =>
+                  `<li>${escapeHtml(sc.name)}${
+                    sc.enabled === false ? ` <span class="muted">(disabled)</span>` : ""
+                  }</li>`
+              )
+              .join("")
+          : `<li class="muted">No schedule waters this loop yet.</li>`;
+        zoneRegionPanel =
+          `<div class="canopy-panel">` +
+          `<strong>💧 ${escapeHtml(this._zoneName(r.zone_entity_id))}</strong> ` +
+          `drives this area <span class="muted">(${r.area_sqft} sq ft · ` +
+          `${escapeHtml(r.zone_entity_id)})</span>` +
+          `<ul class="zone-region-scheds">${list}</ul>` +
+          `<button class="btn btn-small" data-action="zone-region-delete" data-region-id="${escapeAttr(
+            r.id
+          )}">Remove this area</button> ` +
+          `<button class="btn btn-small" data-action="zone-region-close">Close</button></div>`;
+      }
       // v1.54 — hint while drawing a light-area region.
       const areaAssignPanel = this._areaAssignMode
         ? `<div class="canopy-panel muted">Drag a region around the plants that share a light spot — you'll name the area, and every marker inside joins it (one lux survey then covers them all).</div>`
@@ -7492,7 +7736,7 @@
       return (
         `<div class="card yard-map-card">` +
         `<div class="yard-map-head"><strong>🗺️ Yard map</strong>` +
-        `<span class="yard-map-actions">${zoomSel}${measureBtn}${areaAssignBtn}${setupBtn}</span></div>` +
+        `<span class="yard-map-actions">${zoomSel}${measureBtn}${areaAssignBtn}${zoneRegionBtn}${setupBtn}</span></div>` +
         `<div class="yard-map-wrap${
           this._measureMode || this._areaAssignMode ? " measuring" : ""
         }" style="aspect-ratio:${m.width} / ${m.height}">` +
@@ -7500,6 +7744,7 @@
         `<div class="yard-map-view" style="${viewTransform}">` +
         `<div class="yard-map-rot" style="${rotTransform}">` +
         `<img class="yard-map-img" src="${escapeAttr(m.image_path)}" alt="Aerial view of the yard" draggable="false" />` +
+        regionEls +
         markers +
         canopyOverlay +
         `</div>` +
@@ -7548,6 +7793,7 @@
         `</div>` +
         measurePanel +
         areaAssignPanel +
+        zoneRegionPanel +
         (chips
           ? `<div class="yard-map-unplaced"><span class="muted">Tap to place:</span> ${chips}</div>`
           : "") +
@@ -7558,7 +7804,7 @@
         `once zoomed, <strong>drag</strong> the image to pan &middot; <strong>⤢</strong> fits the whole aerial &middot; ` +
         `<strong>▲◀▶▼</strong> shift the aerial frame 1 m per tap (changes what ground the photo covers &mdash; use when your yard is clipped on one side) &middot; ` +
         `<strong>↺↻</strong> turn the aerial to straighten an angled lot (1&deg; per tap, Shift for 5&deg;, double-click to reset &mdash; the compass shows north) &middot; ` +
-        `drag a <strong>marker</strong> to move a plant &middot; <strong>📐</strong> measures a canopy &middot; <strong>🗺️</strong> groups plants into a light area.` +
+        `drag a <strong>marker</strong> to move a plant &middot; <strong>📐</strong> measures a canopy &middot; <strong>🗺️</strong> groups plants into a light area &middot; <strong>💧</strong> tags a patch of ground (e.g. the grass) with the loop that waters it &mdash; then <strong>tap</strong> that area any time to see which loop drives it.` +
         `</p>` +
         `</div>`
       );
@@ -9515,6 +9761,13 @@
         // v1.47 — canopy measure: crosshair, drawn box + live area label.
         `.yard-map-wrap.measuring{cursor:crosshair}` +
         `.yard-map-wrap.measuring .yard-map-marker{pointer-events:none;opacity:0.6}` +
+        // v1.60 — loop regions: below the markers (z-index 2), inert to pointers.
+        `.zone-region{position:absolute;z-index:1;pointer-events:none;box-sizing:border-box;` +
+        `background:hsla(var(--zr-hue),70%,50%,0.20);border:2px solid hsla(var(--zr-hue),70%,55%,0.85);border-radius:4px}` +
+        `.zone-region.selected{background:hsla(var(--zr-hue),70%,50%,0.34);border-width:3px}` +
+        `.zone-region-labelwrap{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);white-space:nowrap}` +
+        `.zone-region-scheds{margin:6px 0 10px;padding-left:18px}` +
+        `.zone-region-scheds li{font-size:13px}` +
         `.canopy-box{position:absolute;z-index:6;border:2px dashed #ffd54f;background:rgba(255,213,79,0.18);pointer-events:none;box-sizing:border-box}` +
         `.canopy-box::after{content:attr(data-area);position:absolute;left:0;bottom:100%;margin-bottom:2px;background:rgba(0,0,0,0.7);color:#fff;font-size:11px;padding:1px 5px;border-radius:4px;white-space:nowrap}` +
         `.canopy-panel{margin-top:8px;font-size:13px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}` +
@@ -10097,9 +10350,11 @@
       "Dismiss all watering-advisor suggestions?": "Alle Vorschläge des Bewässerungsberaters verwerfen?",
       "Done": "Fertig",
       "Drag a box around a plant's canopy on the aerial to measure it. Canopies are read as an ellipse fit to the box.": "Ziehe einen Rahmen um die Kronenfläche einer Pflanze auf dem Luftbild, um sie zu messen. Kronenflächen werden als in den Rahmen eingepasste Ellipse gelesen.",
+      "Drag a box around the area — the grass, a bed — then pick the loop that waters it.": "Ziehen Sie einen Rahmen um die Fläche — Rasen oder Beet — und wählen Sie dann den Kreis, der sie bewässert.",
       "Drag a region around the plants that share a light spot — you'll name the area, and every marker inside joins it (one lux survey then covers them all).": "Ziehe eine Region um die Pflanzen, die sich einen Lichtplatz teilen — du benennst den Bereich, und jeder Marker darin tritt ihm bei (eine Lichtmessung deckt dann alle ab).",
       "Drag the map to pan · scroll or +/− to zoom in · drag a marker to reposition.": "Karte ziehen zum Verschieben · Scrollen oder +/− zum Zoomen · Marker ziehen zum Umplatzieren.",
       "Draw a box around a plant's canopy to measure its footprint from the aerial": "Zeichne einen Rahmen um die Kronenfläche einer Pflanze, um ihre Fläche aus dem Luftbild zu messen",
+      "Draw a patch of ground (e.g. the grass) and tag which loop waters it — then tap it any time to see what drives it": "Eine Fläche (z. B. den Rasen) einzeichnen und den Bewässerungskreis zuordnen — dann jederzeit antippen, um zu sehen, was sie versorgt",
       "Draw a region on the aerial to group the enclosed plants into a light area for the lux survey": "Zeichne eine Region auf dem Luftbild, um die eingeschlossenen Pflanzen zu einem Lichtbereich für die Lichtmessung zu gruppieren",
       "Drip GPH": "Tropfer-GPH",
       "Drip GPH must be between 0.1 and 50.": "Die Tropfer-GPH müssen zwischen 0,1 und 50 liegen.",
@@ -10144,7 +10399,9 @@
       "External model": "Externes Modell",
       "External model only": "Nur externes Modell",
       "External provider": "Externer Anbieter",
+      "Failed to remove the area: ": "Fläche konnte nicht entfernt werden: ",
       "Failed to save the aerial rotation: ": "Drehung des Luftbilds konnte nicht gespeichert werden: ",
+      "Failed to save the area: ": "Fläche konnte nicht gespeichert werden: ",
       "Fallback time": "Fallback-Zeit",
       "Fallback tries the local model first and only calls the external AI when the local one fails or can't identify the plant.": "Fallback versucht zuerst das lokale Modell und ruft die externe KI nur auf, wenn das lokale fehlschlägt oder die Pflanze nicht bestimmen kann.",
       "Feels (heat idx)": "Gefühlt (Hitzeindex)",
@@ -10288,6 +10545,7 @@
       "No runs match these filters.": "Keine Läufe entsprechen diesen Filtern.",
       "No runs scheduled": "Keine Läufe geplant",
       "No runs scheduled.": "Keine Läufe geplant.",
+      "No schedule waters this loop yet.": "Noch kein Zeitplan bewässert diesen Kreis.",
       "No schedules yet. Click \"+ Add Schedule\" to create one.": "Noch keine Zeitpläne. Klicke auf „+ Zeitplan hinzufügen“, um einen zu erstellen.",
       "No sensors bound — runtime is fixed at the scheduled duration.": "Keine Sensoren verbunden — die Laufzeit ist auf die geplante Dauer festgelegt.",
       "No sensors found in HA.": "Keine Sensoren in HA gefunden.",
@@ -10344,6 +10602,7 @@
       "Pick one or more rainfall sensors (accumulation today / yesterday / duration / intensity, etc.). The first checked sensor is used for the lockout calc; the others show on the Today banner. Check the boxes in your preferred priority order.": "Wähle einen oder mehrere Regensensoren (Menge heute / gestern / Dauer / Intensität usw.). Der erste angehakte Sensor wird für die Sperren-Berechnung verwendet; die anderen erscheinen im Heute-Banner. Hake die Kästchen in deiner bevorzugten Prioritätsreihenfolge an.",
       "Pick one or more soil-moisture sensors. If you pick multiple, choose how to combine their readings below.": "Wähle einen oder mehrere Bodenfeuchte-Sensoren. Wenn du mehrere wählst, lege unten fest, wie ihre Messwerte kombiniert werden.",
       "Pick the days this schedule fires. Defaults to Mon-Fri.": "Wähle die Tage, an denen dieser Zeitplan startet. Standard Mo-Fr.",
+      "Pick which loop waters this area.": "Wählen Sie, welcher Kreis diese Fläche bewässert.",
       "Pick which plant this canopy is for.": "Wähle aus, zu welcher Pflanze diese Kronenfläche gehört.",
       "Picks from themes installed in your HA (Settings → Themes). Applies to this panel; HA's main UI is unaffected.": "Wählt aus den in deinem HA installierten Designs (Einstellungen → Designs). Gilt für dieses Panel; die HA-Hauptoberfläche bleibt unberührt.",
       "Pl@ntNet API key": "Pl@ntNet-API-Schlüssel",
@@ -10382,6 +10641,7 @@
       "Refresh": "Aktualisieren",
       "Refresh aerial": "Luftbild aktualisieren",
       "Remove": "Entfernen",
+      "Remove this area": "Diese Fläche entfernen",
       "Remove this target": "Dieses Ziel entfernen",
       "Repeat every year (same date range each year)": "Jedes Jahr wiederholen (gleicher Datumsbereich jedes Jahr)",
       "Repeat every year needs both a Start date and an End date.": "Jährliche Wiederholung braucht sowohl ein Startdatum als auch ein Enddatum.",
@@ -10500,6 +10760,7 @@
       "Test connection": "Verbindung testen",
       "Test sent. If you don't see it, check your notify target in HA Settings → Devices & Services.": "Test gesendet. Wenn er nicht ankommt, prüfe dein Benachrichtigungsziel unter HA Einstellungen → Geräte & Dienste.",
       "Testing…": "Teste…",
+      "That region is too small to save — drag a box around the area you want.": "Diese Fläche ist zu klein zum Speichern — ziehen Sie einen Rahmen um den gewünschten Bereich.",
       "The date of the first run. Subsequent runs step by the interval.": "Das Datum des ersten Laufs. Weitere Läufe folgen im Intervall.",
       "The map defaults to Esri World Imagery, which is coarse at yard scale — it won't render sharper than ~0.3 m/px, so a small yard gets fetched tiny and upscaled. Many county assessors and city GIS offices publish much sharper aerials as a keyless ArcGIS export; paste that URL template here to use it instead.": "Die Karte verwendet standardmäßig Esri World Imagery, das auf Gartengröße grob ist — schärfer als ~0,3 m/px wird es nicht, ein kleiner Garten wird also winzig geladen und hochskaliert. Viele Kataster- und Stadt-GIS-Ämter veröffentlichen deutlich schärfere Luftbilder als schlüssellosen ArcGIS-Export; füge diese URL-Vorlage hier ein, um sie stattdessen zu verwenden.",
       "The panel failed to render. Check browser console for details.": "Das Panel konnte nicht dargestellt werden. Details stehen in der Browser-Konsole.",
@@ -10583,6 +10844,7 @@
       "custom": "Benutzerdefiniert",
       "drag": "ziehe",
       "drag a": "ziehe einen",
+      "drives this area": "versorgt diese Fläche",
       "e.g. 1": "z. B. 1",
       "e.g. 100": "z. B. 100",
       "e.g. 10000": "z. B. 10000",
@@ -10634,6 +10896,7 @@
       "— bind moisture sensor(s) per zone": "— Bodenfeuchte-Sensor(en) pro Zone verbinden",
       "— bind rain sensor, hot weather boost": "— Regensensor verbinden, Hitze-Boost",
       "— notify target, quiet hours": "— Benachrichtigungsziel, Ruhezeiten",
+      "— pick a loop —": "— Kreis wählen —",
       "— pick a plant —": "— Pflanze wählen —",
       "— pick a zone —": "— Zone wählen —",
       "— see the README for step-by-step.": "— siehe README für die Schritt-für-Schritt-Anleitung.",
@@ -10656,6 +10919,7 @@
       "🌱 New Planting": "🌱 Neupflanzung",
       "👁️ Show in Today": "👁️ In Heute anzeigen",
       "💧 Irrigation": "💧 Bewässerung",
+      "💧 Tag loop area": "💧 Kreis-Bereich markieren",
       "💧 Top-up": "💧 Zusatzlauf für",
       "💬 Ask the scheduler": "💬 Frag den Planer",
       "📐 Measure canopy": "📐 Kronenfläche messen",
