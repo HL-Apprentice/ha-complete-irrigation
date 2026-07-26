@@ -4,6 +4,16 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.60.3 — 2026-07-26 — patch
+
+**Plant names stay legible on a zoomed map.**
+
+- Marker labels are a little larger (12 px) on a stronger plate with a text
+  shadow, so a name reads clearly against a pale driveway or bright lawn.
+  Combined with v1.60.2's counter-scaling they now hold a constant ~16 px on
+  screen at every zoom instead of being magnified with the photo — measured at
+  1x/2x/4x/8x, identical each time.
+
 ## v1.60.2 — 2026-07-26 — patch
 
 **Zooming in now actually helps you place a plant.**

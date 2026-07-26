@@ -72,7 +72,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.60.2";
+  const PANEL_VERSION = "v1.60.3";
   // v1.41 — external plant-ID providers (mirrors llm_client.PROVIDERS). URL is
   // auto-filled when a provider is picked; model is an editable hint. All speak
   // the same OpenAI /v1/chat/completions shape, so one settings form covers them.
@@ -9802,7 +9802,7 @@
         `.yard-map-marker{position:absolute;transform-origin:50% 8px;transform:translate(-50%,-8px);background:none;border:none;padding:0;cursor:grab;display:flex;flex-direction:column;align-items:center;gap:2px;z-index:2}` +
         `.yard-map-marker.dragging{cursor:grabbing;z-index:5}` +
         `.yard-map-dot{width:16px;height:16px;border-radius:50%;background:#e53935;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.5)}` +
-        `.yard-map-label{font-size:11px;font-weight:600;color:#fff;background:rgba(0,0,0,0.55);padding:1px 5px;border-radius:6px;white-space:nowrap;max-width:120px;overflow:hidden;text-overflow:ellipsis}` +
+        `.yard-map-label{font-size:12px;font-weight:600;color:#fff;background:rgba(0,0,0,0.72);text-shadow:0 1px 2px rgba(0,0,0,0.9);padding:1px 6px;border-radius:6px;white-space:nowrap;max-width:140px;overflow:hidden;text-overflow:ellipsis}` +
         `.yard-map-unplaced{margin-top:10px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}` +
         `.yard-chip{font-size:12px;padding:3px 9px;border-radius:12px;border:1px solid var(--ci-border,#444);background:var(--ci-card-2,#2a2a2a);color:var(--ci-text,#eee);cursor:pointer}` +
         `.yard-map-hint{margin:8px 0 0;font-size:12px}` +
