@@ -4,6 +4,25 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.60.2 — 2026-07-26 — patch
+
+**Zooming in now actually helps you place a plant.**
+
+- **Markers hold a constant screen size.** They live inside the zoomed layer, so
+  a 16 px dot was drawn at 16 x zoom px and kept covering the SAME patch of
+  ground however far you zoomed — which is why zooming in never made placement
+  more precise. The dot and its name now counter-scale by 1/zoom: still a
+  comfortable 16 px to see and grab, but at 4x it hides a quarter of the ground
+  it used to (measured: 0.73 m of ground at 1x down to 0.09 m at 8x). Loop-area
+  labels do the same instead of ballooning.
+- **The dot now sits ON the plant's stored position.** The marker is a dot with
+  its name beneath it, and the whole block was centred on the stored point — so
+  the dot itself drew about 8 px ABOVE it (~36 cm of real ground at a 40 m map,
+  measured, not estimated). It is now anchored on the dot, so what you see is
+  where the plant is. **Existing placements are unchanged in the data**, but
+  will appear to shift down slightly — that is the marker moving onto the point
+  it always described.
+
 ## v1.60.1 — 2026-07-25 — patch
 
 **Fix: v1.60.0 failed hassfest, so HACS would not have accepted it.**

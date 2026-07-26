@@ -72,7 +72,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.60.1";
+  const PANEL_VERSION = "v1.60.2";
   // v1.41 — external plant-ID providers (mirrors llm_client.PROVIDERS). URL is
   // auto-filled when a provider is picked; model is an editable hint. All speak
   // the same OpenAI /v1/chat/completions shape, so one settings form covers them.
@@ -3565,6 +3565,16 @@
       return { x: px / w, y: py / h };
     }
 
+    /** v1.60.2 — markers ride INSIDE the zoomed layer, so a 16 px dot draws at
+     * 16*zoom px and keeps covering the SAME patch of ground however far you zoom
+     * in — which is why zooming never helped you place precisely. Counter-scaling
+     * by 1/zoom holds it at a constant SCREEN size, so at 4x it hides a quarter of
+     * the ground it used to. */
+    _markerCounterScale() {
+      const s = Number(this._mapView?.scale);
+      return Number.isFinite(s) && s > 0 ? 1 / s : 1;
+    }
+
     /** v1.59 — stored display rotation of the aerial, in degrees clockwise. */
     _mapRotationDeg() {
       const d = Number(this._yardMap?.rotation_deg);
@@ -3610,6 +3620,22 @@
       if (!view) return;
       const v = this._mapView;
       view.style.transform = `translate(${v.tx}px, ${v.ty}px) scale(${v.scale})`;
+      this._applyMarkerScale();
+    }
+
+    /** v1.60.2 — hold markers + region labels at a constant screen size while
+     * zooming. Applied in place because the wheel/pinch path deliberately never
+     * re-renders (a rebuild mid-gesture would kill the drag). */
+    _applyMarkerScale() {
+      const root = this.shadowRoot;
+      if (!root) return;
+      const k = this._markerCounterScale().toFixed(4);
+      root
+        .querySelectorAll(".yard-map-marker")
+        .forEach((el) => (el.style.transform = `translate(-50%,-8px) scale(${k})`));
+      root
+        .querySelectorAll(".zone-region-labelwrap")
+        .forEach((el) => (el.style.transform = `translate(-50%,-50%) scale(${k})`));
     }
 
     /** v1.59 — push the current rotation into the DOM without a re-render. */
@@ -7570,6 +7596,7 @@
       // v1.59 — display rotation of the aerial; needed here because the marker
       // labels counter-rotate by it (declared before first use).
       const rotDeg = this._mapRotationDeg();
+      const mScale = this._markerCounterScale().toFixed(4);
       // v1.60 — saved loop regions. Inside the rotation layer so they stay glued
       // to the ground, BEFORE the markers so a big lawn can't bury 49 plant dots,
       // and pointer-events:none so they never steal a drag or a marker grab.
@@ -7589,7 +7616,7 @@
             // The label sits in a wrapper that owns the centring transform:
             // _applyMapRotation overwrites .yard-map-label's transform outright,
             // so a translate() on the label itself would be wiped on every turn.
-            `<span class="zone-region-labelwrap">` +
+            `<span class="zone-region-labelwrap" style="transform:translate(-50%,-50%) scale(${mScale})">` +
             `<span class="yard-map-label"${rotDeg ? ` style="transform:rotate(${-rotDeg}deg)"` : ""}>` +
             `${escapeHtml(this._zoneName(r.zone_entity_id))}</span></span>` +
             `</div>`
@@ -7603,7 +7630,7 @@
               p.id
             )}" style="left:${(p.map_x * 100).toFixed(3)}%;top:${(p.map_y * 100).toFixed(
               3
-            )}%" title="${escapeAttr(p.name)} — drag to reposition">` +
+            )}%;transform:translate(-50%,-8px) scale(${mScale})" title="${escapeAttr(p.name)} — drag to reposition">` +
             `<span class="yard-map-dot"></span>` +
             // v1.59 — markers ride inside the rotated layer (so they keep their
             // true ground position for free), which would tip the text too;
@@ -9772,7 +9799,7 @@
         `.canopy-box::after{content:attr(data-area);position:absolute;left:0;bottom:100%;margin-bottom:2px;background:rgba(0,0,0,0.7);color:#fff;font-size:11px;padding:1px 5px;border-radius:4px;white-space:nowrap}` +
         `.canopy-panel{margin-top:8px;font-size:13px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}` +
         `.canopy-panel select{font-size:13px;padding:4px 6px}` +
-        `.yard-map-marker{position:absolute;transform:translate(-50%,-50%);background:none;border:none;padding:0;cursor:grab;display:flex;flex-direction:column;align-items:center;gap:2px;z-index:2}` +
+        `.yard-map-marker{position:absolute;transform-origin:50% 8px;transform:translate(-50%,-8px);background:none;border:none;padding:0;cursor:grab;display:flex;flex-direction:column;align-items:center;gap:2px;z-index:2}` +
         `.yard-map-marker.dragging{cursor:grabbing;z-index:5}` +
         `.yard-map-dot{width:16px;height:16px;border-radius:50%;background:#e53935;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.5)}` +
         `.yard-map-label{font-size:11px;font-weight:600;color:#fff;background:rgba(0,0,0,0.55);padding:1px 5px;border-radius:6px;white-space:nowrap;max-width:120px;overflow:hidden;text-overflow:ellipsis}` +
