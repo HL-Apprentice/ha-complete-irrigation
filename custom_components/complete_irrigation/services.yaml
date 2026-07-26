@@ -1064,30 +1064,52 @@ add_zone_region:
         entity:
           domain: switch
     x0:
-      name: Left edge
-      description: Fraction across the map (0-1) of the box's left edge.
+      name: Region X0 (0-1)
+      description: Fraction across the map of the box's left edge.
       required: true
-      selector: {number: {min: 0, max: 1, step: 0.0001, mode: box}}
+      selector:
+        number:
+          min: 0
+          max: 1
+          step: any
+          mode: box
     y0:
-      name: Top edge
-      description: Fraction down the map (0-1) of the box's top edge.
+      name: Region Y0 (0-1)
+      description: Fraction down the map of the box's top edge.
       required: true
-      selector: {number: {min: 0, max: 1, step: 0.0001, mode: box}}
+      selector:
+        number:
+          min: 0
+          max: 1
+          step: any
+          mode: box
     x1:
-      name: Right edge
-      description: Fraction across the map (0-1) of the box's right edge.
+      name: Region X1 (0-1)
+      description: Fraction across the map of the box's right edge.
       required: true
-      selector: {number: {min: 0, max: 1, step: 0.0001, mode: box}}
+      selector:
+        number:
+          min: 0
+          max: 1
+          step: any
+          mode: box
     y1:
-      name: Bottom edge
-      description: Fraction down the map (0-1) of the box's bottom edge.
+      name: Region Y1 (0-1)
+      description: Fraction down the map of the box's bottom edge.
       required: true
-      selector: {number: {min: 0, max: 1, step: 0.0001, mode: box}}
+      selector:
+        number:
+          min: 0
+          max: 1
+          step: any
+          mode: box
     label:
-      name: Label (optional)
+      name: Label
       description: An optional name for the area, e.g. "Front lawn strip".
       required: false
-      selector: {text: null}
+      example: "Front lawn strip"
+      selector:
+        text:
 
 delete_zone_region:
   name: Remove a loop area
@@ -1097,7 +1119,8 @@ delete_zone_region:
       name: Region id
       description: The id of the area to remove.
       required: true
-      selector: {text: null}
+      selector:
+        text:
 
 assign_area_region:
   name: Assign light area by map region

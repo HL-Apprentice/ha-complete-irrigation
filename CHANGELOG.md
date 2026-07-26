@@ -4,6 +4,24 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.60.1 — 2026-07-25 — patch
+
+**Fix: v1.60.0 failed hassfest, so HACS would not have accepted it.**
+
+- The new `add_zone_region` service declared `step: 0.0001` on its number
+  selectors. HA's selector schema rejects a step that small, which cascaded
+  into a misleading "required key not provided ... ['target']" and failed the
+  hassfest job. Switched to `step: any` (what every other numeric field in this
+  integration already uses) and rewrote both new service blocks in the same
+  block style as their siblings. No behaviour change — the services, panel and
+  stored data are identical.
+- **Closed the gap that let it through:** `scripts/check.sh` never validated
+  services.yaml, so a selector HA rejects passed locally and only broke after
+  the tag was pushed. Every selector in services.yaml is now checked against
+  HA's own selector helper as part of the normal test suite (skipped on the
+  CI-parity pass where HA isn't installed), including a guard that the exact
+  rejected shape stays rejected.
+
 ## v1.60.0 — 2026-07-25 — minor
 
 **Tag a patch of ground with the loop that waters it — then tap it to ask
