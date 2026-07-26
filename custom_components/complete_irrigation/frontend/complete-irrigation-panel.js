@@ -72,7 +72,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.60.3";
+  const PANEL_VERSION = "v1.60.4";
   // v1.41 — external plant-ID providers (mirrors llm_client.PROVIDERS). URL is
   // auto-filled when a provider is picked; model is an editable hint. All speak
   // the same OpenAI /v1/chat/completions shape, so one settings form covers them.
@@ -4243,10 +4243,13 @@
     }
 
     _zoneName(entityId) {
-      const state = this._hass?.states?.[entityId];
+      // v1.60.4 — coerce first: a non-string argument used to throw
+      // (entityId.replace is not a function) and take the ENTIRE panel render
+      // down with it, which is a wildly disproportionate failure for a label.
+      const id = typeof entityId === "string" ? entityId : String(entityId?.id ?? entityId ?? "");
+      const state = this._hass?.states?.[id];
       return (
-        state?.attributes?.friendly_name ||
-        entityId.replace(/^switch\./, "").replace(/_/g, " ")
+        state?.attributes?.friendly_name || id.replace(/^switch\./, "").replace(/_/g, " ")
       );
     }
 
@@ -7712,8 +7715,8 @@
           zoneOpts
             .map(
               (z) =>
-                `<option value="${escapeAttr(z)}"${d.zone === z ? " selected" : ""}>` +
-                `${escapeHtml(this._zoneName(z))}</option>`
+                `<option value="${escapeAttr(z.id)}"${d.zone === z.id ? " selected" : ""}>` +
+                `${escapeHtml(z.name || this._zoneName(z.id))}</option>`
             )
             .join("") +
           `</select> ` +

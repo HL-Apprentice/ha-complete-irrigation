@@ -4,6 +4,22 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.60.4 — 2026-07-26 — patch
+
+**Fix: "Irrigation panel error" the moment you finished drawing a loop area.**
+
+- Releasing the mouse to finish a **Tag loop area** drag crashed the whole panel
+  in every browser. The loop picker was built from `_zonePickOptions()`, which
+  returns `{id, name}` objects, but each entry was passed to `_zoneName()` as if
+  it were an entity-id string — `entityId.replace` on an object throws, and the
+  exception took the entire render down. The picker now uses the id and name
+  properly, so the panel shows "Area ≈ N sq ft. Watered by [loop]" as intended.
+  This made the feature unusable since v1.60.0; nothing was ever saved wrong,
+  the render simply died before you could choose a loop.
+- `_zoneName()` no longer throws on an unexpected argument. It is called from a
+  dozen places, and taking the whole panel down over a label is a wildly
+  disproportionate failure — it now coerces and degrades to a readable name.
+
 ## v1.60.3 — 2026-07-26 — patch
 
 **Plant names stay legible on a zoomed map.**
