@@ -4,6 +4,26 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.60.5 — 2026-07-26 — patch
+
+**Crisper marker text when zoomed, and smoother panning.**
+
+- Both map transform layers carried `will-change: transform`, which promotes them
+  to composited layers: the browser rasterises the subtree ONCE and then magnifies
+  that bitmap. Marker names are laid out at 12px/zoom inside those layers (that is
+  what keeps them a constant size on screen), so magnifying the bitmap made the
+  text soft — worst on high-DPI displays and in Safari. Dropping the hint lets the
+  browser re-rasterise at the composited scale, so labels stay sharp at any zoom.
+- Panning re-wrote every marker's transform on each pointer move, even though only
+  a ZOOM changes the counter-scale. Those writes are now skipped unless the scale
+  actually changed, which takes ~35 style writes per frame out of a drag.
+
+**Note on the aerial itself:** zooming past 1x magnifies a fixed-resolution photo
+and cannot add detail — at a 40 m span the image holds ~38 px per metre, so 8x is
+pure magnification. For genuinely sharper ground, use the **Zoom** dropdown (which
+re-fetches the aerial at a smaller span) rather than scroll-zoom, or point the map
+at a higher-resolution source via the aerial URL template.
+
 ## v1.60.4 — 2026-07-26 — patch
 
 **Fix: "Irrigation panel error" the moment you finished drawing a loop area.**
