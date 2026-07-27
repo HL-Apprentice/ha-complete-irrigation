@@ -72,7 +72,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.60.4";
+  const PANEL_VERSION = "v1.60.5";
   // v1.41 — external plant-ID providers (mirrors llm_client.PROVIDERS). URL is
   // auto-filled when a provider is picked; model is an editable hint. All speak
   // the same OpenAI /v1/chat/completions shape, so one settings form covers them.
@@ -3626,16 +3626,25 @@
     /** v1.60.2 — hold markers + region labels at a constant screen size while
      * zooming. Applied in place because the wheel/pinch path deliberately never
      * re-renders (a rebuild mid-gesture would kill the drag). */
-    _applyMarkerScale() {
+    _applyMarkerScale(force) {
       const root = this.shadowRoot;
       if (!root) return;
       const k = this._markerCounterScale().toFixed(4);
+      // Panning calls this on every pointermove but only ZOOM changes the
+      // counter-scale — skip the 35+ style writes when nothing would differ.
+      if (!force && k === this._lastMarkerScale) return;
+      this._lastMarkerScale = k;
       root
         .querySelectorAll(".yard-map-marker")
         .forEach((el) => (el.style.transform = `translate(-50%,-8px) scale(${k})`));
       root
         .querySelectorAll(".zone-region-labelwrap")
         .forEach((el) => (el.style.transform = `translate(-50%,-50%) scale(${k})`));
+    }
+
+    /** Nodes are rebuilt by a render, so the scale cache must be invalidated. */
+    _invalidateMarkerScale() {
+      this._lastMarkerScale = null;
     }
 
     /** v1.59 — push the current rotation into the DOM without a re-render. */
@@ -4319,6 +4328,7 @@
         (this._lightboxSrc ? this._renderPhotoLightbox() : "") +
         (this._bannerModalOpen ? this._renderBannerSettingsModal() : "") +
         (this._establishmentModalOpen ? this._renderEstablishmentModal() : "");
+      this._invalidateMarkerScale(); // fresh nodes -> re-apply the counter-scale
       // v1.58 — translate the freshly-rendered tree to the HA user's language.
       // Defensive: a translation error must never break the render (English stays).
       try {
@@ -9766,7 +9776,10 @@
         `.yard-map-wrap{position:relative;width:100%;border-radius:8px;overflow:hidden;background:#1b1b1b;touch-action:none;user-select:none;cursor:grab;overscroll-behavior:contain}` +
         `.yard-map-wrap.panning{cursor:grabbing}` +
         // v1.59 — aerial rotation layer + compass.
-        `.yard-map-rot{position:absolute;inset:0;will-change:transform}` +
+        // v1.60.5 — NO will-change here: promoting the layer makes the browser
+        // rasterise once and scale the bitmap, which blurs the marker text.
+        // Without it the subtree is re-rasterised at the composited scale.
+        `.yard-map-rot{position:absolute;inset:0}` +
         `.map-compass{position:absolute;top:8px;left:8px;width:46px;height:46px;border-radius:50%;` +
         `background:rgba(20,20,20,0.55);border:1px solid rgba(255,255,255,0.35);z-index:4;pointer-events:none;` +
         `backdrop-filter:blur(2px)}` +
@@ -9780,7 +9793,7 @@
         `.map-compass-w{left:4px;top:50%;margin-top:-4px}` +
         `.map-compass-e{right:4px;top:50%;margin-top:-4px}` +
         // v1.48 — the transformed layer that pans/zooms (image + markers + overlays).
-        `.yard-map-view{position:absolute;inset:0;will-change:transform}` +
+        `.yard-map-view{position:absolute;inset:0}` +
         `.yard-map-img{display:block;width:100%;height:100%;object-fit:cover;pointer-events:none}` +
         // v1.48 — zoom controls (fixed corner, outside the transformed layer).
         `.map-zoom-btns{position:absolute;z-index:5;right:8px;bottom:8px;display:flex;flex-direction:column;gap:4px;align-items:flex-end}` +
