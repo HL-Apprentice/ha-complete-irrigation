@@ -4,6 +4,26 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.61.0 — 2026-07-27 — minor
+
+**You can now push back on a single advisor suggestion — and it remembers.**
+
+- The advisor card offered **Apply** or **Dismiss all**, so there was no way to
+  reject just one suggestion, and no way to say why. Each item now has
+  **✕ Not this** beside **✓ Apply**, which declines that item alone and opens a
+  one-line box: *"Why not? e.g. I water the trees late on purpose"*.
+- **What you type becomes standing guidance.** Declining on its own would not
+  help — the nightly run has no memory and would propose the very same thing
+  again tomorrow. Your note is stored and handed to every later run as an
+  instruction that OUTRANKS the model's optimisation instincts, explicitly
+  telling it not to re-propose what you ruled out.
+- Guidance is fed into the built-in scheduler immediately — both the nightly
+  conflict review and **Ask the scheduler** — and is exposed in the config the
+  external advisor job reads, so a local-model advisor can honour it too.
+- Bounded to the 20 most recent notes (each one is pasted into every prompt),
+  with `add_advisor_preference` / `delete_advisor_preference` services to manage
+  them. 7 new tests.
+
 ## v1.60.5 — 2026-07-26 — patch
 
 **Crisper marker text when zoomed, and smoother panning.**
