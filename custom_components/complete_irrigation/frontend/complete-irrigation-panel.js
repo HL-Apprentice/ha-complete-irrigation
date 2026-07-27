@@ -72,7 +72,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.60.5";
+  const PANEL_VERSION = "v1.61.0";
   // v1.41 — external plant-ID providers (mirrors llm_client.PROVIDERS). URL is
   // auto-filled when a provider is picked; model is an editable hint. All speak
   // the same OpenAI /v1/chat/completions shape, so one settings form covers them.
@@ -600,6 +600,8 @@
       // was applied this session; reset when a NEW advice blob arrives.
       this._advisorApplied = {};
       this._advisorAppliedAt = null; // proposed_at the marks belong to
+      this._advisorDeclined = {}; // v1.61 — idx -> true once declined this session
+      this._advisorFeedbackIdx = null; // v1.61 — which item's 'why not' box is open
       // v1.56 — same per-item "applied" marks for the schedule-fix card.
       this._schedAdviceApplied = {};
       this._schedAdviceAppliedAt = null;
@@ -1084,6 +1086,11 @@
         // v1.39 — watering advisor.
         if (action === "advice-apply")
           return this._applyAdviceItem(parseInt(node.dataset.idx, 10));
+        if (action === "advice-decline") {
+          this._advisorFeedbackIdx = parseInt(node.dataset.idx, 10);
+          return this._renderNow();
+        }
+        if (action === "advice-why-cancel") return this._declineAdviceItem(null);
         if (action === "advice-dismiss") return this._dismissAdvice();
         // v1.56 — schedule-fix proposals.
         if (action === "apply-schedule-advice")
@@ -1234,6 +1241,12 @@
       if (e.target?.dataset?.form === "split-defaults") {
         e.preventDefault();
         this._saveSplitDefaults(e.target);
+        return;
+      }
+      if (e.target?.dataset?.form === "advice-why") {
+        e.preventDefault();
+        const why = e.target.querySelector(".advice-why-input")?.value || "";
+        this._declineAdviceItem(why);
         return;
       }
       if (e.target?.dataset?.form === "schedule-chat") {
@@ -2358,7 +2371,23 @@
             `<span class="advice-text">${text}</span>` +
             (applied
               ? `<span class="advice-done">✓ Applied</span>`
-              : `<button class="btn btn-small" type="button" data-action="advice-apply" data-idx="${idx}">✓ Apply</button>`) +
+              : this._advisorDeclined[idx]
+              ? `<span class="advice-done advice-declined">✕ Not this</span>`
+              : `<span class="advice-actions">` +
+                `<button class="btn btn-small" type="button" data-action="advice-apply" data-idx="${idx}">✓ Apply</button>` +
+                // v1.61 — the missing third option. Apply/Dismiss-all left no way
+                // to reject ONE suggestion, and no way to say why — so the next
+                // nightly run proposed the same thing again.
+                `<button class="btn btn-small" type="button" data-action="advice-decline" data-idx="${idx}" title="Reject just this one and tell the advisor why">✕ Not this</button>` +
+                `</span>`) +
+            (this._advisorFeedbackIdx === idx
+              ? `<form class="advice-why" data-form="advice-why" data-idx="${idx}">` +
+                `<input class="advice-why-input" type="text" autocomplete="off" ` +
+                `placeholder="Why not? e.g. I water the trees late on purpose" />` +
+                `<button class="btn btn-small btn-primary" type="submit">Remember this</button>` +
+                `<button class="btn btn-small" type="button" data-action="advice-why-cancel">Skip</button>` +
+                `</form>`
+              : "") +
             `</li>`
           );
         })
@@ -2386,6 +2415,31 @@
         `validated services you use manually.</span>` +
         `</section>`
       );
+    }
+
+    async _declineAdviceItem(why) {
+      // v1.61 — reject ONE suggestion, and optionally tell the advisor why so it
+      // stops proposing it. The reason is stored as standing guidance and handed
+      // to every later run; without that the nightly job has no memory and the
+      // same suggestion returns tomorrow.
+      const idx = this._advisorFeedbackIdx;
+      this._advisorFeedbackIdx = null;
+      if (!Number.isFinite(idx)) return this._renderNow();
+      this._advisorDeclined[idx] = true;
+      const text = String(why || "").trim();
+      if (text) {
+        const it = (this._config?.watering_advice?.items || [])[idx];
+        try {
+          await this._hass.callService("complete_irrigation", "add_advisor_preference", {
+            text: text.slice(0, 240),
+            about: it ? String(it.type || "") : "",
+          });
+          await this._fetchConfig();
+        } catch (err) {
+          alert("Couldn't save that preference: " + (err?.message || err));
+        }
+      }
+      this._renderNow();
     }
 
     async _applyAdviceItem(idx) {
@@ -9710,7 +9764,11 @@
         `.advice-text{flex:1;min-width:200px;color:var(--ci-text)}` +
         `.advice-done{font-size:13px;font-weight:600;color:#2e7d32}` +
         `.advice-meta{display:block;margin-top:8px;font-size:13px;color:var(--ci-text-2)}` +
-        `.advice-foot{display:block;margin-top:4px;font-size:13px;color:var(--ci-text-2)}` +
+        `.advice-actions{display:inline-flex;gap:6px;flex-shrink:0}` +
+        `.advice-declined{opacity:0.75}` +
+        `.advice-why{display:flex;gap:6px;align-items:center;margin:6px 0 2px;flex-wrap:wrap}` +
+        `.advice-why-input{flex:1;min-width:200px}` +
+                `.advice-foot{display:block;margin-top:4px;font-size:13px;color:var(--ci-text-2)}` +
         `.yard-installed-row td{font-size:13px;color:var(--ci-text-2)}` +
         `.yard-h3{margin:18px 0 8px;font-size:14px}` +
         `.yard-table-wrap{overflow-x:auto}` +

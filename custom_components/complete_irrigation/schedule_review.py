@@ -95,6 +95,26 @@ def augment_chat_reply(reply: str, requested: int, validated: int) -> str:
     return f"{base}\n\n{note}" if base else note
 
 
+def user_preferences_block(coord) -> str:
+    """v1.61 — the user's standing guidance, rendered for a prompt.
+
+    Declining a suggestion has no memory of its own; without this the next run
+    proposes the same thing again. These are the user's own words and OUTRANK
+    the model's optimisation instincts — "I water the trees late on purpose" is
+    not a problem to be solved.
+    """
+    prefs = coord.config.get("advisor_preferences") or []
+    lines = [str(p.get("text", "")).strip() for p in prefs if isinstance(p, dict)]
+    lines = [ln for ln in lines if ln][-20:]
+    if not lines:
+        return ""
+    body = "\n".join(f"- {ln}" for ln in lines)
+    return (
+        "\n\nTHE USER HAS TOLD YOU (standing instructions - follow these even when "
+        "they look sub-optimal; do NOT re-propose anything they rule out):\n" + body
+    )
+
+
 async def schedule_chat(hass, coord, message: str) -> dict[str, Any]:
     """Propose-only chat with the scheduling LLM. Returns {"reply", "proposed"}: a
     conversational answer plus a count of any change proposals, which are validated
@@ -119,6 +139,7 @@ async def schedule_chat(hass, coord, message: str) -> dict[str, Any]:
             }
         sched_text, by_id = _schedule_context(coord)
         prompt = _CHAT_PROMPT.replace("{SCHEDULES}", sched_text).replace("{MESSAGE}", msg)
+        prompt += user_preferences_block(coord)
         session = async_get_clientsession(hass)
         result = await call_chat(
             session,
@@ -277,6 +298,7 @@ async def _propose(hass, coord, conflict_lines: list[str]) -> None:
     prompt = _PROMPT.replace("{SCHEDULES}", sched_text).replace(
         "{CONFLICTS}", "\n".join(f"- {c}" for c in conflict_lines) or "(none)"
     )
+    prompt += user_preferences_block(coord)
     session = async_get_clientsession(hass)
     result = await call_chat(
         session,

@@ -129,6 +129,8 @@ SERVICE_RESEARCH_PLANT_SPECIES = "research_plant_species"  # v1.40.9 — NAME ->
 SERVICE_ADD_PLANT_FROM_PHOTO = "add_plant_from_photo"  # v1.38 — photo-first creation
 SERVICE_PROPOSE_WATERING_ADVICE = "propose_watering_advice"  # v1.39 — LLM advisor
 SERVICE_DISMISS_WATERING_ADVICE = "dismiss_watering_advice"
+SERVICE_ADD_ADVISOR_PREFERENCE = "add_advisor_preference"  # v1.61 — standing guidance
+SERVICE_DELETE_ADVISOR_PREFERENCE = "delete_advisor_preference"  # v1.61
 SERVICE_DISMISS_SCHEDULE_ADVICE = "dismiss_schedule_advice"  # v1.56 — clear a schedule proposal
 SERVICE_SPLIT_SCHEDULE = "split_schedule"  # v1.56 — actuate an approved split into timed parts
 SERVICE_TEST_VISION_ENDPOINT = "test_vision_endpoint"  # v1.39.1 — connectivity probe
@@ -646,6 +648,22 @@ _ADD_ZONE_REGION_SCHEMA = vol.Schema(
 
 _DELETE_ZONE_REGION_SCHEMA = vol.Schema({vol.Required("region_id"): cv.string})
 
+_ADD_ADVISOR_PREFERENCE_SCHEMA = vol.Schema(
+    {
+        # What the user wants the advisor to respect from now on, in their own
+        # words ("never move Trees earlier - they are watered late on purpose").
+        vol.Required("text"): vol.All(cv.string, vol.Length(min=1, max=240), _no_control_chars),
+        # Optional breadcrumb: the suggestion that prompted it, for context.
+        vol.Optional("about", default=""): vol.All(
+            cv.string, vol.Length(max=240), _no_control_chars
+        ),
+    }
+)
+
+_DELETE_ADVISOR_PREFERENCE_SCHEMA = vol.Schema(
+    {vol.Required("index"): vol.All(vol.Coerce(int), vol.Range(min=0, max=99))}
+)
+
 _UPDATE_PLANT_SCHEMA = vol.Schema(
     {
         vol.Required("plant_id"): cv.string,
@@ -706,6 +724,7 @@ _SET_YARD_MAP_SCHEMA = vol.Schema(
 # unplaced — per the locked workflow, GPS places ONCE; selection (plant_id) owns
 # identity on every update, manual drag owns position.
 _MAX_PHOTO_B64 = 12_000_000  # ~9 MB image; the panel sends much smaller (downsized)
+_MAX_ADVISOR_PREFERENCES = 20  # v1.61 — bounded: every one is pasted into the prompt
 _MAX_PHOTOS_PER_PLANT = 24
 _ADD_PLANT_PHOTO_SCHEMA = vol.Schema(
     {
@@ -3322,6 +3341,53 @@ async def _async_register_services(hass: HomeAssistant) -> None:
                 event_type="watering_advice",
             )
 
+    async def handle_add_advisor_preference(call: ServiceCall) -> None:
+        """v1.61 — record standing guidance for the advisor.
+
+        Declining a suggestion is not enough on its own: the nightly run has no
+        memory, so it would propose the very same thing again tomorrow. These
+        preferences persist and are handed to every later run, which is what
+        makes "no, I water the trees late on purpose" actually stick.
+        """
+        if not await _require_admin(hass, call):
+            return
+        data = _ADD_ADVISOR_PREFERENCE_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None:
+            return
+        from homeassistant.util import dt as dt_util
+
+        prefs = list(coord.config.get("advisor_preferences") or [])
+        prefs.append(
+            {
+                "text": data["text"].strip(),
+                "about": data.get("about", "").strip(),
+                "at": dt_util.utcnow().isoformat(),
+            }
+        )
+        # Bounded: this text is pasted into every advisor prompt, so it must not
+        # grow without limit. Newest guidance wins.
+        coord.config["advisor_preferences"] = prefs[-_MAX_ADVISOR_PREFERENCES:]
+        await coord.async_save_config()
+        _LOGGER.info(
+            "advisor preference recorded (%d stored)",
+            len(coord.config["advisor_preferences"]),
+        )
+
+    async def handle_delete_advisor_preference(call: ServiceCall) -> None:
+        if not await _require_admin(hass, call):
+            return
+        data = _DELETE_ADVISOR_PREFERENCE_SCHEMA(dict(call.data))
+        coord = _find_coordinator(hass)
+        if coord is None:
+            return
+        prefs = list(coord.config.get("advisor_preferences") or [])
+        i = int(data["index"])
+        if 0 <= i < len(prefs):
+            prefs.pop(i)
+            coord.config["advisor_preferences"] = prefs
+            await coord.async_save_config()
+
     async def handle_dismiss_watering_advice(call: ServiceCall) -> None:
         if not await _require_admin(hass, call):
             return
@@ -3836,6 +3902,18 @@ async def _async_register_services(hass: HomeAssistant) -> None:
     )
     hass.services.async_register(
         DOMAIN, SERVICE_UPDATE_PLANT, handle_update_plant, schema=_UPDATE_PLANT_SCHEMA
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_ADD_ADVISOR_PREFERENCE,
+        handle_add_advisor_preference,
+        schema=_ADD_ADVISOR_PREFERENCE_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_DELETE_ADVISOR_PREFERENCE,
+        handle_delete_advisor_preference,
+        schema=_DELETE_ADVISOR_PREFERENCE_SCHEMA,
     )
     hass.services.async_register(
         DOMAIN, SERVICE_ADD_ZONE_REGION, handle_add_zone_region, schema=_ADD_ZONE_REGION_SCHEMA
