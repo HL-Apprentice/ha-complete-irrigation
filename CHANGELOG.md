@@ -4,6 +4,29 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.62.0 — 2026-07-27 — minor
+
+**The frontend is now actually verified, and CI runs the whole test suite.**
+
+An honest audit of the project turned up two holes in the safety net itself:
+
+- **The panel had NO automated check of any kind** — not unit tests, not even a
+  syntax parse, in either `scripts/check.sh` or CI. That is ~11k lines, half the
+  shipped surface, and it is exactly where the recent user-visible regressions
+  landed (v1.60.4 took the whole panel down with a render-time TypeError).
+  Fixed: the panel's pure helpers are now exported for testing (inert in a
+  browser — `module` is undefined there), and **20 unit tests** cover escaping,
+  rotation geometry, EXIF-GPS decoding and i18n substitution. Both a `node
+  --check` and those tests now run in `check.sh` **and** in CI.
+- **CI was only running 764 of the 1,079 tests.** Without Home Assistant
+  installed, 315 tests are skipped at collection — so a third of the suite never
+  ran on any release, while the badge said green. Fixed: a new
+  `Unit tests (with Home Assistant)` job installs HA and runs the full suite.
+  The original no-HA job stays as the import guard it was built to be.
+
+No behaviour changes — this release is entirely about being able to catch the
+next regression before you do.
+
 ## v1.61.0 — 2026-07-27 — minor
 
 **You can now push back on a single advisor suggestion — and it remembers.**
