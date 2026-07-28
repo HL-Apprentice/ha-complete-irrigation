@@ -72,7 +72,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.61.0";
+  const PANEL_VERSION = "v1.62.0";
   // v1.41 — external plant-ID providers (mirrors llm_client.PROVIDERS). URL is
   // auto-filled when a provider is picked; model is an editable hint. All speak
   // the same OpenAI /v1/chat/completions shape, so one settings form covers them.
@@ -116,7 +116,9 @@
     return `${h12}:${mm} ${ampm}`;
   }
 
-  if (customElements.get(ELEMENT_NAME)) return;
+  // Re-registration guard. Browser-only: under a Node test runner there is no
+  // customElements, and returning here would skip the whole module.
+  if (typeof customElements !== "undefined" && customElements.get(ELEMENT_NAME)) return;
 
   const SECTIONS = [
     { id: "today", label: "Today", icon: "📅" },
@@ -11223,6 +11225,36 @@
   };
   // CI-I18N-PACKS-END
 
-  customElements.define(ELEMENT_NAME, CompleteIrrigationPanel);
-  console.info(`[complete-irrigation] panel registered, version ${PANEL_VERSION}`);
+  // v1.62 — the panel is 11k lines of untestable-by-construction code because
+  // nothing escapes this IIFE. Registering the element is a BROWSER concern;
+  // guard it so the file can also be require()'d by a test runner under Node.
+  if (typeof customElements !== "undefined") {
+    customElements.define(ELEMENT_NAME, CompleteIrrigationPanel);
+    console.info(`[complete-irrigation] panel registered, version ${PANEL_VERSION}`);
+  }
+
+  // Export the PURE helpers for unit testing. In a browser `module` is
+  // undefined so this is inert — the shipped behaviour is byte-identical.
+  // Only side-effect-free functions are exported; nothing here touches the DOM,
+  // hass, or network, so a test needs no browser environment at all.
+  if (typeof module !== "undefined" && module.exports) {
+    module.exports = {
+      PANEL_VERSION,
+      // formatting / escaping
+      escapeHtml,
+      escapeAttr,
+      cssEscape,
+      fmtTimeOfDay,
+      photoLabel,
+      _formatRemaining,
+      // yard-map geometry (mirrors of the tested Python in yard_map.py)
+      ciNormalizeRotation,
+      ciCoverScale,
+      // EXIF GPS decode — hand-rolled endianness + rational->DMS
+      exifGps,
+      // i18n
+      ciApplyPack,
+      ciText,
+    };
+  }
 })();

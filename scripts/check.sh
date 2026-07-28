@@ -9,6 +9,9 @@
 #   3. CI parity (pytest with ONLY requirements-dev.txt — catches imports that
 #      resolve only because your machine has the package; CI has no HA)
 #   4. Manifest sanity (key order + required fields)
+#   5. Frontend (node syntax check + panel unit tests) — the panel is HALF the
+#      shipped surface and had NO automated verification of any kind until
+#      v1.62, which is where several user-visible regressions landed.
 #
 # A 4th "smoke-test in real HA" check is documented in CONTRIBUTING.md
 # and runs from `scripts/smoke-test.sh` once the local HA env is set up.
@@ -43,7 +46,7 @@ fail() {
 }
 
 # ─── 1. Lint ────────────────────────────────────────────────────────
-step "1/4  Ruff lint"
+step "1/5  Ruff lint"
 if ! python3 -m ruff check custom_components/ tests/ scripts/; then
   fail "lint check failed — fix the issues above (try: python3 -m ruff check --fix ...)"
 fi
@@ -53,7 +56,7 @@ fi
 pass "lint clean"
 
 # ─── 2. Unit tests ──────────────────────────────────────────────────
-step "2/4  Unit tests (pytest, your venv)"
+step "2/5  Unit tests (pytest, your venv)"
 if ! python3 -m pytest tests/ -q; then
   fail "tests failed"
 fi
@@ -69,7 +72,7 @@ pass "all tests passing"
 # So: re-run the suite in a throwaway venv built from requirements-dev.txt alone.
 # Cheap (cached between runs, ~8s) and it catches exactly that class of bug —
 # an import that only resolves because your machine happens to have the package.
-step "3/4  CI parity (pytest with ONLY requirements-dev.txt)"
+step "3/5  CI parity (pytest with ONLY requirements-dev.txt)"
 CI_VENV="${CI_PARITY_VENV:-$HOME/.cache/irrigation-CI-mirror}"
 if [ -n "${SKIP_CI_PARITY:-}" ]; then
   echo "  (skipped: SKIP_CI_PARITY set)"
@@ -92,7 +95,7 @@ else
 fi
 
 # ─── 4. Manifest sanity ─────────────────────────────────────────────
-step "4/4  Manifest sanity"
+step "4/5  Manifest sanity"
 MANIFEST="custom_components/complete_irrigation/manifest.json"
 
 # Required keys
@@ -119,6 +122,25 @@ if rest != sorted(rest):
     sys.exit(1)
 PY
 pass "manifest valid"
+
+# ─── 5. Frontend ────────────────────────────────────────────────────
+# The panel is ~11k lines and, until v1.62, had NO automated check — not even a
+# syntax parse. A render-time TypeError there takes the WHOLE panel down
+# ("Irrigation panel error"), which is exactly what shipped in v1.60.4.
+step "5/5  Frontend (syntax + panel unit tests)"
+PANEL="custom_components/complete_irrigation/frontend/complete-irrigation-panel.js"
+if ! command -v node >/dev/null 2>&1; then
+  echo "  (skipped: node not installed — CI still runs this)"
+else
+  if ! node --check "$PANEL"; then
+    fail "panel JS has a syntax error"
+  fi
+  if ! node --test "tests/js/*.test.js" >/tmp/ci-js-test.log 2>&1; then
+    cat /tmp/ci-js-test.log
+    fail "panel unit tests failed"
+  fi
+  pass "frontend clean ($(grep -c '^✔' /tmp/ci-js-test.log 2>/dev/null || echo '?') panel tests passing)"
+fi
 
 echo
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
