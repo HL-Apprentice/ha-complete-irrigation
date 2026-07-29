@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from custom_components.complete_irrigation.plant import PlantRecord, PlantStore
+from custom_components.complete_irrigation.plant import PlantRecord, PlantStore, reproject_plants
 from custom_components.complete_irrigation.yard_map import (
     bbox_from_center,
     latlon_to_norm_raw,
@@ -106,11 +106,19 @@ def test_backfill_without_a_bbox_is_a_no_op():
 # ── the durability contract ─────────────────────────────────────────
 
 
-def _reproject(plant: PlantRecord, new_bbox) -> PlantRecord:
-    """The v1.59 re-projection rule used by set_yard_map, in miniature."""
-    nx, ny = latlon_to_norm_raw(plant.anchor_lat, plant.anchor_lon, new_bbox)
-    inside = 0.0 <= nx <= 1.0 and 0.0 <= ny <= 1.0
-    return replace(plant, map_x=nx if inside else None, map_y=ny if inside else None)
+def _reproject(plant: PlantRecord, new_bbox, old_bbox=FRAME) -> PlantRecord:
+    """Re-project through the REAL production function (v1.62).
+
+    This used to be a hand-written miniature of the rule inside set_yard_map —
+    and it silently omitted the legacy-anchor branch, i.e. exactly the code
+    v1.59 added to stop pre-v1.59 placements being erased. The durability
+    contract was being asserted against a version that skipped the part
+    protecting the at-risk records. Now the tests exercise the shipped code.
+    """
+    updated, _moved, _dropped = reproject_plants([plant], old_bbox, new_bbox)
+    # An empty result means "nothing to do" — same frame, or never placed. The
+    # plant is unchanged; it must NOT be treated as un-placed.
+    return updated[0] if updated else plant
 
 
 def test_marker_keeps_its_ground_position_when_the_frame_moves():
@@ -139,11 +147,11 @@ def test_zooming_past_a_plant_hides_it_but_keeps_the_anchor():
     lat, lon = norm_to_latlon(0.95, 0.95, FRAME)
     p = replace(p, anchor_lat=lat, anchor_lon=lon)
     tight = bbox_from_center(LAT, LON, 20.0)  # zoom in past it
-    hidden = _reproject(p, tight)
+    hidden = _reproject(p, tight, FRAME)
     assert hidden.map_x is None and hidden.map_y is None  # not drawn
     assert hidden.anchor_lat == lat and hidden.anchor_lon == lon  # NOT lost
     # Zoom back out — the marker returns to exactly where it was.
-    restored = _reproject(hidden, FRAME)
+    restored = _reproject(hidden, FRAME, tight)
     assert abs(restored.map_x - 0.95) < 1e-9
     assert abs(restored.map_y - 0.95) < 1e-9
 
@@ -152,9 +160,12 @@ def test_a_round_trip_through_several_frames_does_not_drift():
     p = _plant(map_x=0.3, map_y=0.8)
     lat, lon = norm_to_latlon(0.3, 0.8, FRAME)
     p = replace(p, anchor_lat=lat, anchor_lon=lon)
+    prev = FRAME
     for span in (20.0, 500.0, 35.0, 120.0):
-        p = _reproject(p, bbox_from_center(LAT, LON, span))
-    p = _reproject(p, FRAME)
+        nxt = bbox_from_center(LAT, LON, span)
+        p = _reproject(p, nxt, prev)
+        prev = nxt
+    p = _reproject(p, FRAME, prev)
     assert abs(p.map_x - 0.3) < 1e-9
     assert abs(p.map_y - 0.8) < 1e-9
 
@@ -167,3 +178,44 @@ def test_rotation_does_not_touch_anchors_at_all():
     before = p.to_dict()
     normalize_rotation(37)  # whatever the user spins to
     assert p.to_dict() == before
+
+
+# ── the branch the old test replica omitted ─────────────────────────
+
+
+def test_legacy_placement_without_an_anchor_is_minted_not_lost():
+    """A pre-v1.59 record has map_x/map_y but no anchor. Re-projecting must MINT
+    the anchor from the frame it was placed in — the branch the hand-written
+    test replica skipped, which is the whole reason it existed."""
+    legacy = _plant(map_x=0.25, map_y=0.75)  # no anchor at all
+    assert legacy.anchor_lat is None
+    moved_frame = bbox_from_center(LAT, LON, 120.0)  # zoom out
+    updated, moved, dropped = reproject_plants([legacy], FRAME, moved_frame)
+    assert len(updated) == 1
+    got = updated[0]
+    assert got.anchor_lat is not None and got.anchor_lon is not None  # minted
+    assert moved == 1 and dropped == 0
+    # and it now describes the same ground it was placed on
+    back = _reproject(got, FRAME, moved_frame)
+    assert abs(back.map_x - 0.25) < 1e-9
+    assert abs(back.map_y - 0.75) < 1e-9
+
+
+def test_never_placed_plant_is_left_completely_alone():
+    untouched = _plant()  # no map_x, no anchor
+    updated, moved, dropped = reproject_plants([untouched], FRAME, bbox_from_center(LAT, LON, 30.0))
+    assert updated == [] and moved == 0 and dropped == 0
+
+
+def test_identical_frames_are_a_no_op():
+    p = _plant(map_x=0.5, map_y=0.5, anchor_lat=LAT, anchor_lon=LON)
+    assert reproject_plants([p], FRAME, FRAME) == ([], 0, 0)
+
+
+def test_out_of_frame_clears_only_the_derived_position():
+    lat, lon = norm_to_latlon(0.95, 0.95, FRAME)
+    p = _plant(map_x=0.95, map_y=0.95, anchor_lat=lat, anchor_lon=lon)
+    updated, moved, dropped = reproject_plants([p], FRAME, bbox_from_center(LAT, LON, 20.0))
+    assert moved == 0 and dropped == 1
+    assert updated[0].map_x is None and updated[0].map_y is None  # not drawn
+    assert updated[0].anchor_lat == lat and updated[0].anchor_lon == lon  # NOT lost

@@ -15,7 +15,6 @@ model can never plant unbounded text, non-finite numbers, or an unknown enum in
 
 from __future__ import annotations
 
-import json
 import math
 import re
 import unicodedata
@@ -74,31 +73,15 @@ def _first_enum(v: Any) -> Any:
 
 def extract_suggestion_json(text: Any) -> dict | None:
     """Pull the JSON object out of a vision model's reply, repairing the mistakes
-    small models make so a near-miss still identifies the plant:
-      * prose / code fences / leading label around the object,
-      * `//` line comments,
-      * a prompt annotation echoed AFTER a value (`30 (0 = not necessary)`),
-      * trailing commas before a closing brace/bracket.
-    Returns the parsed dict, or None if nothing usable is present.
+    small models make so a near-miss still identifies the plant.
+
+    v1.62 — the repair logic now lives in llm_json.extract_json_object so the
+    scheduling path shares it instead of carrying a weaker copy. Kept as a named
+    entry point because that is what this module's callers and tests use.
     """
-    if not isinstance(text, str):
-        return None
-    start, end = text.find("{"), text.rfind("}")
-    if start < 0 or end <= start:
-        return None
-    original = text[start : end + 1]
-    repaired = re.sub(r"//[^\n\r]*", "", original)  # line comments
-    # `<value> (annotation)` after a number -> `<value>` (the observed failure)
-    repaired = re.sub(r"([:,]\s*-?\d+(?:\.\d+)?)\s*\([^)]*\)", r"\1", repaired)
-    repaired = re.sub(r",\s*([}\]])", r"\1", repaired)  # trailing commas
-    for candidate in (repaired, original):
-        try:
-            obj = json.loads(candidate)
-        except ValueError:
-            continue
-        if isinstance(obj, dict):
-            return obj
-    return None
+    from .llm_json import extract_json_object
+
+    return extract_json_object(text)
 
 
 def validate_suggestion(raw: Any, *, model: str, now_iso: str) -> dict[str, Any] | None:

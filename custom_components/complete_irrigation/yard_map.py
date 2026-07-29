@@ -96,7 +96,8 @@ def latlon_to_norm(lat: float, lon: float, bbox: Bbox) -> tuple[float, float]:
 
 def latlon_to_norm_raw(lat: float, lon: float, bbox: Bbox) -> tuple[float, float]:
     """Like latlon_to_norm but UNCLAMPED, so a caller can tell an inside-the-view
-    point from one that merely clamps to the edge. Needed by remap_norm: clamping
+    point from one that merely clamps to the edge. Needed by the re-projection in
+    plant.reproject_plants: clamping
     first would silently pile every out-of-view marker onto the border."""
     ew = bbox.east - bbox.west
     ns = bbox.north - bbox.south
@@ -112,25 +113,7 @@ def norm_to_latlon(x: float, y: float, bbox: Bbox) -> tuple[float, float]:
     return (lat, lon)
 
 
-def remap_norm(x: float, y: float, old: Bbox, new: Bbox) -> tuple[float, float] | None:
-    """Re-project a marker from one bbox to another, PRESERVING its real-world spot.
-
-    Plant markers are stored normalized to whatever bbox was current when they were
-    placed, so re-fetching the map at a different zoom/centre would otherwise slide
-    every plant across the yard. Round-trip through lat/lon instead: same ground
-    position, new frame.
-
-    Returns None when the point falls OUTSIDE the new box (e.g. zooming in past a
-    plant) — the caller should un-place it rather than clamp it to the edge, which
-    would be a confident lie about where the plant is.
-    """
-    lat, lon = norm_to_latlon(x, y, old)
-    nx, ny = latlon_to_norm_raw(lat, lon, new)
-    if 0.0 <= nx <= 1.0 and 0.0 <= ny <= 1.0:
-        return (_clamp01(nx), _clamp01(ny))
-    return None
-
-
+# 1 m^2 = 10.7639 ft^2. Lives here because both area helpers below use it.
 _SQFT_PER_SQM = 10.7639
 
 

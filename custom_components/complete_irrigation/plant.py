@@ -453,6 +453,59 @@ class PlantStore:
         return store
 
 
+def reproject_plants(plants, old_bbox, new_bbox):
+    """v1.62 — move every placement from one aerial frame to another.
+
+    THE function the yard map's durability rests on, extracted from
+    ``handle_set_yard_map`` so it can be tested directly. Until v1.62 the only
+    thing exercising this logic was a hand-written copy inside
+    tests/test_plant_anchor_durability.py — and that copy omitted the
+    legacy-anchor branch below, i.e. the exact branch v1.59 added to stop
+    pre-v1.59 records being erased. The durability contract was being asserted
+    against a version that skipped the code protecting the at-risk records.
+
+    Returns ``(updated_plants, moved, dropped)``:
+      * a plant with a ground anchor is re-projected from THAT, never from its
+        old frame-relative position;
+      * a legacy record (placed, but no anchor) has its anchor minted from where
+        it sat in the OLD frame, so it becomes durable in passing;
+      * falling outside the new frame clears only the derived map_x/map_y — the
+        anchor is NEVER destroyed, so the marker returns intact when the view
+        covers that ground again;
+      * a plant that was never placed is left completely untouched.
+
+    Pure: no HA, no I/O. ``old_bbox``/``new_bbox`` are yard_map.Bbox.
+    """
+    from .yard_map import latlon_to_norm_raw, norm_to_latlon
+
+    updated: list[PlantRecord] = []
+    moved = dropped = 0
+    if old_bbox is None or new_bbox is None or old_bbox.as_tuple() == new_bbox.as_tuple():
+        return updated, 0, 0
+    for plant in plants:
+        alat, alon = plant.anchor_lat, plant.anchor_lon
+        if (alat is None or alon is None) and (plant.map_x is not None and plant.map_y is not None):
+            alat, alon = norm_to_latlon(float(plant.map_x), float(plant.map_y), old_bbox)
+        if alat is None or alon is None:
+            continue  # genuinely never placed — nothing to carry over
+        nx, ny = latlon_to_norm_raw(float(alat), float(alon), new_bbox)
+        inside = 0.0 <= nx <= 1.0 and 0.0 <= ny <= 1.0
+        updated.append(
+            replace(
+                plant,
+                map_x=nx if inside else None,
+                map_y=ny if inside else None,
+                anchor_lat=float(alat),
+                anchor_lon=float(alon),
+            )
+        )
+        if inside:
+            moved += 1
+        else:
+            dropped += 1
+    return updated, moved, dropped
+
+
 def plants_in_region(
     plants: list[PlantRecord], x0: float, y0: float, x1: float, y1: float
 ) -> list[str]:
