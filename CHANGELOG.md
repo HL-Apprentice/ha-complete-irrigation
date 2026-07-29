@@ -4,6 +4,30 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.62.1 — 2026-07-28 — patch
+
+**Tests now exercise the real code, and the two LLM JSON parsers became one.**
+
+Continuing the audit repairs. No behaviour change for you — this is about the
+tests actually protecting what ships.
+
+- **The yard-map durability contract was being asserted against a copy.** The
+  re-projection rule lived inside `handle_set_yard_map`, and the only thing
+  testing it was a hand-written miniature in the test file — one that omitted
+  the legacy-anchor branch, i.e. precisely the code v1.59 added to stop
+  pre-v1.59 placements being erased. Extracted as `plant.reproject_plants`; the
+  handler and the tests now run the **same** function, plus four new cases
+  including the legacy-anchor path the replica could never cover.
+- **Two different LLM JSON extractors have been merged into one.** The plant-ID
+  path had learned to repair what small models actually emit (`//` comments,
+  trailing commas, an annotation echoed after a number); the scheduling path
+  shipped a weaker copy with no repair, where a parse failure is *silent* — the
+  advisor proposes nothing, indistinguishable from "no conflicts found". Both
+  now use `llm_json.extract_json_object`, with 13 tests over the real-world
+  reply shapes.
+- **Removed `remap_norm`** — a tested function with zero production callers,
+  shadowing the path actually in use.
+
 ## v1.62.0 — 2026-07-27 — minor
 
 **The frontend is now actually verified, and CI runs the whole test suite.**

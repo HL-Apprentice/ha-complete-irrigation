@@ -3626,8 +3626,6 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             export_host_allowed,
             export_url,
             image_size_for_bbox,
-            latlon_to_norm_raw,
-            norm_to_latlon,
             safe_export_size,
         )
 
@@ -3768,57 +3766,25 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             _LOGGER.warning("set_yard_map: could not write image: %s", err)
             return
 
-        # v1.43 — MIGRATE plant markers to the new frame before adopting it.
-        # Markers are stored normalized to whatever bbox was current when placed,
-        # so re-fetching at a different zoom/centre would slide every plant across
-        # the yard. Round-trip each through lat/lon: same ground position, new
-        # frame. A plant now outside the view (zoomed past it) is UN-placed rather
-        # than clamped to the border — an edge-pinned marker is a confident lie.
+        # v1.43/v1.59 — MIGRATE plant markers to the new frame before adopting
+        # it. The logic lives in plant.reproject_plants so it is directly
+        # testable: until v1.62 the only thing exercising it was a hand-written
+        # copy inside a test file, and that copy omitted the legacy-anchor
+        # branch — the exact branch that keeps pre-v1.59 placements alive.
+        from .plant import reproject_plants
+
         old_bbox = bbox_from_cfg(coord.config.get("yard_map"))
-        moved = dropped = 0
-        if old_bbox is not None and (
-            old_bbox.as_tuple() != bbox.as_tuple()
-        ):  # only when the frame actually changed
-            for plant in list(coord.plants.all()):
-                # v1.59 — re-project from the plant's GROUND ANCHOR, and never
-                # destroy it. Pre-v1.59 this nulled map_x/map_y for anything that
-                # fell outside the new frame, so one zoom-in (or a refresh that
-                # snapped to the HA home) permanently erased every placement with
-                # no undo. Now the anchor is the truth: leaving the view only
-                # stops it being DRAWN, and it returns intact when the view
-                # covers that ground again.
-                alat, alon = plant.anchor_lat, plant.anchor_lon
-                if (alat is None or alon is None) and (
-                    plant.map_x is not None and plant.map_y is not None
-                ):
-                    # Legacy record: mint the anchor from where it sat in the OLD
-                    # frame, so existing placements become durable in passing.
-                    alat, alon = norm_to_latlon(float(plant.map_x), float(plant.map_y), old_bbox)
-                if alat is None or alon is None:
-                    continue  # genuinely never placed — nothing to carry over
-                nx, ny = latlon_to_norm_raw(float(alat), float(alon), bbox)
-                inside = 0.0 <= nx <= 1.0 and 0.0 <= ny <= 1.0
-                coord.plants.upsert(
-                    replace(
-                        plant,
-                        map_x=nx if inside else None,
-                        map_y=ny if inside else None,
-                        anchor_lat=float(alat),
-                        anchor_lon=float(alon),
-                    )
-                )
-                if inside:
-                    moved += 1
-                else:
-                    dropped += 1
-            if moved or dropped:
-                await coord.async_save_plants()
-                _LOGGER.info(
-                    "set_yard_map: re-projected %d marker(s) to the new view; "
-                    "%d now outside it were un-placed",
-                    moved,
-                    dropped,
-                )
+        updated, moved, dropped = reproject_plants(list(coord.plants.all()), old_bbox, bbox)
+        for plant in updated:
+            coord.plants.upsert(plant)
+        if moved or dropped:
+            await coord.async_save_plants()
+            _LOGGER.info(
+                "set_yard_map: re-projected %d marker(s) to the new view; "
+                "%d fell outside it (kept, just not drawn)",
+                moved,
+                dropped,
+            )
 
         version = dt_util.utcnow().strftime("%Y%m%d%H%M%S")
         coord.config["yard_map"] = {

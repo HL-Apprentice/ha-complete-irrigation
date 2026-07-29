@@ -329,17 +329,15 @@ async def _propose(hass, coord, conflict_lines: list[str]) -> None:
 
 
 def _extract_json_obj(content: str) -> dict[str, Any] | None:
-    """Pull the first {...} JSON object out of an LLM reply (tolerant of prose/fences)."""
-    if not content:
-        return None
-    import json as _json
+    """The LLM's JSON object, via the SHARED hardened extractor (v1.62).
 
-    start = content.find("{")
-    end = content.rfind("}")
-    if start < 0 or end <= start:
-        return None
-    try:
-        obj = _json.loads(content[start : end + 1])
-    except ValueError:
-        return None
-    return obj if isinstance(obj, dict) else None
+    This used to be a weaker private copy: it did a bare find("{")..rfind("}")
+    with no repair, so a reply containing a `//` comment or a trailing comma
+    parsed as None — and a None here means the advisor silently proposes
+    nothing, which is indistinguishable from "no conflicts found". The plant-ID
+    path had already learned and fixed exactly these quirks; now both use one
+    implementation instead of diverging.
+    """
+    from .llm_json import extract_json_object
+
+    return extract_json_object(content)
