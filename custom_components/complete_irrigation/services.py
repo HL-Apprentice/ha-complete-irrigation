@@ -2629,6 +2629,13 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             photos=(),
             map_x=None,
             map_y=None,
+            # v1.62.2 — clear the ANCHOR too. Nulling only map_x/map_y left the
+            # copy presenting as unplaced while still carrying the source's
+            # ground anchor, and reproject_plants trusts the anchor — so the
+            # next zoom/nudge/refresh re-derived a position and the duplicate
+            # materialised stacked exactly on top of the original.
+            anchor_lat=None,
+            anchor_lon=None,
             health=None,
             species_suggestion=None,
             light_surveys=(),
@@ -3777,14 +3784,6 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         updated, moved, dropped = reproject_plants(list(coord.plants.all()), old_bbox, bbox)
         for plant in updated:
             coord.plants.upsert(plant)
-        if moved or dropped:
-            await coord.async_save_plants()
-            _LOGGER.info(
-                "set_yard_map: re-projected %d marker(s) to the new view; "
-                "%d fell outside it (kept, just not drawn)",
-                moved,
-                dropped,
-            )
 
         version = dt_util.utcnow().strftime("%Y%m%d%H%M%S")
         coord.config["yard_map"] = {
@@ -3808,7 +3807,25 @@ async def _async_register_services(hass: HomeAssistant) -> None:
                 data.get("rotation_deg", prev_cfg.get("rotation_deg", 0.0))
             ),
         }
+        # v1.62.2 — CONFIG FIRST, then plants. These are two separate .storage
+        # writes and cannot be made atomic, so the question is only which order
+        # fails safe. Plants-first was the dangerous one: a crash in between left
+        # markers re-projected into the NEW frame while the stored bbox still
+        # described the OLD one, and the very next drag would then convert screen
+        # coords against the wrong frame and write a WRONG ground anchor —
+        # unrecoverable, because the anchor is the only truth. Config-first
+        # merely leaves markers briefly drawn against the new frame using their
+        # old derived positions; the anchors are untouched and the next
+        # set_yard_map re-derives them correctly.
         await coord.async_save_config()
+        if moved or dropped:
+            await coord.async_save_plants()
+            _LOGGER.info(
+                "set_yard_map: re-projected %d marker(s) to the new view; "
+                "%d fell outside it (kept, just not drawn)",
+                moved,
+                dropped,
+            )
         _LOGGER.info(
             "Yard map updated (%dx%d) centered %.5f,%.5f span %.0fm", width, height, lat, lon, span
         )
