@@ -201,6 +201,13 @@ class ZoneRegionStore:
     def add(self, region: ZoneRegion) -> None:
         if region.id in self._items:
             raise KeyError(f"region with id {region.id!r} already exists")
+        # v1.62.2 — the cap MUST be enforced here, not only in from_serializable.
+        # It used to be load-only: a 201st region saved fine, vanished on the next
+        # restart's truncation, and was then erased from disk by the very next
+        # save. Silent, permanent, one log line. Refusing the write is the fix;
+        # the load-side break stays purely as a corrupt-file backstop.
+        if len(self._items) >= _MAX_REGIONS:
+            raise ValueError(f"at most {_MAX_REGIONS} zone regions are supported")
         self._items[region.id] = region
 
     def upsert(self, region: ZoneRegion) -> None:

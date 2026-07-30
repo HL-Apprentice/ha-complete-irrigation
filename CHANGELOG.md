@@ -4,6 +4,34 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.62.2 — 2026-07-28 — patch
+
+**Three data-loss bugs found by red-teaming, all introduced by recent work.**
+
+An adversarial review was pointed at one goal: make the user silently lose or
+corrupt data. It found three ways, each reproduced numerically before it was
+fixed.
+
+- **Loop areas past the 200 cap were silently destroyed.** The cap was enforced
+  only when LOADING, never when adding. So a 201st region saved fine, vanished
+  in the next restart's truncation, and was then erased from disk by the very
+  next region edit — permanently, with one log line and no undo. The cap is now
+  enforced where regions are created; the load-side truncation stays only as a
+  corrupt-file backstop.
+- **Duplicating a plant secretly copied its map position.** The duplicate
+  cleared `map_x`/`map_y` but kept the source's ground anchor, so it presented
+  as unplaced while still being anchored. Since re-projection trusts the anchor,
+  the next zoom, nudge or refresh re-derived a position and the copy reappeared
+  stacked exactly on top of the original — the dual-truth state the anchor
+  design exists to prevent. Duplicates now clear both.
+- **A crash mid-refresh could corrupt every later placement.** Re-fetching the
+  aerial writes two separate files (plants, then config) and cannot make them
+  atomic. In the old order, a crash in between left markers re-projected into
+  the new frame while the stored frame was still the old one — and the next
+  marker you dragged would be converted against the wrong frame and written with
+  a **wrong ground anchor**, which is unrecoverable. The order is now reversed so
+  the failure mode is cosmetic and self-correcting instead.
+
 ## v1.62.1 — 2026-07-28 — patch
 
 **Tests now exercise the real code, and the two LLM JSON parsers became one.**
