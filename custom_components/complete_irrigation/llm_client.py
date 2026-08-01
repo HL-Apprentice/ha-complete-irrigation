@@ -24,6 +24,7 @@ loop that walks the targets in order until one gives a usable answer.
 from __future__ import annotations
 
 import json as _json
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -61,6 +62,26 @@ PROVIDERS: dict[str, dict[str, str]] = {
 # almost certainly more -> treat as too large rather than parse a truncated body.
 _MAX_RESP_BYTES = 1_000_001
 
+# aiohttp puts the request URL into most connector errors, and a "custom"
+# OpenAI-compatible endpoint may carry its credential in the query string or as
+# userinfo. That error text is NOT private: schedule_review logs result.error,
+# and services.py raises it to the panel. So scrub URLs before it escapes.
+_URL_QUERY_RE = re.compile(r"(https?://[^\s'\"]*?)\?[^\s'\"]*")
+_URL_USERINFO_RE = re.compile(r"(https?://)[^/\s'\"@]*@")
+
+
+def safe_error_text(err: BaseException, api_key: str = "") -> str:
+    """A transport error rendered with credentials stripped.
+
+    Redaction happens BEFORE truncation on purpose — trimming first could cut a
+    key in half and still leak the front of it.
+    """
+    msg = _URL_QUERY_RE.sub(r"\1?<redacted>", str(err))
+    msg = _URL_USERINFO_RE.sub(r"\1<redacted>@", msg)
+    if api_key:
+        msg = msg.replace(api_key, "***")
+    return msg[:80]
+
 
 @dataclass(frozen=True)
 class LlmTarget:
@@ -69,7 +90,10 @@ class LlmTarget:
     label: str  # human label for logs/UI ("local", "Anthropic (Claude)")
     url: str
     model: str
-    api_key: str = ""  # "" -> no Authorization header (local ollama / vLLM)
+    # repr=False so the key cannot ride out inside an accidental f"{target}"
+    # or a dataclass repr in a log line. "" -> no Authorization header
+    # (local ollama / vLLM).
+    api_key: str = field(default="", repr=False)
     kind: str = "local"  # "local" | "external"
 
 
@@ -181,7 +205,7 @@ async def call_chat(
                     continue
                 raw = await resp.content.read(_MAX_RESP_BYTES)
         except Exception as err:  # any transport error -> try the next target
-            attempts.append((t.label, f"unreachable: {str(err)[:80]}"))
+            attempts.append((t.label, f"unreachable: {safe_error_text(err, t.api_key)}"))
             continue
         if len(raw) >= _MAX_RESP_BYTES:
             attempts.append((t.label, "response too large"))

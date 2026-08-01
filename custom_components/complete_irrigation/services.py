@@ -21,6 +21,7 @@ import logging
 import uuid
 from dataclasses import replace
 from datetime import timedelta
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
 import voluptuous as vol
@@ -1505,821 +1506,1414 @@ def _dispatch_run_blocks(
         offset += block_min * 60 + gap_seconds
 
 
-async def _async_register_services(hass: HomeAssistant) -> None:
-    """Register both services. Idempotent — safe to call from multiple entries."""
+async def handle_run_zone(hass: HomeAssistant, call: ServiceCall) -> None:
+    if not await _require_admin_if_configured(hass, call):
+        return
+    data = _RUN_ZONE_SCHEMA(dict(call.data))
+    entity_id: str = data["entity_id"]
+    try:
+        # v1.24 — cap at the schedule max (480), not 60: scheduled long
+        # runs flow through here too and must not be truncated/rejected.
+        minutes = validate_run_duration(data["minutes"], MAX_SCHEDULE_DURATION_MIN)
+    except (TypeError, ValueError) as err:
+        raise vol.Invalid(str(err)) from err
 
-    if hass.services.has_service(DOMAIN, SERVICE_RUN_ZONE):
-        return  # already registered
-
-    async def handle_run_zone(call: ServiceCall) -> None:
-        if not await _require_admin_if_configured(hass, call):
-            return
-        data = _RUN_ZONE_SCHEMA(dict(call.data))
-        entity_id: str = data["entity_id"]
-        try:
-            # v1.24 — cap at the schedule max (480), not 60: scheduled long
-            # runs flow through here too and must not be truncated/rejected.
-            minutes = validate_run_duration(data["minutes"], MAX_SCHEDULE_DURATION_MIN)
-        except (TypeError, ValueError) as err:
-            raise vol.Invalid(str(err)) from err
-
-        entry_data = _find_entry_data(hass, entity_id)
-        if entry_data is None:
-            _LOGGER.warning(
-                "run_zone called for %s, not a configured zone — ignoring",
-                entity_id,
-            )
-            return
-
-        # v1.25 — controllers (Rachio) cap each zone activation at a fixed number
-        # of minutes; a longer run can't be delivered in one activation. Split it
-        # into back-to-back blocks (each <= the cap) with a short gap between
-        # (off -> gap -> on = a fresh activation each time). Both scheduled
-        # (_fire_run) and manual runs funnel through here, so this is the single
-        # place chunking belongs. A run within the cap falls through to the normal
-        # single-activation path below, UNCHANGED.
-        cfg = getattr(entry_data.get("coordinator"), "config", None) or {}
-        cap = int(cfg.get("controller_max_run_minutes", DEFAULT_CONTROLLER_MAX_RUN_MIN))
-        blocks = plan_blocks(minutes, cap)
-        if len(blocks) > 1:
-            gap_s = int(cfg.get("block_gap_seconds", DEFAULT_BLOCK_GAP_SECONDS))
-            base_meta = entry_data.get("pending_run_meta", {}).pop(entity_id, None)
-            # v1.30 restart fail-over — record the session for the WHOLE chunked
-            # run (full minutes) before dispatching blocks, so a restart mid-
-            # session resumes the remaining total time, not just the current block.
-            _record_active_session(
-                hass,
-                entry_data.get("coordinator"),
-                zone=entity_id,
-                total_minutes=minutes,
-                started_at=dt_util.utcnow(),
-                meta=base_meta,
-                source=SOURCE_SCHEDULED if base_meta else SOURCE_MANUAL,
-                # The real completion is later than the water minutes by the gaps
-                # between the n blocks — fold them into the deadline.
-                extra_seconds=(len(blocks) - 1) * gap_s,
-                # v1.39 — the exact plan the block timers are armed with, so
-                # gap insertion can reconstruct the idle inter-block windows.
-                blocks=blocks,
-                block_gap_seconds=gap_s,
-            )
-            _LOGGER.info(
-                "%s (%s min) exceeds the %d-min controller cap — delivering as "
-                "%d blocks with a %ds gap",
-                entity_id,
-                minutes,
-                cap,
-                len(blocks),
-                gap_s,
-            )
-            _dispatch_run_blocks(hass, entity_id, entry_data, blocks, gap_s, base_meta)
-            return
-
-        # Replace any existing run for this entity (cancel old timer + listener
-        # + any pending external-off debounce).
-        _cancel_handles(entry_data, entity_id)
-        _clear_external_off(entry_data, entity_id)
-
-        # v1.30 — decide session record-vs-skip up front (consumes the block
-        # marker). A NON-block (logical) run must SUPERSEDE any in-flight CHUNKED
-        # run on this zone: cancel its pending block timers (advance the
-        # generation) so its orphaned blocks become no-ops instead of re-opening
-        # the valve untracked after this run clears the shared session. A block
-        # sub-call must NOT cancel — those pending timers are its own siblings.
-        _is_block_subcall, is_final_activation = _session_decision_for_run(entry_data, entity_id)
-        if not _is_block_subcall:
-            _cancel_block_timers(entry_data, entity_id)
-
-        # Hard-failure guard (PRD #43): if the underlying switch entity is
-        # missing or already unavailable, refuse to run and notify the user
-        # immediately instead of silently logging.
-        state = hass.states.get(entity_id)
-        coord = entry_data.get("coordinator")
-        friendly = (state.attributes.get("friendly_name") if state else None) or entity_id
-        if state is None or state.state == "unavailable":
-            _LOGGER.warning(
-                "run_zone: entity %s is %s — refusing to start",
-                entity_id,
-                "missing" if state is None else "unavailable",
-            )
-            await _notify_zone_failed(
-                coord,
-                friendly,
-                f"Cannot start {friendly} — the zone switch is "
-                f"{'missing from HA' if state is None else 'unavailable'}.",
-            )
-            # v1.30 — drop any stashed meta so a refused start can't misattribute
-            # the next run. Do NOT clear the active session here: a restart RESUME
-            # that arrives before the switch is back online would otherwise lose
-            # the run entirely. The resume path gates on switch availability +
-            # retries instead (see coordinator._resume_interrupted_runs); a stale
-            # session self-expires at its deadline.
-            entry_data.get("pending_run_meta", {}).pop(entity_id, None)
-            return
-
-        # Record the run + turn the switch on.
-        now = dt_util.utcnow()
-        run = ManualRun(
-            entity_id=entity_id,
-            start_at=now,
-            duration=timedelta(minutes=minutes),
+    entry_data = _find_entry_data(hass, entity_id)
+    if entry_data is None:
+        _LOGGER.warning(
+            "run_zone called for %s, not a configured zone — ignoring",
+            entity_id,
         )
-        entry_data["manual_runs"].start(run)
+        return
 
-        # Pop any pending metadata stashed by the coordinator (scheduled
-        # run) — if present, this is a scheduled call; otherwise manual. v1.30 —
-        # a restart resume stashes the ORIGINAL source so a resumed manual run
-        # stays "manual" in history (don't force scheduled just because meta is set).
-        meta = entry_data.get("pending_run_meta", {}).pop(entity_id, None)
-        source = (meta or {}).get("source") or (SOURCE_SCHEDULED if meta else SOURCE_MANUAL)
-
-        # v1.30 restart fail-over — record the session for the LOGICAL run (the
-        # record-vs-skip + supersede decision was made above). A block sub-call
-        # belongs to a parent session already recorded by the chunking branch.
-        if not _is_block_subcall:
-            _record_active_session(
-                hass,
-                coord,
-                zone=entity_id,
-                total_minutes=minutes,
-                started_at=now,
-                meta=meta,
-                source=source,
-            )
-
-        try:
-            await hass.services.async_call(
-                "switch",
-                SERVICE_TURN_ON,
-                {"entity_id": entity_id},
-                blocking=True,
-            )
-        except Exception as err:
-            # Roll back tracker + notify so the user knows the start failed
-            # even though we recorded a run.
-            entry_data["manual_runs"].stop(entity_id)
-            _LOGGER.exception("switch.turn_on failed for %s", entity_id)
-            await _notify_zone_failed(coord, friendly, f"Zone {friendly} failed to start: {err}")
-            return
-
-        # ── Run history: record the start ──
-        # requested_minutes for scheduled runs uses the ORIGINAL planned
-        # duration (before boost), so actual_minutes vs requested reflects
-        # gate adjustments. Manual runs just use the service call's minutes.
-        _record_run_start_to_history(
-            coord,
-            entity_id=entity_id,
-            friendly_name=friendly,
-            minutes=minutes,
-            meta=meta,
-            source=source,
-            started_at=now,
+    # v1.25 — controllers (Rachio) cap each zone activation at a fixed number
+    # of minutes; a longer run can't be delivered in one activation. Split it
+    # into back-to-back blocks (each <= the cap) with a short gap between
+    # (off -> gap -> on = a fresh activation each time). Both scheduled
+    # (_fire_run) and manual runs funnel through here, so this is the single
+    # place chunking belongs. A run within the cap falls through to the normal
+    # single-activation path below, UNCHANGED.
+    cfg = getattr(entry_data.get("coordinator"), "config", None) or {}
+    cap = int(cfg.get("controller_max_run_minutes", DEFAULT_CONTROLLER_MAX_RUN_MIN))
+    blocks = plan_blocks(minutes, cap)
+    if len(blocks) > 1:
+        gap_s = int(cfg.get("block_gap_seconds", DEFAULT_BLOCK_GAP_SECONDS))
+        base_meta = entry_data.get("pending_run_meta", {}).pop(entity_id, None)
+        # v1.30 restart fail-over — record the session for the WHOLE chunked
+        # run (full minutes) before dispatching blocks, so a restart mid-
+        # session resumes the remaining total time, not just the current block.
+        _record_active_session(
+            hass,
+            entry_data.get("coordinator"),
+            zone=entity_id,
+            total_minutes=minutes,
+            started_at=dt_util.utcnow(),
+            meta=base_meta,
+            source=SOURCE_SCHEDULED if base_meta else SOURCE_MANUAL,
+            # The real completion is later than the water minutes by the gaps
+            # between the n blocks — fold them into the deadline.
+            extra_seconds=(len(blocks) - 1) * gap_s,
+            # v1.39 — the exact plan the block timers are armed with, so
+            # gap insertion can reconstruct the idle inter-block windows.
+            blocks=blocks,
+            block_gap_seconds=gap_s,
         )
-        if coord is not None:
-            hass.async_create_task(coord.async_save_run_history())
-
-        # ── auto-stop timer ──
-        async def _auto_stop(_now=None):
-            run_now = entry_data["manual_runs"].get(entity_id)
-            if run_now is None:
-                return  # already cleaned up by an external off
-            entry_data["manual_runs"].stop(entity_id)
-            _clear_external_off(entry_data, entity_id)
-            await hass.services.async_call(
-                "switch",
-                SERVICE_TURN_OFF,
-                {"entity_id": entity_id},
-                blocking=False,
-            )
-            _cancel_handles(entry_data, entity_id)
-            # v1.40 "check back" — we just commanded off; verify the valve
-            # actually closed. Armed AFTER _cancel_handles so it isn't
-            # immediately disarmed along with the run's other handles.
-            _schedule_valve_verify_off(hass, entry_data, entity_id, coord, friendly)
-            # Run history: timer expired → completed
-            if coord is not None:
-                coord.run_history.complete_run(entity_id, ended_at=dt_util.utcnow())
-                await coord.async_save_run_history()
-            # v1.30 — clear the restart-resume session only when the WHOLE run is
-            # done (a single run, or the final block of a chunked run); an
-            # intermediate block keeps the session so a restart still resumes.
-            if is_final_activation:
-                _clear_active_session(hass, coord, entity_id)
-            _LOGGER.info("Manual run for %s expired and was stopped", entity_id)
-
-        cancel_timer = async_call_later(hass, minutes * 60, _auto_stop)
-
-        # ── debounced external-off verification ──
-        # Fires `_EXTERNAL_OFF_DEBOUNCE_SECONDS` after a zone reports off
-        # mid-run. By now a stale cloud poll has usually been corrected, so
-        # we re-read the live state and only then decide (see
-        # _external_off_decision): recovered → continue; persistently off →
-        # re-assert the switch on, or abort + alert once attempts run out.
-        async def _verify_external_off(_now=None):
-            ext = entry_data.get("external_off", {}).get(entity_id)
-            if ext is not None:
-                ext["pending"] = None
-            run_now = entry_data["manual_runs"].get(entity_id)
-            if run_now is None:
-                return  # run already ended (auto-stop / Stop) while we waited
-            state = hass.states.get(entity_id)
-            state_now = state.state if state is not None else "unavailable"
-            reasserts_left = ext.get("reasserts_left", 0) if ext else 0
-            before_deadline = dt_util.utcnow() < run_now.deadline()
-            ran_healthy = bool(ext.get("ran_healthy")) if ext else False
-            decision = _external_off_decision(
-                state_now, reasserts_left, before_deadline, ran_healthy
-            )
-
-            if decision == "recovered":
-                _LOGGER.info(
-                    "Zone %s reported off transiently but is back on — run continues",
-                    entity_id,
-                )
-                return
-            if decision in ("retry", "retry_reset"):
-                if ext is not None:
-                    if decision == "retry_reset":
-                        # Legit controller cap-stop after a healthy chunk —
-                        # refill the budget so a long run rides cap after cap.
-                        ext["reasserts_left"] = _EXTERNAL_OFF_MAX_REASSERTS
-                    else:
-                        ext["reasserts_left"] = reasserts_left - 1
-                    # Next chunk is measured fresh from this re-assert.
-                    ext["last_on_at"] = dt_util.utcnow()
-                    ext["ran_healthy"] = False
-                if decision == "retry_reset":
-                    _LOGGER.warning(
-                        "Zone %s stopped after a healthy run (controller cap-stop?); "
-                        "re-asserting on to continue toward its full duration",
-                        entity_id,
-                    )
-                else:
-                    attempt = _EXTERNAL_OFF_MAX_REASSERTS - reasserts_left + 1
-                    _LOGGER.warning(
-                        "Zone %s went off mid-run (stale cloud state?); re-asserting on "
-                        "(attempt %d/%d)",
-                        entity_id,
-                        attempt,
-                        _EXTERNAL_OFF_MAX_REASSERTS,
-                    )
-                await hass.services.async_call(
-                    "switch", SERVICE_TURN_ON, {"entity_id": entity_id}, blocking=False
-                )
-                return  # listener stays active; a further off re-arms the debounce
-
-            # decision == "abort" — persistently off, out of attempts or past deadline.
-            entry_data["manual_runs"].stop(entity_id)
-            _clear_external_off(entry_data, entity_id)
-            _cancel_handles(entry_data, entity_id)
-            if coord is not None:
-                rec = coord.run_history.abort_run(
-                    entity_id,
-                    ended_at=dt_util.utcnow(),
-                    reason="switch turned off externally (did not recover)",
-                )
-                hass.async_create_task(coord.async_save_run_history())
-                # Actionable "Run remainder" / "Open Logbook" alert for a
-                # scheduled run cut short below 90% of planned.
-                hass.async_create_task(_maybe_notify_cut_short(coord, rec))
-            # v1.30 — a run that aborted because the switch won't stay on is in an
-            # error state; don't auto-resume it on the next restart.
-            _clear_active_session(hass, coord, entity_id)
-            _LOGGER.warning(
-                "Zone %s stayed off after %d re-assert(s) — aborting run",
-                entity_id,
-                _EXTERNAL_OFF_MAX_REASSERTS,
-            )
-
-        # ── state listener ──
-        # A zone reporting off mid-run is debounced, not acted on immediately
-        # (cloud integrations flap "off" for seconds after a turn-on). One
-        # check is scheduled; further offs are ignored until it fires.
-        @callback
-        def _on_state_change(event):
-            new_state = event.data.get("new_state")
-            run_now = entry_data["manual_runs"].get(entity_id)
-            if run_now is None:
-                return  # our run already ended
-            ext = entry_data.setdefault("external_off", {}).setdefault(
-                entity_id,
-                {
-                    "reasserts_left": _EXTERNAL_OFF_MAX_REASSERTS,
-                    "pending": None,
-                    "last_on_at": dt_util.utcnow(),
-                    "ran_healthy": False,
-                },
-            )
-            if new_state is None:
-                return
-            if new_state.state == "on":
-                # Zone (re)started — measure the next chunk from here.
-                ext["last_on_at"] = dt_util.utcnow()
-                return
-            # Off transition: was the chunk it just finished a healthy run
-            # (a controller cap-stop) or a quick flap/fault? Drives whether
-            # the re-assert budget gets refilled (see external_off_decision).
-            on_seconds = (
-                dt_util.utcnow() - ext.get("last_on_at", dt_util.utcnow())
-            ).total_seconds()
-            ext["ran_healthy"] = on_seconds >= _EXTERNAL_OFF_HEALTHY_RUN_SECONDS
-            if ext.get("pending") is not None:
-                return  # a debounce check is already scheduled
-            ext["pending"] = async_call_later(
-                hass, _EXTERNAL_OFF_DEBOUNCE_SECONDS, _verify_external_off
-            )
-            _LOGGER.debug(
-                "Zone %s reported off mid-run after %.0fs on; debouncing %ds before reacting",
-                entity_id,
-                on_seconds,
-                _EXTERNAL_OFF_DEBOUNCE_SECONDS,
-            )
-
-        cancel_listener = async_track_state_change_event(hass, [entity_id], _on_state_change)
-
-        entry_data.setdefault("external_off", {})[entity_id] = {
-            "reasserts_left": _EXTERNAL_OFF_MAX_REASSERTS,
-            "pending": None,
-            "last_on_at": dt_util.utcnow(),
-            "ran_healthy": False,
-        }
-        entry_data.setdefault("cancel_handles", {})[entity_id] = (
-            cancel_timer,
-            cancel_listener,
-        )
-
-        # v1.40 "check back" — verify the physical switch actually actuated.
-        # Every chunked block re-enters this single-activation path as its own
-        # run_zone sub-call, so each block activation gets exactly ONE verify
-        # (the >cap dispatch branch above returned early and armed none).
-        _schedule_valve_verify_on(hass, entry_data, entity_id, coord, friendly, is_final_activation)
-
         _LOGGER.info(
-            "Started manual run: %s for %d minutes (deadline %s)",
+            "%s (%s min) exceeds the %d-min controller cap — delivering as "
+            "%d blocks with a %ds gap",
             entity_id,
             minutes,
-            run.deadline().isoformat(),
+            cap,
+            len(blocks),
+            gap_s,
+        )
+        _dispatch_run_blocks(hass, entity_id, entry_data, blocks, gap_s, base_meta)
+        return
+
+    # Replace any existing run for this entity (cancel old timer + listener
+    # + any pending external-off debounce).
+    _cancel_handles(entry_data, entity_id)
+    _clear_external_off(entry_data, entity_id)
+
+    # v1.30 — decide session record-vs-skip up front (consumes the block
+    # marker). A NON-block (logical) run must SUPERSEDE any in-flight CHUNKED
+    # run on this zone: cancel its pending block timers (advance the
+    # generation) so its orphaned blocks become no-ops instead of re-opening
+    # the valve untracked after this run clears the shared session. A block
+    # sub-call must NOT cancel — those pending timers are its own siblings.
+    _is_block_subcall, is_final_activation = _session_decision_for_run(entry_data, entity_id)
+    if not _is_block_subcall:
+        _cancel_block_timers(entry_data, entity_id)
+
+    # Hard-failure guard (PRD #43): if the underlying switch entity is
+    # missing or already unavailable, refuse to run and notify the user
+    # immediately instead of silently logging.
+    state = hass.states.get(entity_id)
+    coord = entry_data.get("coordinator")
+    friendly = (state.attributes.get("friendly_name") if state else None) or entity_id
+    if state is None or state.state == "unavailable":
+        _LOGGER.warning(
+            "run_zone: entity %s is %s — refusing to start",
+            entity_id,
+            "missing" if state is None else "unavailable",
+        )
+        await _notify_zone_failed(
+            coord,
+            friendly,
+            f"Cannot start {friendly} — the zone switch is "
+            f"{'missing from HA' if state is None else 'unavailable'}.",
+        )
+        # v1.30 — drop any stashed meta so a refused start can't misattribute
+        # the next run. Do NOT clear the active session here: a restart RESUME
+        # that arrives before the switch is back online would otherwise lose
+        # the run entirely. The resume path gates on switch availability +
+        # retries instead (see coordinator._resume_interrupted_runs); a stale
+        # session self-expires at its deadline.
+        entry_data.get("pending_run_meta", {}).pop(entity_id, None)
+        return
+
+    # Record the run + turn the switch on.
+    now = dt_util.utcnow()
+    run = ManualRun(
+        entity_id=entity_id,
+        start_at=now,
+        duration=timedelta(minutes=minutes),
+    )
+    entry_data["manual_runs"].start(run)
+
+    # Pop any pending metadata stashed by the coordinator (scheduled
+    # run) — if present, this is a scheduled call; otherwise manual. v1.30 —
+    # a restart resume stashes the ORIGINAL source so a resumed manual run
+    # stays "manual" in history (don't force scheduled just because meta is set).
+    meta = entry_data.get("pending_run_meta", {}).pop(entity_id, None)
+    source = (meta or {}).get("source") or (SOURCE_SCHEDULED if meta else SOURCE_MANUAL)
+
+    # v1.30 restart fail-over — record the session for the LOGICAL run (the
+    # record-vs-skip + supersede decision was made above). A block sub-call
+    # belongs to a parent session already recorded by the chunking branch.
+    if not _is_block_subcall:
+        _record_active_session(
+            hass,
+            coord,
+            zone=entity_id,
+            total_minutes=minutes,
+            started_at=now,
+            meta=meta,
+            source=source,
         )
 
-    async def handle_stop_zone(call: ServiceCall) -> None:
-        if not await _require_admin_if_configured(hass, call):
-            return
-        data = _STOP_ZONE_SCHEMA(dict(call.data))
-        entity_id: str = data["entity_id"]
+    try:
+        await hass.services.async_call(
+            "switch",
+            SERVICE_TURN_ON,
+            {"entity_id": entity_id},
+            blocking=True,
+        )
+    except Exception as err:
+        # Roll back tracker + notify so the user knows the start failed
+        # even though we recorded a run.
+        entry_data["manual_runs"].stop(entity_id)
+        _LOGGER.exception("switch.turn_on failed for %s", entity_id)
+        await _notify_zone_failed(coord, friendly, f"Zone {friendly} failed to start: {err}")
+        return
 
-        entry_data = _find_entry_data(hass, entity_id)
-        if entry_data is None:
-            _LOGGER.warning(
-                "stop_zone called for %s, not a configured zone — ignoring",
-                entity_id,
-            )
-            return
+    # ── Run history: record the start ──
+    # requested_minutes for scheduled runs uses the ORIGINAL planned
+    # duration (before boost), so actual_minutes vs requested reflects
+    # gate adjustments. Manual runs just use the service call's minutes.
+    _record_run_start_to_history(
+        coord,
+        entity_id=entity_id,
+        friendly_name=friendly,
+        minutes=minutes,
+        meta=meta,
+        source=source,
+        started_at=now,
+    )
+    if coord is not None:
+        hass.async_create_task(coord.async_save_run_history())
 
+    # ── auto-stop timer ──
+    async def _auto_stop(_now=None):
+        run_now = entry_data["manual_runs"].get(entity_id)
+        if run_now is None:
+            return  # already cleaned up by an external off
         entry_data["manual_runs"].stop(entity_id)
         _clear_external_off(entry_data, entity_id)
-        _cancel_handles(entry_data, entity_id)
-        # v1.25 — cancel any pending chunked-run blocks so Stop truly stops the
-        # run; otherwise later blocks would re-open the valve after the user
-        # turned it off.
-        _cancel_block_timers(entry_data, entity_id)
         await hass.services.async_call(
             "switch",
             SERVICE_TURN_OFF,
             {"entity_id": entity_id},
             blocking=False,
         )
-        # Run history: explicit Stop button → abort with reason.
-        coord = entry_data.get("coordinator")
+        _cancel_handles(entry_data, entity_id)
+        # v1.40 "check back" — we just commanded off; verify the valve
+        # actually closed. Armed AFTER _cancel_handles so it isn't
+        # immediately disarmed along with the run's other handles.
+        _schedule_valve_verify_off(hass, entry_data, entity_id, coord, friendly)
+        # Run history: timer expired → completed
         if coord is not None:
-            coord.run_history.abort_run(
+            coord.run_history.complete_run(entity_id, ended_at=dt_util.utcnow())
+            await coord.async_save_run_history()
+        # v1.30 — clear the restart-resume session only when the WHOLE run is
+        # done (a single run, or the final block of a chunked run); an
+        # intermediate block keeps the session so a restart still resumes.
+        if is_final_activation:
+            _clear_active_session(hass, coord, entity_id)
+        _LOGGER.info("Manual run for %s expired and was stopped", entity_id)
+
+    cancel_timer = async_call_later(hass, minutes * 60, _auto_stop)
+
+    # ── debounced external-off verification ──
+    # Fires `_EXTERNAL_OFF_DEBOUNCE_SECONDS` after a zone reports off
+    # mid-run. By now a stale cloud poll has usually been corrected, so
+    # we re-read the live state and only then decide (see
+    # _external_off_decision): recovered → continue; persistently off →
+    # re-assert the switch on, or abort + alert once attempts run out.
+    async def _verify_external_off(_now=None):
+        ext = entry_data.get("external_off", {}).get(entity_id)
+        if ext is not None:
+            ext["pending"] = None
+        run_now = entry_data["manual_runs"].get(entity_id)
+        if run_now is None:
+            return  # run already ended (auto-stop / Stop) while we waited
+        state = hass.states.get(entity_id)
+        state_now = state.state if state is not None else "unavailable"
+        reasserts_left = ext.get("reasserts_left", 0) if ext else 0
+        before_deadline = dt_util.utcnow() < run_now.deadline()
+        ran_healthy = bool(ext.get("ran_healthy")) if ext else False
+        decision = _external_off_decision(state_now, reasserts_left, before_deadline, ran_healthy)
+
+        if decision == "recovered":
+            _LOGGER.info(
+                "Zone %s reported off transiently but is back on — run continues",
+                entity_id,
+            )
+            return
+        if decision in ("retry", "retry_reset"):
+            if ext is not None:
+                if decision == "retry_reset":
+                    # Legit controller cap-stop after a healthy chunk —
+                    # refill the budget so a long run rides cap after cap.
+                    ext["reasserts_left"] = _EXTERNAL_OFF_MAX_REASSERTS
+                else:
+                    ext["reasserts_left"] = reasserts_left - 1
+                # Next chunk is measured fresh from this re-assert.
+                ext["last_on_at"] = dt_util.utcnow()
+                ext["ran_healthy"] = False
+            if decision == "retry_reset":
+                _LOGGER.warning(
+                    "Zone %s stopped after a healthy run (controller cap-stop?); "
+                    "re-asserting on to continue toward its full duration",
+                    entity_id,
+                )
+            else:
+                attempt = _EXTERNAL_OFF_MAX_REASSERTS - reasserts_left + 1
+                _LOGGER.warning(
+                    "Zone %s went off mid-run (stale cloud state?); re-asserting on "
+                    "(attempt %d/%d)",
+                    entity_id,
+                    attempt,
+                    _EXTERNAL_OFF_MAX_REASSERTS,
+                )
+            await hass.services.async_call(
+                "switch", SERVICE_TURN_ON, {"entity_id": entity_id}, blocking=False
+            )
+            return  # listener stays active; a further off re-arms the debounce
+
+        # decision == "abort" — persistently off, out of attempts or past deadline.
+        entry_data["manual_runs"].stop(entity_id)
+        _clear_external_off(entry_data, entity_id)
+        _cancel_handles(entry_data, entity_id)
+        if coord is not None:
+            rec = coord.run_history.abort_run(
                 entity_id,
                 ended_at=dt_util.utcnow(),
-                reason="user pressed Stop",
+                reason="switch turned off externally (did not recover)",
             )
-            await coord.async_save_run_history()
-        # v1.30 — a Stop ends the whole run (incl. a chunked session), so drop
-        # the restart-resume session: a later restart must not revive it.
+            hass.async_create_task(coord.async_save_run_history())
+            # Actionable "Run remainder" / "Open Logbook" alert for a
+            # scheduled run cut short below 90% of planned.
+            hass.async_create_task(_maybe_notify_cut_short(coord, rec))
+        # v1.30 — a run that aborted because the switch won't stay on is in an
+        # error state; don't auto-resume it on the next restart.
         _clear_active_session(hass, coord, entity_id)
-        # v1.40 "check back" — we just commanded off; verify the valve closed
-        # (armed after the _cancel_handles above, so it survives the teardown).
-        stop_state = hass.states.get(entity_id)
-        stop_friendly = (
-            stop_state.attributes.get("friendly_name") if stop_state else None
-        ) or entity_id
-        _schedule_valve_verify_off(hass, entry_data, entity_id, coord, stop_friendly)
-        _LOGGER.info("Stopped manual run for %s by request", entity_id)
+        _LOGGER.warning(
+            "Zone %s stayed off after %d re-assert(s) — aborting run",
+            entity_id,
+            _EXTERNAL_OFF_MAX_REASSERTS,
+        )
 
-    # ── Schedule CRUD ──────────────────────────────────────────────
+    # ── state listener ──
+    # A zone reporting off mid-run is debounced, not acted on immediately
+    # (cloud integrations flap "off" for seconds after a turn-on). One
+    # check is scheduled; further offs are ignored until it fires.
+    @callback
+    def _on_state_change(event):
+        new_state = event.data.get("new_state")
+        run_now = entry_data["manual_runs"].get(entity_id)
+        if run_now is None:
+            return  # our run already ended
+        ext = entry_data.setdefault("external_off", {}).setdefault(
+            entity_id,
+            {
+                "reasserts_left": _EXTERNAL_OFF_MAX_REASSERTS,
+                "pending": None,
+                "last_on_at": dt_util.utcnow(),
+                "ran_healthy": False,
+            },
+        )
+        if new_state is None:
+            return
+        if new_state.state == "on":
+            # Zone (re)started — measure the next chunk from here.
+            ext["last_on_at"] = dt_util.utcnow()
+            return
+        # Off transition: was the chunk it just finished a healthy run
+        # (a controller cap-stop) or a quick flap/fault? Drives whether
+        # the re-assert budget gets refilled (see external_off_decision).
+        on_seconds = (dt_util.utcnow() - ext.get("last_on_at", dt_util.utcnow())).total_seconds()
+        ext["ran_healthy"] = on_seconds >= _EXTERNAL_OFF_HEALTHY_RUN_SECONDS
+        if ext.get("pending") is not None:
+            return  # a debounce check is already scheduled
+        ext["pending"] = async_call_later(
+            hass, _EXTERNAL_OFF_DEBOUNCE_SECONDS, _verify_external_off
+        )
+        _LOGGER.debug(
+            "Zone %s reported off mid-run after %.0fs on; debouncing %ds before reacting",
+            entity_id,
+            on_seconds,
+            _EXTERNAL_OFF_DEBOUNCE_SECONDS,
+        )
 
-    async def handle_add_schedule(call: ServiceCall) -> None:
-        if not await _require_admin(hass, call):  # config write — admin only
-            return
-        data = _ADD_SCHEDULE_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None:
-            _LOGGER.warning("add_schedule called but no coordinator available")
-            return
-        # v1.56 — clean cross-field message (the schema bounds min_chunk to
-        # MAX_SCHEDULE_DURATION_MIN, but the model requires it <= this run's duration).
-        _mc = data.get("min_chunk_minutes")
-        if _mc is not None and _mc > data["duration_minutes"]:
-            raise vol.Invalid(
-                f"min_chunk_minutes ({_mc}) can't exceed the run's duration "
-                f"({data['duration_minutes']} min)"
-            )
-        steps_raw = data.get("zone_steps") or []
-        zone_steps = tuple(
+    cancel_listener = async_track_state_change_event(hass, [entity_id], _on_state_change)
+
+    entry_data.setdefault("external_off", {})[entity_id] = {
+        "reasserts_left": _EXTERNAL_OFF_MAX_REASSERTS,
+        "pending": None,
+        "last_on_at": dt_util.utcnow(),
+        "ran_healthy": False,
+    }
+    entry_data.setdefault("cancel_handles", {})[entity_id] = (
+        cancel_timer,
+        cancel_listener,
+    )
+
+    # v1.40 "check back" — verify the physical switch actually actuated.
+    # Every chunked block re-enters this single-activation path as its own
+    # run_zone sub-call, so each block activation gets exactly ONE verify
+    # (the >cap dispatch branch above returned early and armed none).
+    _schedule_valve_verify_on(hass, entry_data, entity_id, coord, friendly, is_final_activation)
+
+    _LOGGER.info(
+        "Started manual run: %s for %d minutes (deadline %s)",
+        entity_id,
+        minutes,
+        run.deadline().isoformat(),
+    )
+
+
+async def handle_stop_zone(hass: HomeAssistant, call: ServiceCall) -> None:
+    if not await _require_admin_if_configured(hass, call):
+        return
+    data = _STOP_ZONE_SCHEMA(dict(call.data))
+    entity_id: str = data["entity_id"]
+
+    entry_data = _find_entry_data(hass, entity_id)
+    if entry_data is None:
+        _LOGGER.warning(
+            "stop_zone called for %s, not a configured zone — ignoring",
+            entity_id,
+        )
+        return
+
+    entry_data["manual_runs"].stop(entity_id)
+    _clear_external_off(entry_data, entity_id)
+    _cancel_handles(entry_data, entity_id)
+    # v1.25 — cancel any pending chunked-run blocks so Stop truly stops the
+    # run; otherwise later blocks would re-open the valve after the user
+    # turned it off.
+    _cancel_block_timers(entry_data, entity_id)
+    await hass.services.async_call(
+        "switch",
+        SERVICE_TURN_OFF,
+        {"entity_id": entity_id},
+        blocking=False,
+    )
+    # Run history: explicit Stop button → abort with reason.
+    coord = entry_data.get("coordinator")
+    if coord is not None:
+        coord.run_history.abort_run(
+            entity_id,
+            ended_at=dt_util.utcnow(),
+            reason="user pressed Stop",
+        )
+        await coord.async_save_run_history()
+    # v1.30 — a Stop ends the whole run (incl. a chunked session), so drop
+    # the restart-resume session: a later restart must not revive it.
+    _clear_active_session(hass, coord, entity_id)
+    # v1.40 "check back" — we just commanded off; verify the valve closed
+    # (armed after the _cancel_handles above, so it survives the teardown).
+    stop_state = hass.states.get(entity_id)
+    stop_friendly = (
+        stop_state.attributes.get("friendly_name") if stop_state else None
+    ) or entity_id
+    _schedule_valve_verify_off(hass, entry_data, entity_id, coord, stop_friendly)
+    _LOGGER.info("Stopped manual run for %s by request", entity_id)
+
+
+async def handle_add_schedule(hass: HomeAssistant, call: ServiceCall) -> None:
+    if not await _require_admin(hass, call):  # config write — admin only
+        return
+    data = _ADD_SCHEDULE_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None:
+        _LOGGER.warning("add_schedule called but no coordinator available")
+        return
+    # v1.56 — clean cross-field message (the schema bounds min_chunk to
+    # MAX_SCHEDULE_DURATION_MIN, but the model requires it <= this run's duration).
+    _mc = data.get("min_chunk_minutes")
+    if _mc is not None and _mc > data["duration_minutes"]:
+        raise vol.Invalid(
+            f"min_chunk_minutes ({_mc}) can't exceed the run's duration "
+            f"({data['duration_minutes']} min)"
+        )
+    steps_raw = data.get("zone_steps") or []
+    zone_steps = tuple(
+        ZoneStep(
+            zone_entity_id=s["zone_entity_id"],
+            duration_minutes=int(s["duration_minutes"]),
+        )
+        for s in steps_raw
+    )
+    schedule = Schedule(
+        id=uuid.uuid4().hex[:12],
+        name=data["name"],
+        zone_entity_id=data["zone_entity_id"],
+        start_time=data["start_time"],
+        duration_minutes=data["duration_minutes"],
+        weekdays=tuple(sorted(data.get("weekdays") or ())),
+        enabled=data["enabled"],
+        mode=data["mode"],
+        interval_days=data.get("interval_days"),
+        interval_hours=data.get("interval_hours"),
+        interval_anchor=data.get("interval_anchor"),
+        interval_end_time=data.get("interval_end_time"),
+        start_date=data.get("start_date"),
+        end_date=data.get("end_date"),
+        repeat_annually=data.get("repeat_annually", False),
+        zone_steps=zone_steps,
+        ignore_wind=data.get("ignore_wind", False),
+        ignore_hot_weather=data.get("ignore_hot_weather", False),
+        ignore_rain_lockout=data.get("ignore_rain_lockout", False),
+        color=data.get("color"),
+        # v1.40 — sun anchoring
+        sun_event=data.get("sun_event"),
+        sun_offset_minutes=data.get("sun_offset_minutes", 0),
+        anchor=data.get("anchor", "start"),
+        # PRD #60 — provenance marker so calendar.py / establishment
+        # can identify their own entries when #59 two-way calendar
+        # edit lands. Anything coming through the service (panel,
+        # automations, dev tools) gets "service".
+        created_via="service",
+        # v1.56 — scheduler priority + split floor + per-type profile.
+        essential=data.get("essential", True),
+        min_chunk_minutes=data.get("min_chunk_minutes"),
+        split_profile=data.get("split_profile", ""),
+    )
+    coord.schedule_store.add(schedule)
+    await coord.async_save()
+    _LOGGER.info("Added schedule %s (%s) mode=%s", schedule.id, schedule.name, schedule.mode)
+    # v1.56 — base conflict check on add: notify (or hand to the LLM) if this new
+    # schedule collides with the existing plan. Fire-and-forget so the LLM round
+    # trip never delays this service response (review self-guards + never actuates).
+    from .schedule_review import review_schedule
+
+    hass.async_create_task(review_schedule(hass, coord, new_schedule_id=schedule.id))
+
+
+async def handle_update_schedule(hass: HomeAssistant, call: ServiceCall) -> None:
+    if not await _require_admin(hass, call):  # config write — admin only
+        return
+    data = _UPDATE_SCHEDULE_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None:
+        return
+    existing = coord.schedule_store.get(data["schedule_id"])
+    if existing is None:
+        _LOGGER.warning("update_schedule: no such schedule %s", data["schedule_id"])
+        return
+    # v1.15 — collect only the fields the caller actually sent, then
+    # let with_changes do the rest. Avoids the "added a field, forgot
+    # to copy it in update_schedule" bug class.
+    overrides: dict[str, Any] = {}
+    for key in (
+        "name",
+        "zone_entity_id",
+        "start_time",
+        "duration_minutes",
+        "enabled",
+        "mode",
+        "interval_days",
+        "interval_hours",
+        "interval_anchor",
+        "interval_end_time",
+        "start_date",
+        "repeat_annually",
+        "end_date",
+        "ignore_wind",
+        "ignore_hot_weather",
+        "ignore_rain_lockout",
+        "color",
+        "sun_event",
+        "sun_offset_minutes",
+        "anchor",
+        "essential",
+        "min_chunk_minutes",
+        "split_profile",
+    ):
+        if key in data:
+            overrides[key] = data[key]
+    if "weekdays" in data:
+        overrides["weekdays"] = tuple(sorted(data["weekdays"]))
+    if "zone_steps" in data:
+        overrides["zone_steps"] = tuple(
             ZoneStep(
                 zone_entity_id=s["zone_entity_id"],
                 duration_minutes=int(s["duration_minutes"]),
             )
-            for s in steps_raw
+            for s in (data["zone_steps"] or [])
         )
-        schedule = Schedule(
-            id=uuid.uuid4().hex[:12],
-            name=data["name"],
-            zone_entity_id=data["zone_entity_id"],
-            start_time=data["start_time"],
-            duration_minutes=data["duration_minutes"],
-            weekdays=tuple(sorted(data.get("weekdays") or ())),
-            enabled=data["enabled"],
-            mode=data["mode"],
-            interval_days=data.get("interval_days"),
-            interval_hours=data.get("interval_hours"),
-            interval_anchor=data.get("interval_anchor"),
-            interval_end_time=data.get("interval_end_time"),
-            start_date=data.get("start_date"),
-            end_date=data.get("end_date"),
-            repeat_annually=data.get("repeat_annually", False),
-            zone_steps=zone_steps,
-            ignore_wind=data.get("ignore_wind", False),
-            ignore_hot_weather=data.get("ignore_hot_weather", False),
-            ignore_rain_lockout=data.get("ignore_rain_lockout", False),
-            color=data.get("color"),
-            # v1.40 — sun anchoring
-            sun_event=data.get("sun_event"),
-            sun_offset_minutes=data.get("sun_offset_minutes", 0),
-            anchor=data.get("anchor", "start"),
-            # PRD #60 — provenance marker so calendar.py / establishment
-            # can identify their own entries when #59 two-way calendar
-            # edit lands. Anything coming through the service (panel,
-            # automations, dev tools) gets "service".
-            created_via="service",
-            # v1.56 — scheduler priority + split floor + per-type profile.
-            essential=data.get("essential", True),
-            min_chunk_minutes=data.get("min_chunk_minutes"),
-            split_profile=data.get("split_profile", ""),
+    # v1.56 — clean cross-field message before the model raises (min_chunk must
+    # be <= the effective duration, whether one or both are being changed).
+    _eff_dur = overrides.get("duration_minutes", existing.duration_minutes)
+    _eff_mc = overrides.get("min_chunk_minutes", existing.min_chunk_minutes)
+    if _eff_mc is not None and _eff_mc > _eff_dur:
+        raise vol.Invalid(
+            f"min_chunk_minutes ({_eff_mc}) can't exceed the run's duration ({_eff_dur} min)"
         )
-        coord.schedule_store.add(schedule)
-        await coord.async_save()
-        _LOGGER.info("Added schedule %s (%s) mode=%s", schedule.id, schedule.name, schedule.mode)
-        # v1.56 — base conflict check on add: notify (or hand to the LLM) if this new
-        # schedule collides with the existing plan. Fire-and-forget so the LLM round
-        # trip never delays this service response (review self-guards + never actuates).
-        from .schedule_review import review_schedule
+    merged = existing.with_changes(**overrides)
+    coord.schedule_store.upsert(merged)
+    await coord.async_save()
+    _LOGGER.info("Updated schedule %s", merged.id)
+    # v1.56 — re-run the base conflict check after an edit (a moved start / longer
+    # duration can introduce a collision). Fire-and-forget: the LLM round trip
+    # never delays this service response (review self-guards + never actuates).
+    from .schedule_review import review_schedule
 
-        hass.async_create_task(review_schedule(hass, coord, new_schedule_id=schedule.id))
+    hass.async_create_task(review_schedule(hass, coord, new_schedule_id=merged.id))
 
-    async def handle_update_schedule(call: ServiceCall) -> None:
-        if not await _require_admin(hass, call):  # config write — admin only
-            return
-        data = _UPDATE_SCHEDULE_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None:
-            return
-        existing = coord.schedule_store.get(data["schedule_id"])
-        if existing is None:
-            _LOGGER.warning("update_schedule: no such schedule %s", data["schedule_id"])
-            return
-        # v1.15 — collect only the fields the caller actually sent, then
-        # let with_changes do the rest. Avoids the "added a field, forgot
-        # to copy it in update_schedule" bug class.
-        overrides: dict[str, Any] = {}
-        for key in (
-            "name",
-            "zone_entity_id",
-            "start_time",
-            "duration_minutes",
-            "enabled",
-            "mode",
-            "interval_days",
-            "interval_hours",
-            "interval_anchor",
-            "interval_end_time",
-            "start_date",
-            "repeat_annually",
-            "end_date",
-            "ignore_wind",
-            "ignore_hot_weather",
-            "ignore_rain_lockout",
-            "color",
-            "sun_event",
-            "sun_offset_minutes",
-            "anchor",
-            "essential",
-            "min_chunk_minutes",
-            "split_profile",
-        ):
-            if key in data:
-                overrides[key] = data[key]
-        if "weekdays" in data:
-            overrides["weekdays"] = tuple(sorted(data["weekdays"]))
-        if "zone_steps" in data:
-            overrides["zone_steps"] = tuple(
-                ZoneStep(
-                    zone_entity_id=s["zone_entity_id"],
-                    duration_minutes=int(s["duration_minutes"]),
-                )
-                for s in (data["zone_steps"] or [])
-            )
-        # v1.56 — clean cross-field message before the model raises (min_chunk must
-        # be <= the effective duration, whether one or both are being changed).
-        _eff_dur = overrides.get("duration_minutes", existing.duration_minutes)
-        _eff_mc = overrides.get("min_chunk_minutes", existing.min_chunk_minutes)
-        if _eff_mc is not None and _eff_mc > _eff_dur:
+
+async def handle_split_schedule(hass: HomeAssistant, call: ServiceCall) -> None:
+    """v1.56 — actuate an approved split: replace a single-zone schedule with
+    timed parts that sum to its current duration. Propose-only upstream: the
+    user applies this from the reviewed proposal. Parts must not lose/add water."""
+    if not await _require_admin(hass, call):  # config write — admin only
+        return
+    data = _SPLIT_SCHEDULE_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None:
+        return
+    from .schedule import MODE_INTERVAL_HOURS
+    from .schedule_split import effective_min_chunk, merge_chunk_defaults
+
+    existing = coord.schedule_store.get(data["schedule_id"])
+    if existing is None:
+        raise vol.Invalid(f"no such schedule {data['schedule_id']}")
+    if len(existing.all_steps()) > 1:
+        raise vol.Invalid("only single-zone schedules can be split")
+    # An hourly-interval schedule fires many times a day from one start, so each
+    # split part would inherit that cadence and MULTIPLY the daily total — its
+    # parts would not sum to the day's water. Reject it (weekdays/interval fire
+    # once per active day, so their split preserves the total).
+    if existing.mode == MODE_INTERVAL_HOURS:
+        raise vol.Invalid("an hourly-interval schedule can't be split")
+    parts = data["parts"]
+    if sum(int(p["minutes"]) for p in parts) != existing.duration_minutes:
+        raise vol.Invalid(
+            "split parts must sum to the schedule's duration "
+            f"({existing.duration_minutes} min) so no water is lost"
+        )
+    floor = effective_min_chunk(
+        existing.min_chunk_minutes,
+        existing.split_profile,
+        merge_chunk_defaults(coord.config.get("split_chunk_defaults")),
+    )
+    for i, p in enumerate(parts, start=1):
+        if int(p["minutes"]) < floor:
             raise vol.Invalid(
-                f"min_chunk_minutes ({_eff_mc}) can't exceed the run's duration ({_eff_dur} min)"
+                f"split part {i} ({p['minutes']} min) is below the minimum "
+                f"chunk floor ({floor} min)"
             )
-        merged = existing.with_changes(**overrides)
-        coord.schedule_store.upsert(merged)
-        await coord.async_save()
-        _LOGGER.info("Updated schedule %s", merged.id)
-        # v1.56 — re-run the base conflict check after an edit (a moved start / longer
-        # duration can introduce a collision). Fire-and-forget: the LLM round trip
-        # never delays this service response (review self-guards + never actuates).
-        from .schedule_review import review_schedule
-
-        hass.async_create_task(review_schedule(hass, coord, new_schedule_id=merged.id))
-
-    async def handle_split_schedule(call: ServiceCall) -> None:
-        """v1.56 — actuate an approved split: replace a single-zone schedule with
-        timed parts that sum to its current duration. Propose-only upstream: the
-        user applies this from the reviewed proposal. Parts must not lose/add water."""
-        if not await _require_admin(hass, call):  # config write — admin only
-            return
-        data = _SPLIT_SCHEDULE_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None:
-            return
-        from .schedule import MODE_INTERVAL_HOURS
-        from .schedule_split import effective_min_chunk, merge_chunk_defaults
-
-        existing = coord.schedule_store.get(data["schedule_id"])
-        if existing is None:
-            raise vol.Invalid(f"no such schedule {data['schedule_id']}")
-        if len(existing.all_steps()) > 1:
-            raise vol.Invalid("only single-zone schedules can be split")
-        # An hourly-interval schedule fires many times a day from one start, so each
-        # split part would inherit that cadence and MULTIPLY the daily total — its
-        # parts would not sum to the day's water. Reject it (weekdays/interval fire
-        # once per active day, so their split preserves the total).
-        if existing.mode == MODE_INTERVAL_HOURS:
-            raise vol.Invalid("an hourly-interval schedule can't be split")
-        parts = data["parts"]
-        if sum(int(p["minutes"]) for p in parts) != existing.duration_minutes:
-            raise vol.Invalid(
-                "split parts must sum to the schedule's duration "
-                f"({existing.duration_minutes} min) so no water is lost"
+    n = len(parts)
+    base = existing.name
+    # Build EVERY piece up front (ATOMIC): validation runs now, so a bad part can
+    # never leave the schedule half-split with water dropped. Parts drop sun
+    # anchoring (their explicit HH:MM starts must be honored) + the re-split floor.
+    common = {
+        "zone_steps": (),
+        "sun_event": None,
+        "sun_offset_minutes": 0,
+        "min_chunk_minutes": None,
+    }
+    try:
+        pieces = [
+            existing.with_changes(
+                name=f"{base} (1/{n})",
+                start_time=parts[0]["start"],
+                duration_minutes=int(parts[0]["minutes"]),
+                anchor="start",
+                **common,
             )
-        floor = effective_min_chunk(
-            existing.min_chunk_minutes,
-            existing.split_profile,
-            merge_chunk_defaults(coord.config.get("split_chunk_defaults")),
-        )
-        for i, p in enumerate(parts, start=1):
-            if int(p["minutes"]) < floor:
-                raise vol.Invalid(
-                    f"split part {i} ({p['minutes']} min) is below the minimum "
-                    f"chunk floor ({floor} min)"
-                )
-        n = len(parts)
-        base = existing.name
-        # Build EVERY piece up front (ATOMIC): validation runs now, so a bad part can
-        # never leave the schedule half-split with water dropped. Parts drop sun
-        # anchoring (their explicit HH:MM starts must be honored) + the re-split floor.
-        common = {
-            "zone_steps": (),
-            "sun_event": None,
-            "sun_offset_minutes": 0,
-            "min_chunk_minutes": None,
-        }
-        try:
-            pieces = [
-                existing.with_changes(
-                    name=f"{base} (1/{n})",
-                    start_time=parts[0]["start"],
-                    duration_minutes=int(parts[0]["minutes"]),
+        ]
+        for i, p in enumerate(parts[1:], start=2):
+            pieces.append(
+                replace(
+                    existing,
+                    id=uuid.uuid4().hex[:12],
+                    name=f"{base} ({i}/{n})",
+                    start_time=p["start"],
+                    duration_minutes=int(p["minutes"]),
                     anchor="start",
                     **common,
                 )
-            ]
-            for i, p in enumerate(parts[1:], start=2):
-                pieces.append(
-                    replace(
-                        existing,
-                        id=uuid.uuid4().hex[:12],
-                        name=f"{base} ({i}/{n})",
-                        start_time=p["start"],
-                        duration_minutes=int(p["minutes"]),
-                        anchor="start",
-                        **common,
-                    )
-                )
-        except ValueError as err:
-            raise vol.Invalid(f"could not split this schedule: {err}") from err
-        # All pieces valid -> commit together.
-        coord.schedule_store.upsert(pieces[0])
-        for piece in pieces[1:]:
-            coord.schedule_store.add(piece)
+            )
+    except ValueError as err:
+        raise vol.Invalid(f"could not split this schedule: {err}") from err
+    # All pieces valid -> commit together.
+    coord.schedule_store.upsert(pieces[0])
+    for piece in pieces[1:]:
+        coord.schedule_store.add(piece)
+    await coord.async_save()
+    _LOGGER.info("Split schedule %s into %d parts", existing.id, n)
+
+
+async def handle_dismiss_schedule_advice(hass: HomeAssistant, call: ServiceCall) -> None:
+    """v1.56 — clear the stored schedule proposal (nothing was actuated)."""
+    if not await _require_admin(hass, call):
+        return
+    _ = _DISMISS_SCHEDULE_ADVICE_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None:
+        return
+    if coord.config.pop("schedule_advice", None) is not None:
+        await coord.async_save_config()
+
+
+async def handle_delete_schedule(hass: HomeAssistant, call: ServiceCall) -> None:
+    if not await _require_admin(hass, call):  # destructive — admin only
+        return
+    data = _DELETE_SCHEDULE_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None:
+        return
+    # Resolve the schedule's zone(s) BEFORE deleting so we can stop any
+    # chunked-run blocks in flight for them (v1.25).
+    sched = coord.schedule_store.get(data["schedule_id"])
+    if coord.schedule_store.delete(data["schedule_id"]):
         await coord.async_save()
-        _LOGGER.info("Split schedule %s into %d parts", existing.id, n)
+        if sched is not None:
+            for step in sched.all_steps():
+                ed = _find_entry_data(hass, step.zone_entity_id)
+                if ed is not None:
+                    _cancel_block_timers(ed, step.zone_entity_id)
+        _LOGGER.info("Deleted schedule %s", data["schedule_id"])
 
-    async def handle_dismiss_schedule_advice(call: ServiceCall) -> None:
-        """v1.56 — clear the stored schedule proposal (nothing was actuated)."""
-        if not await _require_admin(hass, call):
-            return
-        _ = _DISMISS_SCHEDULE_ADVICE_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None:
-            return
-        if coord.config.pop("schedule_advice", None) is not None:
-            await coord.async_save_config()
 
-    async def handle_delete_schedule(call: ServiceCall) -> None:
-        if not await _require_admin(hass, call):  # destructive — admin only
-            return
-        data = _DELETE_SCHEDULE_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None:
-            return
-        # Resolve the schedule's zone(s) BEFORE deleting so we can stop any
-        # chunked-run blocks in flight for them (v1.25).
-        sched = coord.schedule_store.get(data["schedule_id"])
-        if coord.schedule_store.delete(data["schedule_id"]):
-            await coord.async_save()
-            if sched is not None:
-                for step in sched.all_steps():
-                    ed = _find_entry_data(hass, step.zone_entity_id)
-                    if ed is not None:
-                        _cancel_block_timers(ed, step.zone_entity_id)
-            _LOGGER.info("Deleted schedule %s", data["schedule_id"])
+async def handle_run_schedule(hass: HomeAssistant, call: ServiceCall) -> None:
+    """v1.17.13 — execute a schedule's full run sequence on demand.
 
-    async def handle_run_schedule(call: ServiceCall) -> None:
-        """v1.17.13 — execute a schedule's full run sequence on demand.
+    Powered by the "Run" button on each schedule row in the panel.
+    Bypasses moisture / wind / hot-weather / rain-lockout gates
+    (manual override semantics: the user clicked Run, they meant
+    it). Conflict resolver is NOT consulted since this is a
+    user-initiated immediate action — the underlying run_zone
+    service replaces any in-progress run on the same zone.
 
-        Powered by the "Run" button on each schedule row in the panel.
-        Bypasses moisture / wind / hot-weather / rain-lockout gates
-        (manual override semantics: the user clicked Run, they meant
-        it). Conflict resolver is NOT consulted since this is a
-        user-initiated immediate action — the underlying run_zone
-        service replaces any in-progress run on the same zone.
+    Multi-zone schedules fire zone-by-zone with the user's
+    configured inter-zone buffer (zone_buffer_seconds, default 30s)
+    between steps. Each step's auto-stop timer in handle_run_zone
+    cuts that zone before the next one starts.
+    """
+    if not await _require_admin_if_configured(hass, call):
+        return
+    data = _RUN_SCHEDULE_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None:
+        return
+    sched = coord.schedule_store.get(data["schedule_id"])
+    if sched is None:
+        _LOGGER.warning("run_schedule: no such schedule %s", data["schedule_id"])
+        return
 
-        Multi-zone schedules fire zone-by-zone with the user's
-        configured inter-zone buffer (zone_buffer_seconds, default 30s)
-        between steps. Each step's auto-stop timer in handle_run_zone
-        cuts that zone before the next one starts.
-        """
-        if not await _require_admin_if_configured(hass, call):
-            return
-        data = _RUN_SCHEDULE_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None:
-            return
-        sched = coord.schedule_store.get(data["schedule_id"])
-        if sched is None:
-            _LOGGER.warning("run_schedule: no such schedule %s", data["schedule_id"])
-            return
+    buffer_s = int(coord.config.get("zone_buffer_seconds", 30))
+    steps = sched.all_steps()
+    cumulative_offset = 0
 
-        buffer_s = int(coord.config.get("zone_buffer_seconds", 30))
-        steps = sched.all_steps()
-        cumulative_offset = 0
-
-        for step in steps:
-            entity_id = step.zone_entity_id
-            minutes = int(step.duration_minutes)
-            if cumulative_offset == 0:
-                # Fire the first step immediately
+    for step in steps:
+        entity_id = step.zone_entity_id
+        minutes = int(step.duration_minutes)
+        if cumulative_offset == 0:
+            # Fire the first step immediately
+            await hass.services.async_call(
+                DOMAIN,
+                SERVICE_RUN_ZONE,
+                {"entity_id": entity_id, "minutes": minutes},
+                blocking=False,
+            )
+        else:
+            # Schedule subsequent steps via async_call_later.
+            # Default-arg pattern captures eid/mins by value (not by
+            # reference) so each closure fires its own step.
+            async def _fire_step(_now=None, eid=entity_id, mins=minutes):
                 await hass.services.async_call(
                     DOMAIN,
                     SERVICE_RUN_ZONE,
-                    {"entity_id": entity_id, "minutes": minutes},
+                    {"entity_id": eid, "minutes": mins},
                     blocking=False,
                 )
-            else:
-                # Schedule subsequent steps via async_call_later.
-                # Default-arg pattern captures eid/mins by value (not by
-                # reference) so each closure fires its own step.
-                async def _fire_step(_now=None, eid=entity_id, mins=minutes):
-                    await hass.services.async_call(
-                        DOMAIN,
-                        SERVICE_RUN_ZONE,
-                        {"entity_id": eid, "minutes": mins},
-                        blocking=False,
-                    )
 
-                async_call_later(hass, cumulative_offset, _fire_step)
-            cumulative_offset += minutes * 60 + buffer_s
+            async_call_later(hass, cumulative_offset, _fire_step)
+        cumulative_offset += minutes * 60 + buffer_s
 
-        total_min = (cumulative_offset - buffer_s) // 60
-        _LOGGER.info(
-            "Run schedule %s (%s) on demand: %d zone(s) over ~%d min",
-            sched.id,
-            sched.name,
-            len(steps),
-            total_min,
+    total_min = (cumulative_offset - buffer_s) // 60
+    _LOGGER.info(
+        "Run schedule %s (%s) on demand: %d zone(s) over ~%d min",
+        sched.id,
+        sched.name,
+        len(steps),
+        total_min,
+    )
+
+
+async def handle_set_schedule_enabled(hass: HomeAssistant, call: ServiceCall) -> None:
+    if not await _require_admin_if_configured(hass, call):
+        return
+    data = _SET_SCHEDULE_ENABLED_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None:
+        return
+    existing = coord.schedule_store.get(data["schedule_id"])
+    if existing is None:
+        return
+    # v1.15 — with_changes preserves every field automatically, so
+    # new Schedule attributes don't silently get dropped here.
+    new = existing.with_changes(enabled=data["enabled"])
+    coord.schedule_store.upsert(new)
+    await coord.async_save()
+    _LOGGER.info("Set schedule %s enabled=%s", existing.id, data["enabled"])
+
+
+async def handle_add_plant(hass: HomeAssistant, call: ServiceCall) -> None:
+    if not await _require_admin(hass, call):  # config write — admin only
+        return
+    data = _ADD_PLANT_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None:
+        _LOGGER.warning("add_plant called but no coordinator available")
+        return
+    plant = PlantRecord(
+        id=uuid.uuid4().hex[:12],
+        name=data["name"],
+        wucols_category=data["wucols_category"],
+        canopy_area_sqft=data["canopy_area_sqft"],
+        zone_entity_id=data["zone_entity_id"],
+        area=data.get("area", ""),
+        species=data.get("species", ""),
+    )
+    coord.plants.add(plant)
+    await coord.async_save_plants()
+    _LOGGER.info("Added plant %s (%s) on %s", plant.id, plant.name, plant.zone_entity_id)
+
+
+async def handle_update_plant(hass: HomeAssistant, call: ServiceCall) -> None:
+    if not await _require_admin(hass, call):  # config write — admin only
+        return
+    data = _UPDATE_PLANT_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None:
+        return
+    existing = coord.plants.get(data["plant_id"])
+    if existing is None:
+        _LOGGER.warning("update_plant: no such plant %s", data["plant_id"])
+        return
+    overrides = {
+        k: data[k]
+        for k in (
+            "name",
+            "wucols_category",
+            "canopy_area_sqft",
+            "zone_entity_id",
+            "map_x",
+            "map_y",
+            "area",
+            "species",
+            "emitter_count",
+            "emitter_gph",
         )
+        if k in data
+    }
+    # v1.59 — placing or dragging a marker also stamps the plant's GROUND
+    # ANCHOR from the current frame. That anchor, not the frame-relative
+    # map_x/map_y, is what survives a later move/zoom/rotate of the aerial.
+    if "map_x" in overrides and "map_y" in overrides:
+        from .yard_map import bbox_from_cfg, norm_to_latlon
 
-    async def handle_set_schedule_enabled(call: ServiceCall) -> None:
-        if not await _require_admin_if_configured(hass, call):
-            return
-        data = _SET_SCHEDULE_ENABLED_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None:
-            return
-        existing = coord.schedule_store.get(data["schedule_id"])
-        if existing is None:
-            return
-        # v1.15 — with_changes preserves every field automatically, so
-        # new Schedule attributes don't silently get dropped here.
-        new = existing.with_changes(enabled=data["enabled"])
-        coord.schedule_store.upsert(new)
-        await coord.async_save()
-        _LOGGER.info("Set schedule %s enabled=%s", existing.id, data["enabled"])
-
-    # ── v2: plant CRUD (plant-aware irrigation) ────────────────────
-
-    async def handle_add_plant(call: ServiceCall) -> None:
-        if not await _require_admin(hass, call):  # config write — admin only
-            return
-        data = _ADD_PLANT_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None:
-            _LOGGER.warning("add_plant called but no coordinator available")
-            return
-        plant = PlantRecord(
-            id=uuid.uuid4().hex[:12],
-            name=data["name"],
-            wucols_category=data["wucols_category"],
-            canopy_area_sqft=data["canopy_area_sqft"],
-            zone_entity_id=data["zone_entity_id"],
-            area=data.get("area", ""),
-            species=data.get("species", ""),
-        )
-        coord.plants.add(plant)
-        await coord.async_save_plants()
-        _LOGGER.info("Added plant %s (%s) on %s", plant.id, plant.name, plant.zone_entity_id)
-
-    async def handle_update_plant(call: ServiceCall) -> None:
-        if not await _require_admin(hass, call):  # config write — admin only
-            return
-        data = _UPDATE_PLANT_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None:
-            return
-        existing = coord.plants.get(data["plant_id"])
-        if existing is None:
-            _LOGGER.warning("update_plant: no such plant %s", data["plant_id"])
-            return
-        overrides = {
-            k: data[k]
-            for k in (
-                "name",
-                "wucols_category",
-                "canopy_area_sqft",
-                "zone_entity_id",
-                "map_x",
-                "map_y",
-                "area",
-                "species",
-                "emitter_count",
-                "emitter_gph",
+        _bb = bbox_from_cfg(coord.config.get("yard_map"))
+        if _bb is not None:
+            overrides["anchor_lat"], overrides["anchor_lon"] = norm_to_latlon(
+                float(overrides["map_x"]), float(overrides["map_y"]), _bb
             )
-            if k in data
+    # v1.45 — auto-apply curated care when the species is CHANGED to one our
+    # offline table covers, so "correct the name -> care follows" works with
+    # NO LLM. Only fills the derived care fields (water-use/sun/temps/cadence),
+    # and only ones this same call didn't set explicitly (an explicit
+    # wucols_category wins). Never touches name / canopy / zone / emitters /
+    # map / lux — those are the user's.
+    new_species = overrides.get("species")
+    if new_species and new_species.strip() and new_species != (existing.species or ""):
+        from .plant_care_db import lookup_care
+
+        curated = lookup_care(new_species)
+        if curated:
+            derived = {
+                "wucols_category": curated["wucols"],
+                "sunlight_class": curated["sun"],
+                "temp_low_f": curated["temp_low"],
+                "temp_high_f": curated["temp_high"],
+                "care_plan_preset": curated["preset"],
+                "water_every_days": curated["water_days"],
+                "fertilize_every_days": curated["fert_days"],
+                "common_name": curated["common"],
+                "id_note": curated["note"],
+                "id_model": "curated care (species edit)",
+            }
+            for k, v in derived.items():
+                overrides.setdefault(k, v)  # explicit same-call value wins
+            _LOGGER.info("update_plant: applied curated care for %r (offline table)", new_species)
+    # v1.38 — a one-sided emitter pair is a user error, not an unknown_error:
+    # check against the MERGED values (either field may already be set).
+    if data.get("clear_emitters"):
+        overrides["emitter_count"] = None
+        overrides["emitter_gph"] = None
+    m_count = overrides.get("emitter_count", existing.emitter_count)
+    m_gph = overrides.get("emitter_gph", existing.emitter_gph)
+    if (m_count is None) != (m_gph is None):
+        raise vol.Invalid("set both emitter_count and emitter_gph, or neither")
+    # replace() re-runs PlantRecord validation on the merged record.
+    merged = replace(existing, **overrides)
+    coord.plants.upsert(merged)
+    await coord.async_save_plants()
+    _LOGGER.info("Updated plant %s", merged.id)
+
+
+async def handle_add_zone_region(hass: HomeAssistant, call: ServiceCall) -> None:
+    """v1.60 — tag a drawn patch of ground with the loop that waters it.
+
+    Grass zones have no plant records at all, so nothing on the map keys
+    them; this is what lets the map answer "which loop drives this?".
+    """
+    if not await _require_admin(hass, call):
+        return
+    data = _ADD_ZONE_REGION_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None:
+        return
+    from uuid import uuid4
+
+    from .yard_map import bbox_from_cfg, norm_to_latlon
+    from .zone_region import ZoneRegion
+
+    # Converting the drag to ground degrees IS the record — unlike a plant
+    # there is no backfill path that could rescue an anchorless region, so
+    # this is a hard precondition rather than an optional enrichment.
+    bbox = bbox_from_cfg(coord.config.get("yard_map"))
+    if bbox is None:
+        _LOGGER.warning("add_zone_region: no aerial yet — fetch the yard map first")
+        return
+    lat0, lon0 = norm_to_latlon(float(data["x0"]), float(data["y0"]), bbox)
+    lat1, lon1 = norm_to_latlon(float(data["x1"]), float(data["y1"]), bbox)
+    try:
+        region = ZoneRegion(
+            id=uuid4().hex[:12],
+            zone_entity_id=data["zone_entity_id"],
+            north=lat0,
+            south=lat1,
+            east=lon0,
+            west=lon1,
+            label=data.get("label", ""),
+        )
+    except ValueError as err:
+        _LOGGER.warning("add_zone_region: rejected (%s)", err)
+        return
+    coord.zone_regions.add(region)
+    await coord.async_save_zone_regions()
+    _LOGGER.info(
+        "add_zone_region: %.0f sq ft tagged to %s", region.area_sqft, region.zone_entity_id
+    )
+
+
+async def handle_delete_zone_region(hass: HomeAssistant, call: ServiceCall) -> None:
+    if not await _require_admin(hass, call):
+        return
+    data = _DELETE_ZONE_REGION_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None:
+        return
+    if coord.zone_regions.delete(data["region_id"]):
+        await coord.async_save_zone_regions()
+
+
+async def handle_assign_area_region(hass: HomeAssistant, call: ServiceCall) -> None:
+    """v1.54 — set a light-area label on every placed plant inside a drawn map
+    region (the panel draws a box on the aerial; this bulk-assigns the enclosed
+    markers to the area, or ungroups them when area is empty)."""
+    if not await _require_admin(hass, call):  # config write — admin only
+        return
+    data = _ASSIGN_AREA_REGION_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None:
+        return
+    from .plant import plants_in_region
+
+    area = data["area"].strip()
+    ids = plants_in_region(coord.plants.all(), data["x0"], data["y0"], data["x1"], data["y1"])
+    n = 0
+    for pid in ids:
+        p = coord.plants.get(pid)
+        if p is not None and p.area != area:
+            coord.plants.upsert(replace(p, area=area))
+            n += 1
+    if n:
+        await coord.async_save_plants()
+    _LOGGER.info("assign_area_region: set area %r on %d plant(s)", area, n)
+
+
+async def handle_add_plant_photo(hass: HomeAssistant, call: ServiceCall) -> None:
+    if not await _require_admin(hass, call):  # writes file bytes — admin only
+        return
+    data = _ADD_PLANT_PHOTO_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None:
+        return
+    existing = coord.plants.get(data["plant_id"])
+    if existing is None:
+        raise vol.Invalid(f"no such plant {data['plant_id']}")
+
+    import base64
+    import binascii
+    import os
+
+    from homeassistant.util import dt as dt_util
+
+    # v1.41.4 — every rejection below RAISES (was: _LOGGER.warning + return).
+    # A silent return made the service call succeed while dropping the photo,
+    # so the panel's error path never fired and an upload just "did nothing".
+    raw_b64 = data["image_base64"]
+    if "," in raw_b64[:64]:  # tolerate a data:image/...;base64, prefix
+        raw_b64 = raw_b64.split(",", 1)[1]
+    # Tolerate whitespace/newlines: CLI `base64 file.png` output is line-wrapped
+    # and validate=True rejects it outright — a silent, baffling failure.
+    raw_b64 = "".join(raw_b64.split())
+    try:
+        image = base64.b64decode(raw_b64, validate=True)
+    except (binascii.Error, ValueError) as err:
+        raise vol.Invalid("image data is not valid base64") from err
+    _LOGGER.debug(
+        "add_plant_photo: plant=%s decoded=%d bytes head=%r",
+        existing.id,
+        len(image),
+        image[:8],
+    )
+    if len(image) < 100:
+        raise vol.Invalid(f"decoded image is too small ({len(image)} bytes)")
+    if not _looks_like_image(image):
+        # Reject non-images so a crafted SVG/HTML can't be stored as .jpg and
+        # served from /local (content-sniffing / stored-XSS vector).
+        raise vol.Invalid("payload is not a recognized image (accepted: JPEG, PNG, GIF, WEBP, BMP)")
+
+    ts = int(dt_util.utcnow().timestamp())
+    plants_root = hass.config.path("www", "complete_irrigation", "plants")
+    abs_dir = os.path.join(plants_root, existing.id)
+    fname = f"{ts}.jpg"
+    abs_path = os.path.join(abs_dir, fname)
+    # Defense-in-depth at the filesystem sink: the id is charset-validated on
+    # construct/load, but verify the resolved write path can't escape the
+    # plants dir even if that guard were ever bypassed (path traversal).
+    if os.path.commonpath(
+        [os.path.realpath(abs_dir), os.path.realpath(plants_root)]
+    ) != os.path.realpath(plants_root):
+        _LOGGER.error("add_plant_photo: refusing unsafe path for id %r", existing.id)
+        raise vol.Invalid("refusing an unsafe photo path")
+
+    def _save() -> None:
+        os.makedirs(abs_dir, exist_ok=True)
+        with open(abs_path, "wb") as fh:
+            fh.write(image)
+
+    try:
+        await hass.async_add_executor_job(_save)
+    except OSError as err:
+        raise vol.Invalid(f"could not write the image: {err}") from err
+
+    url_path = f"/local/complete_irrigation/plants/{existing.id}/{fname}"
+    photo = {"ts": ts, "path": url_path, "note": data.get("note", "")}
+    # newest-first, capped.
+    photos = (photo, *existing.photos)[:_MAX_PHOTOS_PER_PLANT]
+    overrides: dict[str, Any] = {"photos": photos}
+
+    # EXIF-GPS auto-place — ONLY if the plant is still unplaced AND we have GPS
+    # AND a yard map exists. GPS places ONCE; the plant_id (selection) owns
+    # identity on every update, manual drag owns position (the locked workflow).
+    if existing.map_x is None and "latitude" in data and "longitude" in data:
+        from .yard_map import norm_from_yard_map
+
+        xy = norm_from_yard_map(data["latitude"], data["longitude"], coord.config.get("yard_map"))
+        if xy is not None:
+            overrides["map_x"], overrides["map_y"] = xy
+            # v1.59 — the photo's GPS IS the ground anchor (no frame round-trip).
+            overrides["anchor_lat"] = float(data["latitude"])
+            overrides["anchor_lon"] = float(data["longitude"])
+            _LOGGER.info("add_plant_photo: auto-placed %s from photo GPS", existing.id)
+
+    merged = replace(existing, **overrides)
+    coord.plants.upsert(merged)
+    await coord.async_save_plants()
+    _LOGGER.info("add_plant_photo: %s now has %d photo(s)", existing.id, len(merged.photos))
+
+
+async def handle_set_plant_health(hass: HomeAssistant, call: ServiceCall) -> None:
+    # v1.33 — the NAS vision job posts its verdict; the vision_health rail bounds
+    # it (strips actuation, clamps, caps) before we store it on the plant. Admin
+    # only (writes stored state + can fire a concern notification).
+    if not await _require_admin(hass, call):
+        return
+    data = _SET_PLANT_HEALTH_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None:
+        return
+    existing = coord.plants.get(data["plant_id"])
+    if existing is None:
+        _LOGGER.warning("set_plant_health: no such plant %s", data["plant_id"])
+        return
+
+    from homeassistant.util import dt as dt_util
+
+    from .vision_health import (
+        report_has_concern,
+        select_review_photos,
+        serialize_report,
+        validate_verdict,
+    )
+
+    sel = select_review_photos(list(existing.photos))
+    latest_ts = sel["latest"]["ts"] if sel else None
+    baseline_ts = sel["baseline"]["ts"] if (sel and sel["baseline"]) else None
+    report = validate_verdict(
+        data["verdict"],
+        plant_id=existing.id,
+        latest_ts=latest_ts,
+        baseline_ts=baseline_ts,
+        model=data.get("model", ""),
+        now_iso=dt_util.utcnow().isoformat(),
+    )
+    if report is None:
+        _LOGGER.warning("set_plant_health: unusable verdict for %s", existing.id)
+        return
+
+    merged = replace(existing, health=serialize_report(report))
+    coord.plants.upsert(merged)
+    await coord.async_save_plants()
+    _LOGGER.info(
+        "set_plant_health: %s -> %s (confidence %.2f)",
+        existing.id,
+        report.health_state,
+        report.confidence,
+    )
+    # Surface a concern to the user (respects the notifier's enabled/quiet-hours).
+    if report_has_concern(report) and coord.notifier is not None:
+        concerns = "; ".join(report.concerns) if report.concerns else report.health_state
+        await coord.notifier.notify(
+            f"{existing.name}: {concerns}",
+            title="Plant health check",
+            event_type="plant_health",
+            extra={"plant_id": existing.id, "health_state": report.health_state},
+        )
+
+
+async def handle_delete_plant(hass: HomeAssistant, call: ServiceCall) -> None:
+    if not await _require_admin(hass, call):  # destructive — admin only
+        return
+    data = _DELETE_PLANT_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None:
+        return
+    if coord.plants.delete(data["plant_id"]):
+        coord.cancel_light_survey(data["plant_id"])  # v1.35 — drop any live survey
+        await coord.async_save_plants()
+        # v1.35 — cascade: a care task for a deleted plant would stay
+        # permanently "due" and can't be retargeted; remove them too.
+        orphaned = coord.care_tasks.for_plant(data["plant_id"])
+        if orphaned:
+            for t in orphaned:
+                coord.care_tasks.delete(t.id)
+            await coord.async_save_care_tasks()
+            _LOGGER.info(
+                "Deleted %d care task(s) attached to plant %s",
+                len(orphaned),
+                data["plant_id"],
+            )
+        _LOGGER.info("Deleted plant %s", data["plant_id"])
+
+
+async def handle_duplicate_plant(hass: HomeAssistant, call: ServiceCall) -> ServiceResponse:
+    """v1.40.11 — copy a plant into a new record (same species / care / zone /
+    drips), MINUS its photos, map position, health, surveys, and any pending
+    suggestion. For quickly adding the next of many identical plants; the user
+    then attaches a fresh photo. Returns {'plant_id': <new id>}."""
+    if not await _require_admin(hass, call):  # data write — admin only
+        return None
+    data = _DUPLICATE_PLANT_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None:
+        return None
+    src = coord.plants.get(data["plant_id"])
+    if src is None:
+        raise vol.Invalid(f"no such plant {data['plant_id']}")
+    new = replace(
+        src,
+        id=uuid.uuid4().hex[:12],
+        name=f"{src.name} (copy)"[:80],
+        photos=(),
+        map_x=None,
+        map_y=None,
+        # v1.62.2 — clear the ANCHOR too. Nulling only map_x/map_y left the
+        # copy presenting as unplaced while still carrying the source's
+        # ground anchor, and reproject_plants trusts the anchor — so the
+        # next zoom/nudge/refresh re-derived a position and the duplicate
+        # materialised stacked exactly on top of the original.
+        anchor_lat=None,
+        anchor_lon=None,
+        health=None,
+        species_suggestion=None,
+        light_surveys=(),
+    )
+    coord.plants.add(new)
+    await coord.async_save_plants()
+    _LOGGER.info("Duplicated plant %s -> %s (%s)", src.id, new.id, new.name)
+    return {"plant_id": new.id}
+
+
+async def handle_set_plant_light_range(hass: HomeAssistant, call: ServiceCall) -> None:
+    if not await _require_admin(hass, call):  # config write — admin only
+        return
+    data = _SET_PLANT_LIGHT_RANGE_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None:
+        return
+    existing = coord.plants.get(data["plant_id"])
+    if existing is None:
+        _LOGGER.warning("set_plant_light_range: no such plant %s", data["plant_id"])
+        return
+    if data.get("clear"):
+        low = high = None
+    else:
+        if "lux_low" not in data or "lux_high" not in data:
+            raise vol.Invalid("provide both lux_low and lux_high, or clear=true")
+        try:
+            low, high = validate_lux_range(data["lux_low"], data["lux_high"])
+        except ValueError as err:
+            # Surface the rail's message as a proper validation error, not an
+            # unknown_error traceback in the caller's face.
+            raise vol.Invalid(str(err)) from err
+    merged = replace(existing, lux_low=low, lux_high=high)
+    coord.plants.upsert(merged)
+    await coord.async_save_plants()
+    _LOGGER.info("Set light range for %s: %s..%s lux", merged.id, low, high)
+
+
+async def handle_start_light_survey(hass: HomeAssistant, call: ServiceCall) -> None:
+    if not await _require_admin(hass, call):  # drives sampling — admin only
+        return
+    data = _START_LIGHT_SURVEY_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None:
+        return
+    plant = coord.plants.get(data["plant_id"])
+    if plant is None:
+        _LOGGER.warning("start_light_survey: no such plant %s", data["plant_id"])
+        return
+    sensor = data["sensor_entity_id"]
+    if hass.states.get(sensor) is None:
+        raise vol.Invalid(f"sensor {sensor} does not exist")
+    coord.start_light_survey(plant.id, sensor, data["minutes"])
+    _LOGGER.info(
+        "Light survey started for %s (%s) on %s for %d min",
+        plant.name,
+        plant.id,
+        sensor,
+        data["minutes"],
+    )
+
+
+async def handle_cancel_light_survey(hass: HomeAssistant, call: ServiceCall) -> None:
+    if not await _require_admin(hass, call):
+        return
+    data = _CANCEL_LIGHT_SURVEY_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None:
+        return
+    if coord.cancel_light_survey(data["plant_id"]):
+        _LOGGER.info("Light survey cancelled for %s", data["plant_id"])
+
+
+async def handle_start_area_light_survey(hass: HomeAssistant, call: ServiceCall) -> None:
+    if not await _require_admin(hass, call):  # drives sampling — admin only
+        return
+    data = _START_AREA_LIGHT_SURVEY_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None:
+        return
+    area = data["area"].strip()
+    plants = coord.plants.by_area(area)
+    if not plants:
+        raise vol.Invalid(f"no plants are in the area {area!r}")
+    sensor = data["sensor_entity_id"]
+    if hass.states.get(sensor) is None:
+        raise vol.Invalid(f"sensor {sensor} does not exist")
+    coord.start_area_light_survey(area, [p.id for p in plants], sensor, data["minutes"])
+    _LOGGER.info(
+        "Area light survey started for %r (%d plants) on %s for %d min",
+        area,
+        len(plants),
+        sensor,
+        data["minutes"],
+    )
+
+
+async def handle_cancel_area_light_survey(hass: HomeAssistant, call: ServiceCall) -> None:
+    if not await _require_admin(hass, call):
+        return
+    data = _CANCEL_AREA_LIGHT_SURVEY_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None:
+        return
+    if coord.cancel_area_light_survey(data["area"].strip()):
+        _LOGGER.info("Area light survey cancelled for %r", data["area"])
+
+
+async def handle_add_care_task(hass: HomeAssistant, call: ServiceCall) -> None:
+    if not await _require_admin(hass, call):  # config write — admin only
+        return
+    data = _ADD_CARE_TASK_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None:
+        return
+    if data["plant_id"] and coord.plants.get(data["plant_id"]) is None:
+        raise vol.Invalid(f"no such plant {data['plant_id']}")
+    if data["zone_entity_id"] and hass.states.get(data["zone_entity_id"]) is None:
+        raise vol.Invalid(f"no such zone entity {data['zone_entity_id']}")
+    # CareTask.__post_init__ enforces plant-or-zone + custom-needs-label —
+    # surfaced as a proper validation error, not an unknown_error traceback.
+    try:
+        task = CareTask(
+            id=uuid.uuid4().hex[:12],
+            kind=data["kind"],
+            interval_days=data["interval_days"],
+            plant_id=data["plant_id"],
+            zone_entity_id=data["zone_entity_id"],
+            label=data["label"],
+        )
+    except ValueError as err:
+        raise vol.Invalid(str(err)) from err
+    coord.care_tasks.add(task)
+    await coord.async_save_care_tasks()
+    _LOGGER.info("Added care task %s (%s every %dd)", task.id, task.kind, task.interval_days)
+
+
+async def handle_update_care_task(hass: HomeAssistant, call: ServiceCall) -> None:
+    if not await _require_admin(hass, call):
+        return
+    data = _UPDATE_CARE_TASK_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None:
+        return
+    existing = coord.care_tasks.get(data["task_id"])
+    if existing is None:
+        _LOGGER.warning("update_care_task: no such task %s", data["task_id"])
+        return
+    overrides = {k: data[k] for k in ("kind", "interval_days", "label", "enabled") if k in data}
+    try:
+        merged = replace(existing, **overrides)
+    except ValueError as err:
+        # e.g. switching kind to custom without a label — a validation error.
+        raise vol.Invalid(str(err)) from err
+    coord.care_tasks.upsert(merged)
+    await coord.async_save_care_tasks()
+    _LOGGER.info("Updated care task %s", merged.id)
+
+
+async def handle_seed_care_plan(hass: HomeAssistant, call: ServiceCall) -> None:
+    if not await _require_admin(hass, call):  # config write — admin only
+        return
+    data = _SEED_CARE_PLAN_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None:
+        return
+    plant = coord.plants.get(data["plant_id"])
+    if plant is None:
+        raise vol.Invalid(f"no such plant {data['plant_id']}")
+    tasks = seed_care_plan(plant.id, data["preset"], id_factory=lambda: uuid.uuid4().hex[:12])
+    # Idempotent: skip kinds the plant already has a task for.
+    existing_kinds = {t.kind for t in coord.care_tasks.for_plant(plant.id)}
+    added = 0
+    for t in tasks:
+        if t.kind in existing_kinds:
+            continue
+        coord.care_tasks.add(t)
+        added += 1
+    if added:
+        await coord.async_save_care_tasks()
+    _LOGGER.info(
+        "Seeded care plan '%s' for %s: %d task(s) added, %d already present",
+        data["preset"],
+        plant.name,
+        added,
+        len(tasks) - added,
+    )
+
+
+async def _run_identify(hass: HomeAssistant, coord, plant):
+    """Photo -> bounded species suggestion (raises vol.Invalid with a
+    user-actionable message). Shared by identify_plant_species and
+    add_plant_from_photo. Stores the suggestion on the plant and returns it."""
+    if not plant.photos:
+        raise vol.Invalid("add a photo of the plant first")
+    import base64
+
+    from homeassistant.helpers.aiohttp_client import async_get_clientsession
+    from homeassistant.util import dt as dt_util
+
+    from .llm_client import call_chat, resolve_targets
+    from .species_id import extract_suggestion_json, validate_suggestion
+
+    # Newest photo path is server-set "/local/complete_irrigation/plants/<id>/…"
+    # (from_dict guarantees the /local/ prefix; the id is slug-safe). Re-guard anyway.
+    rel = str(plant.photos[0]["path"]).split("?", 1)[0]
+    if not rel.startswith("/local/") or ".." in rel:
+        raise vol.Invalid("plant photo path is not usable")
+    abs_path = hass.config.path("www", *rel[len("/local/") :].split("/"))
+    # Belt-and-suspenders containment: the resolved path must stay inside www/
+    # (the prefix + ".." checks above make escape unreachable, but resolve()
+    # also defeats any symlink/odd-segment trickery in a tampered store).
+    from pathlib import Path as _Path
+
+    www_root = _Path(hass.config.path("www")).resolve()
+    if not _Path(abs_path).resolve().is_relative_to(www_root):
+        raise vol.Invalid("plant photo path is not usable")
+
+    def _read() -> bytes:
+        with open(abs_path, "rb") as fh:
+            return fh.read(12_000_000)
+
+    try:
+        img = await hass.async_add_executor_job(_read)
+    except OSError as err:
+        raise vol.Invalid(f"could not read the plant photo: {err}") from err
+    # Declare the ACTUAL image type — a stored PNG/WEBP announced as JPEG is
+    # rejected by some vision providers (v1.41.4).
+    mime = _image_mime(img) or "image/jpeg"
+    b64 = base64.b64encode(img).decode("ascii")
+
+    # v1.51 — Pl@ntNet engine: a no-LLM, plant-specific identifier. Uploads the
+    # photo (multipart) and returns species candidates; the curated table then
+    # fills water-use/care, the same as the LLM apply path.
+    engine = str(coord.config.get("plantid_engine") or "llm")
+    if engine == "plantnet":
+        import json as _json
+
+        import aiohttp
+
+        from .plant_care_db import lookup_care
+        from .plantnet import parse_plantnet, plantnet_url
+
+        key = str(coord.config.get("plantnet_api_key") or "").strip()
+        if not key:
+            raise vol.Invalid("add your Pl@ntNet API key first (Settings -> Plant identification)")
+        form = aiohttp.FormData()
+        form.add_field("organs", "auto")
+        form.add_field("images", img, filename="plant.jpg", content_type=mime)
+        session = async_get_clientsession(hass)
+        try:
+            async with session.post(
+                plantnet_url(key), data=form, timeout=aiohttp.ClientTimeout(total=60)
+            ) as resp:
+                if resp.status in (401, 403):
+                    raise vol.Invalid("Pl@ntNet rejected the API key")
+                if resp.status == 429:
+                    raise vol.Invalid("Pl@ntNet daily limit reached — try again tomorrow")
+                if resp.status != 200:
+                    raise vol.Invalid(f"Pl@ntNet returned HTTP {resp.status}")
+                raw = await resp.content.read(1_000_001)
+        except vol.Invalid:
+            raise
+        except Exception as err:
+            raise vol.Invalid(f"Pl@ntNet unreachable: {err}") from err
+        try:
+            pn = parse_plantnet(_json.loads(raw))
+        except ValueError as err:
+            raise vol.Invalid("Pl@ntNet returned an unexpected response") from err
+        if not pn["matched"]:
+            raise vol.Invalid("Pl@ntNet could not identify the plant — try a clearer photo")
+        raw_sug = {
+            "species": pn["species"],
+            "common_name": pn["common_name"],
+            "confidence": pn["confidence"],
         }
-        # v1.59 — placing or dragging a marker also stamps the plant's GROUND
-        # ANCHOR from the current frame. That anchor, not the frame-relative
-        # map_x/map_y, is what survives a later move/zoom/rotate of the aerial.
-        if "map_x" in overrides and "map_y" in overrides:
-            from .yard_map import bbox_from_cfg, norm_to_latlon
-
-            _bb = bbox_from_cfg(coord.config.get("yard_map"))
-            if _bb is not None:
-                overrides["anchor_lat"], overrides["anchor_lon"] = norm_to_latlon(
-                    float(overrides["map_x"]), float(overrides["map_y"]), _bb
-                )
-        # v1.45 — auto-apply curated care when the species is CHANGED to one our
-        # offline table covers, so "correct the name -> care follows" works with
-        # NO LLM. Only fills the derived care fields (water-use/sun/temps/cadence),
-        # and only ones this same call didn't set explicitly (an explicit
-        # wucols_category wins). Never touches name / canopy / zone / emitters /
-        # map / lux — those are the user's.
-        new_species = overrides.get("species")
-        if new_species and new_species.strip() and new_species != (existing.species or ""):
-            from .plant_care_db import lookup_care
-
-            curated = lookup_care(new_species)
-            if curated:
-                derived = {
+        curated = lookup_care(pn["species"])
+        if curated:
+            raw_sug.update(
+                {
                     "wucols_category": curated["wucols"],
                     "sunlight_class": curated["sun"],
                     "temp_low_f": curated["temp_low"],
@@ -2327,1972 +2921,1261 @@ async def _async_register_services(hass: HomeAssistant) -> None:
                     "care_plan_preset": curated["preset"],
                     "water_every_days": curated["water_days"],
                     "fertilize_every_days": curated["fert_days"],
-                    "common_name": curated["common"],
-                    "id_note": curated["note"],
-                    "id_model": "curated care (species edit)",
+                    "note": curated["note"],
                 }
-                for k, v in derived.items():
-                    overrides.setdefault(k, v)  # explicit same-call value wins
-                _LOGGER.info(
-                    "update_plant: applied curated care for %r (offline table)", new_species
-                )
-        # v1.38 — a one-sided emitter pair is a user error, not an unknown_error:
-        # check against the MERGED values (either field may already be set).
-        if data.get("clear_emitters"):
-            overrides["emitter_count"] = None
-            overrides["emitter_gph"] = None
-        m_count = overrides.get("emitter_count", existing.emitter_count)
-        m_gph = overrides.get("emitter_gph", existing.emitter_gph)
-        if (m_count is None) != (m_gph is None):
-            raise vol.Invalid("set both emitter_count and emitter_gph, or neither")
-        # replace() re-runs PlantRecord validation on the merged record.
-        merged = replace(existing, **overrides)
-        coord.plants.upsert(merged)
-        await coord.async_save_plants()
-        _LOGGER.info("Updated plant %s", merged.id)
-
-    async def handle_add_zone_region(call: ServiceCall) -> None:
-        """v1.60 — tag a drawn patch of ground with the loop that waters it.
-
-        Grass zones have no plant records at all, so nothing on the map keys
-        them; this is what lets the map answer "which loop drives this?".
-        """
-        if not await _require_admin(hass, call):
-            return
-        data = _ADD_ZONE_REGION_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None:
-            return
-        from uuid import uuid4
-
-        from .yard_map import bbox_from_cfg, norm_to_latlon
-        from .zone_region import ZoneRegion
-
-        # Converting the drag to ground degrees IS the record — unlike a plant
-        # there is no backfill path that could rescue an anchorless region, so
-        # this is a hard precondition rather than an optional enrichment.
-        bbox = bbox_from_cfg(coord.config.get("yard_map"))
-        if bbox is None:
-            _LOGGER.warning("add_zone_region: no aerial yet — fetch the yard map first")
-            return
-        lat0, lon0 = norm_to_latlon(float(data["x0"]), float(data["y0"]), bbox)
-        lat1, lon1 = norm_to_latlon(float(data["x1"]), float(data["y1"]), bbox)
-        try:
-            region = ZoneRegion(
-                id=uuid4().hex[:12],
-                zone_entity_id=data["zone_entity_id"],
-                north=lat0,
-                south=lat1,
-                east=lon0,
-                west=lon1,
-                label=data.get("label", ""),
             )
-        except ValueError as err:
-            _LOGGER.warning("add_zone_region: rejected (%s)", err)
-            return
-        coord.zone_regions.add(region)
-        await coord.async_save_zone_regions()
-        _LOGGER.info(
-            "add_zone_region: %.0f sq ft tagged to %s", region.area_sqft, region.zone_entity_id
-        )
-
-    async def handle_delete_zone_region(call: ServiceCall) -> None:
-        if not await _require_admin(hass, call):
-            return
-        data = _DELETE_ZONE_REGION_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None:
-            return
-        if coord.zone_regions.delete(data["region_id"]):
-            await coord.async_save_zone_regions()
-
-    async def handle_assign_area_region(call: ServiceCall) -> None:
-        """v1.54 — set a light-area label on every placed plant inside a drawn map
-        region (the panel draws a box on the aerial; this bulk-assigns the enclosed
-        markers to the area, or ungroups them when area is empty)."""
-        if not await _require_admin(hass, call):  # config write — admin only
-            return
-        data = _ASSIGN_AREA_REGION_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None:
-            return
-        from .plant import plants_in_region
-
-        area = data["area"].strip()
-        ids = plants_in_region(coord.plants.all(), data["x0"], data["y0"], data["x1"], data["y1"])
-        n = 0
-        for pid in ids:
-            p = coord.plants.get(pid)
-            if p is not None and p.area != area:
-                coord.plants.upsert(replace(p, area=area))
-                n += 1
-        if n:
-            await coord.async_save_plants()
-        _LOGGER.info("assign_area_region: set area %r on %d plant(s)", area, n)
-
-    async def handle_add_plant_photo(call: ServiceCall) -> None:
-        if not await _require_admin(hass, call):  # writes file bytes — admin only
-            return
-        data = _ADD_PLANT_PHOTO_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None:
-            return
-        existing = coord.plants.get(data["plant_id"])
-        if existing is None:
-            raise vol.Invalid(f"no such plant {data['plant_id']}")
-
-        import base64
-        import binascii
-        import os
-
-        from homeassistant.util import dt as dt_util
-
-        # v1.41.4 — every rejection below RAISES (was: _LOGGER.warning + return).
-        # A silent return made the service call succeed while dropping the photo,
-        # so the panel's error path never fired and an upload just "did nothing".
-        raw_b64 = data["image_base64"]
-        if "," in raw_b64[:64]:  # tolerate a data:image/...;base64, prefix
-            raw_b64 = raw_b64.split(",", 1)[1]
-        # Tolerate whitespace/newlines: CLI `base64 file.png` output is line-wrapped
-        # and validate=True rejects it outright — a silent, baffling failure.
-        raw_b64 = "".join(raw_b64.split())
-        try:
-            image = base64.b64decode(raw_b64, validate=True)
-        except (binascii.Error, ValueError) as err:
-            raise vol.Invalid("image data is not valid base64") from err
-        _LOGGER.debug(
-            "add_plant_photo: plant=%s decoded=%d bytes head=%r",
-            existing.id,
-            len(image),
-            image[:8],
-        )
-        if len(image) < 100:
-            raise vol.Invalid(f"decoded image is too small ({len(image)} bytes)")
-        if not _looks_like_image(image):
-            # Reject non-images so a crafted SVG/HTML can't be stored as .jpg and
-            # served from /local (content-sniffing / stored-XSS vector).
-            raise vol.Invalid(
-                "payload is not a recognized image (accepted: JPEG, PNG, GIF, WEBP, BMP)"
-            )
-
-        ts = int(dt_util.utcnow().timestamp())
-        plants_root = hass.config.path("www", "complete_irrigation", "plants")
-        abs_dir = os.path.join(plants_root, existing.id)
-        fname = f"{ts}.jpg"
-        abs_path = os.path.join(abs_dir, fname)
-        # Defense-in-depth at the filesystem sink: the id is charset-validated on
-        # construct/load, but verify the resolved write path can't escape the
-        # plants dir even if that guard were ever bypassed (path traversal).
-        if os.path.commonpath(
-            [os.path.realpath(abs_dir), os.path.realpath(plants_root)]
-        ) != os.path.realpath(plants_root):
-            _LOGGER.error("add_plant_photo: refusing unsafe path for id %r", existing.id)
-            raise vol.Invalid("refusing an unsafe photo path")
-
-        def _save() -> None:
-            os.makedirs(abs_dir, exist_ok=True)
-            with open(abs_path, "wb") as fh:
-                fh.write(image)
-
-        try:
-            await hass.async_add_executor_job(_save)
-        except OSError as err:
-            raise vol.Invalid(f"could not write the image: {err}") from err
-
-        url_path = f"/local/complete_irrigation/plants/{existing.id}/{fname}"
-        photo = {"ts": ts, "path": url_path, "note": data.get("note", "")}
-        # newest-first, capped.
-        photos = (photo, *existing.photos)[:_MAX_PHOTOS_PER_PLANT]
-        overrides: dict[str, Any] = {"photos": photos}
-
-        # EXIF-GPS auto-place — ONLY if the plant is still unplaced AND we have GPS
-        # AND a yard map exists. GPS places ONCE; the plant_id (selection) owns
-        # identity on every update, manual drag owns position (the locked workflow).
-        if existing.map_x is None and "latitude" in data and "longitude" in data:
-            from .yard_map import norm_from_yard_map
-
-            xy = norm_from_yard_map(
-                data["latitude"], data["longitude"], coord.config.get("yard_map")
-            )
-            if xy is not None:
-                overrides["map_x"], overrides["map_y"] = xy
-                # v1.59 — the photo's GPS IS the ground anchor (no frame round-trip).
-                overrides["anchor_lat"] = float(data["latitude"])
-                overrides["anchor_lon"] = float(data["longitude"])
-                _LOGGER.info("add_plant_photo: auto-placed %s from photo GPS", existing.id)
-
-        merged = replace(existing, **overrides)
-        coord.plants.upsert(merged)
-        await coord.async_save_plants()
-        _LOGGER.info("add_plant_photo: %s now has %d photo(s)", existing.id, len(merged.photos))
-
-    async def handle_set_plant_health(call: ServiceCall) -> None:
-        # v1.33 — the NAS vision job posts its verdict; the vision_health rail bounds
-        # it (strips actuation, clamps, caps) before we store it on the plant. Admin
-        # only (writes stored state + can fire a concern notification).
-        if not await _require_admin(hass, call):
-            return
-        data = _SET_PLANT_HEALTH_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None:
-            return
-        existing = coord.plants.get(data["plant_id"])
-        if existing is None:
-            _LOGGER.warning("set_plant_health: no such plant %s", data["plant_id"])
-            return
-
-        from homeassistant.util import dt as dt_util
-
-        from .vision_health import (
-            report_has_concern,
-            select_review_photos,
-            serialize_report,
-            validate_verdict,
-        )
-
-        sel = select_review_photos(list(existing.photos))
-        latest_ts = sel["latest"]["ts"] if sel else None
-        baseline_ts = sel["baseline"]["ts"] if (sel and sel["baseline"]) else None
-        report = validate_verdict(
-            data["verdict"],
-            plant_id=existing.id,
-            latest_ts=latest_ts,
-            baseline_ts=baseline_ts,
-            model=data.get("model", ""),
-            now_iso=dt_util.utcnow().isoformat(),
-        )
-        if report is None:
-            _LOGGER.warning("set_plant_health: unusable verdict for %s", existing.id)
-            return
-
-        merged = replace(existing, health=serialize_report(report))
-        coord.plants.upsert(merged)
-        await coord.async_save_plants()
-        _LOGGER.info(
-            "set_plant_health: %s -> %s (confidence %.2f)",
-            existing.id,
-            report.health_state,
-            report.confidence,
-        )
-        # Surface a concern to the user (respects the notifier's enabled/quiet-hours).
-        if report_has_concern(report) and coord.notifier is not None:
-            concerns = "; ".join(report.concerns) if report.concerns else report.health_state
-            await coord.notifier.notify(
-                f"{existing.name}: {concerns}",
-                title="Plant health check",
-                event_type="plant_health",
-                extra={"plant_id": existing.id, "health_state": report.health_state},
-            )
-
-    async def handle_delete_plant(call: ServiceCall) -> None:
-        if not await _require_admin(hass, call):  # destructive — admin only
-            return
-        data = _DELETE_PLANT_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None:
-            return
-        if coord.plants.delete(data["plant_id"]):
-            coord.cancel_light_survey(data["plant_id"])  # v1.35 — drop any live survey
-            await coord.async_save_plants()
-            # v1.35 — cascade: a care task for a deleted plant would stay
-            # permanently "due" and can't be retargeted; remove them too.
-            orphaned = coord.care_tasks.for_plant(data["plant_id"])
-            if orphaned:
-                for t in orphaned:
-                    coord.care_tasks.delete(t.id)
-                await coord.async_save_care_tasks()
-                _LOGGER.info(
-                    "Deleted %d care task(s) attached to plant %s",
-                    len(orphaned),
-                    data["plant_id"],
-                )
-            _LOGGER.info("Deleted plant %s", data["plant_id"])
-
-    async def handle_duplicate_plant(call: ServiceCall) -> ServiceResponse:
-        """v1.40.11 — copy a plant into a new record (same species / care / zone /
-        drips), MINUS its photos, map position, health, surveys, and any pending
-        suggestion. For quickly adding the next of many identical plants; the user
-        then attaches a fresh photo. Returns {'plant_id': <new id>}."""
-        if not await _require_admin(hass, call):  # data write — admin only
-            return None
-        data = _DUPLICATE_PLANT_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None:
-            return None
-        src = coord.plants.get(data["plant_id"])
-        if src is None:
-            raise vol.Invalid(f"no such plant {data['plant_id']}")
-        new = replace(
-            src,
-            id=uuid.uuid4().hex[:12],
-            name=f"{src.name} (copy)"[:80],
-            photos=(),
-            map_x=None,
-            map_y=None,
-            # v1.62.2 — clear the ANCHOR too. Nulling only map_x/map_y left the
-            # copy presenting as unplaced while still carrying the source's
-            # ground anchor, and reproject_plants trusts the anchor — so the
-            # next zoom/nudge/refresh re-derived a position and the duplicate
-            # materialised stacked exactly on top of the original.
-            anchor_lat=None,
-            anchor_lon=None,
-            health=None,
-            species_suggestion=None,
-            light_surveys=(),
-        )
-        coord.plants.add(new)
-        await coord.async_save_plants()
-        _LOGGER.info("Duplicated plant %s -> %s (%s)", src.id, new.id, new.name)
-        return {"plant_id": new.id}
-
-    # ── v1.35: light surveys ────────────────────────────────────────
-
-    async def handle_set_plant_light_range(call: ServiceCall) -> None:
-        if not await _require_admin(hass, call):  # config write — admin only
-            return
-        data = _SET_PLANT_LIGHT_RANGE_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None:
-            return
-        existing = coord.plants.get(data["plant_id"])
-        if existing is None:
-            _LOGGER.warning("set_plant_light_range: no such plant %s", data["plant_id"])
-            return
-        if data.get("clear"):
-            low = high = None
-        else:
-            if "lux_low" not in data or "lux_high" not in data:
-                raise vol.Invalid("provide both lux_low and lux_high, or clear=true")
-            try:
-                low, high = validate_lux_range(data["lux_low"], data["lux_high"])
-            except ValueError as err:
-                # Surface the rail's message as a proper validation error, not an
-                # unknown_error traceback in the caller's face.
-                raise vol.Invalid(str(err)) from err
-        merged = replace(existing, lux_low=low, lux_high=high)
-        coord.plants.upsert(merged)
-        await coord.async_save_plants()
-        _LOGGER.info("Set light range for %s: %s..%s lux", merged.id, low, high)
-
-    async def handle_start_light_survey(call: ServiceCall) -> None:
-        if not await _require_admin(hass, call):  # drives sampling — admin only
-            return
-        data = _START_LIGHT_SURVEY_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None:
-            return
-        plant = coord.plants.get(data["plant_id"])
-        if plant is None:
-            _LOGGER.warning("start_light_survey: no such plant %s", data["plant_id"])
-            return
-        sensor = data["sensor_entity_id"]
-        if hass.states.get(sensor) is None:
-            raise vol.Invalid(f"sensor {sensor} does not exist")
-        coord.start_light_survey(plant.id, sensor, data["minutes"])
-        _LOGGER.info(
-            "Light survey started for %s (%s) on %s for %d min",
-            plant.name,
-            plant.id,
-            sensor,
-            data["minutes"],
-        )
-
-    async def handle_cancel_light_survey(call: ServiceCall) -> None:
-        if not await _require_admin(hass, call):
-            return
-        data = _CANCEL_LIGHT_SURVEY_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None:
-            return
-        if coord.cancel_light_survey(data["plant_id"]):
-            _LOGGER.info("Light survey cancelled for %s", data["plant_id"])
-
-    # ── v1.55: area-wide light surveys ──────────────────────────────
-
-    async def handle_start_area_light_survey(call: ServiceCall) -> None:
-        if not await _require_admin(hass, call):  # drives sampling — admin only
-            return
-        data = _START_AREA_LIGHT_SURVEY_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None:
-            return
-        area = data["area"].strip()
-        plants = coord.plants.by_area(area)
-        if not plants:
-            raise vol.Invalid(f"no plants are in the area {area!r}")
-        sensor = data["sensor_entity_id"]
-        if hass.states.get(sensor) is None:
-            raise vol.Invalid(f"sensor {sensor} does not exist")
-        coord.start_area_light_survey(area, [p.id for p in plants], sensor, data["minutes"])
-        _LOGGER.info(
-            "Area light survey started for %r (%d plants) on %s for %d min",
-            area,
-            len(plants),
-            sensor,
-            data["minutes"],
-        )
-
-    async def handle_cancel_area_light_survey(call: ServiceCall) -> None:
-        if not await _require_admin(hass, call):
-            return
-        data = _CANCEL_AREA_LIGHT_SURVEY_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None:
-            return
-        if coord.cancel_area_light_survey(data["area"].strip()):
-            _LOGGER.info("Area light survey cancelled for %r", data["area"])
-
-    # ── v1.35: care-task reminders ──────────────────────────────────
-
-    async def handle_add_care_task(call: ServiceCall) -> None:
-        if not await _require_admin(hass, call):  # config write — admin only
-            return
-        data = _ADD_CARE_TASK_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None:
-            return
-        if data["plant_id"] and coord.plants.get(data["plant_id"]) is None:
-            raise vol.Invalid(f"no such plant {data['plant_id']}")
-        if data["zone_entity_id"] and hass.states.get(data["zone_entity_id"]) is None:
-            raise vol.Invalid(f"no such zone entity {data['zone_entity_id']}")
-        # CareTask.__post_init__ enforces plant-or-zone + custom-needs-label —
-        # surfaced as a proper validation error, not an unknown_error traceback.
-        try:
-            task = CareTask(
-                id=uuid.uuid4().hex[:12],
-                kind=data["kind"],
-                interval_days=data["interval_days"],
-                plant_id=data["plant_id"],
-                zone_entity_id=data["zone_entity_id"],
-                label=data["label"],
-            )
-        except ValueError as err:
-            raise vol.Invalid(str(err)) from err
-        coord.care_tasks.add(task)
-        await coord.async_save_care_tasks()
-        _LOGGER.info("Added care task %s (%s every %dd)", task.id, task.kind, task.interval_days)
-
-    async def handle_update_care_task(call: ServiceCall) -> None:
-        if not await _require_admin(hass, call):
-            return
-        data = _UPDATE_CARE_TASK_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None:
-            return
-        existing = coord.care_tasks.get(data["task_id"])
-        if existing is None:
-            _LOGGER.warning("update_care_task: no such task %s", data["task_id"])
-            return
-        overrides = {k: data[k] for k in ("kind", "interval_days", "label", "enabled") if k in data}
-        try:
-            merged = replace(existing, **overrides)
-        except ValueError as err:
-            # e.g. switching kind to custom without a label — a validation error.
-            raise vol.Invalid(str(err)) from err
-        coord.care_tasks.upsert(merged)
-        await coord.async_save_care_tasks()
-        _LOGGER.info("Updated care task %s", merged.id)
-
-    async def handle_seed_care_plan(call: ServiceCall) -> None:
-        if not await _require_admin(hass, call):  # config write — admin only
-            return
-        data = _SEED_CARE_PLAN_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None:
-            return
-        plant = coord.plants.get(data["plant_id"])
-        if plant is None:
-            raise vol.Invalid(f"no such plant {data['plant_id']}")
-        tasks = seed_care_plan(plant.id, data["preset"], id_factory=lambda: uuid.uuid4().hex[:12])
-        # Idempotent: skip kinds the plant already has a task for.
-        existing_kinds = {t.kind for t in coord.care_tasks.for_plant(plant.id)}
-        added = 0
-        for t in tasks:
-            if t.kind in existing_kinds:
-                continue
-            coord.care_tasks.add(t)
-            added += 1
-        if added:
-            await coord.async_save_care_tasks()
-        _LOGGER.info(
-            "Seeded care plan '%s' for %s: %d task(s) added, %d already present",
-            data["preset"],
-            plant.name,
-            added,
-            len(tasks) - added,
-        )
-
-    # ── v1.37: species identification ───────────────────────────────
-
-    async def _run_identify(coord, plant):
-        """Photo -> bounded species suggestion (raises vol.Invalid with a
-        user-actionable message). Shared by identify_plant_species and
-        add_plant_from_photo. Stores the suggestion on the plant and returns it."""
-        if not plant.photos:
-            raise vol.Invalid("add a photo of the plant first")
-        import base64
-
-        from homeassistant.helpers.aiohttp_client import async_get_clientsession
-        from homeassistant.util import dt as dt_util
-
-        from .llm_client import call_chat, resolve_targets
-        from .species_id import extract_suggestion_json, validate_suggestion
-
-        # Newest photo path is server-set "/local/complete_irrigation/plants/<id>/…"
-        # (from_dict guarantees the /local/ prefix; the id is slug-safe). Re-guard anyway.
-        rel = str(plant.photos[0]["path"]).split("?", 1)[0]
-        if not rel.startswith("/local/") or ".." in rel:
-            raise vol.Invalid("plant photo path is not usable")
-        abs_path = hass.config.path("www", *rel[len("/local/") :].split("/"))
-        # Belt-and-suspenders containment: the resolved path must stay inside www/
-        # (the prefix + ".." checks above make escape unreachable, but resolve()
-        # also defeats any symlink/odd-segment trickery in a tampered store).
-        from pathlib import Path as _Path
-
-        www_root = _Path(hass.config.path("www")).resolve()
-        if not _Path(abs_path).resolve().is_relative_to(www_root):
-            raise vol.Invalid("plant photo path is not usable")
-
-        def _read() -> bytes:
-            with open(abs_path, "rb") as fh:
-                return fh.read(12_000_000)
-
-        try:
-            img = await hass.async_add_executor_job(_read)
-        except OSError as err:
-            raise vol.Invalid(f"could not read the plant photo: {err}") from err
-        # Declare the ACTUAL image type — a stored PNG/WEBP announced as JPEG is
-        # rejected by some vision providers (v1.41.4).
-        mime = _image_mime(img) or "image/jpeg"
-        b64 = base64.b64encode(img).decode("ascii")
-
-        # v1.51 — Pl@ntNet engine: a no-LLM, plant-specific identifier. Uploads the
-        # photo (multipart) and returns species candidates; the curated table then
-        # fills water-use/care, the same as the LLM apply path.
-        engine = str(coord.config.get("plantid_engine") or "llm")
-        if engine == "plantnet":
-            import json as _json
-
-            import aiohttp
-
-            from .plant_care_db import lookup_care
-            from .plantnet import parse_plantnet, plantnet_url
-
-            key = str(coord.config.get("plantnet_api_key") or "").strip()
-            if not key:
-                raise vol.Invalid(
-                    "add your Pl@ntNet API key first (Settings -> Plant identification)"
-                )
-            form = aiohttp.FormData()
-            form.add_field("organs", "auto")
-            form.add_field("images", img, filename="plant.jpg", content_type=mime)
-            session = async_get_clientsession(hass)
-            try:
-                async with session.post(
-                    plantnet_url(key), data=form, timeout=aiohttp.ClientTimeout(total=60)
-                ) as resp:
-                    if resp.status in (401, 403):
-                        raise vol.Invalid("Pl@ntNet rejected the API key")
-                    if resp.status == 429:
-                        raise vol.Invalid("Pl@ntNet daily limit reached — try again tomorrow")
-                    if resp.status != 200:
-                        raise vol.Invalid(f"Pl@ntNet returned HTTP {resp.status}")
-                    raw = await resp.content.read(1_000_001)
-            except vol.Invalid:
-                raise
-            except Exception as err:
-                raise vol.Invalid(f"Pl@ntNet unreachable: {err}") from err
-            try:
-                pn = parse_plantnet(_json.loads(raw))
-            except ValueError as err:
-                raise vol.Invalid("Pl@ntNet returned an unexpected response") from err
-            if not pn["matched"]:
-                raise vol.Invalid("Pl@ntNet could not identify the plant — try a clearer photo")
-            raw_sug = {
-                "species": pn["species"],
-                "common_name": pn["common_name"],
-                "confidence": pn["confidence"],
-            }
-            curated = lookup_care(pn["species"])
-            if curated:
-                raw_sug.update(
-                    {
-                        "wucols_category": curated["wucols"],
-                        "sunlight_class": curated["sun"],
-                        "temp_low_f": curated["temp_low"],
-                        "temp_high_f": curated["temp_high"],
-                        "care_plan_preset": curated["preset"],
-                        "water_every_days": curated["water_days"],
-                        "fertilize_every_days": curated["fert_days"],
-                        "note": curated["note"],
-                    }
-                )
-            suggestion = validate_suggestion(
-                raw_sug, model="plantnet", now_iso=dt_util.utcnow().isoformat()
-            )
-            if suggestion is None:
-                raise vol.Invalid("Pl@ntNet's result could not be used — try a clearer photo")
-            coord.plants.upsert(replace(plant, species_suggestion=suggestion))
-            await coord.async_save_plants()
-            _LOGGER.info(
-                "Species suggestion (Pl@ntNet) for %s: %s (%.0f%%)",
-                plant.name,
-                suggestion["species"],
-                suggestion["confidence"] * 100,
-            )
-            return suggestion
-
-        # LLM engine (default).
-        targets = resolve_targets(coord.config)
-        if not targets:
-            raise vol.Invalid(
-                "set up a plant-ID model first (Settings -> Plant identification): a "
-                "local OpenAI-compatible vision URL and/or an external provider key"
-            )
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": _SPECIES_PROMPT},
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:{mime};base64,{b64}"},
-                    },
-                ],
-            }
-        ]
-        session = async_get_clientsession(hass)
-        # accept only a parseable suggestion, so 'fallback' mode pushes a garbled
-        # local reply down to the external provider instead of giving up.
-        # max_tokens 4000, NOT 400: reasoning models (Gemini 2.5, Claude, grok
-        # -reasoning) burn "thinking" tokens from the same budget before emitting —
-        # at 400 the JSON truncates mid-string (finish_reason=length) and the
-        # identify fails even though the model had the right species. Verified
-        # empirically 2026-07-14: gemini-2.5-flash needs ~2500+; 4000 is safe
-        # headroom and costs nothing extra when unused.
-        result = await call_chat(
-            session,
-            targets,
-            messages,
-            timeout_s=120,
-            max_tokens=4000,
-            accept=lambda c: extract_suggestion_json(c) is not None,
-        )
-        if not result.ok:
-            raise vol.Invalid(f"plant-ID model could not be reached ({result.error})")
-        # Repair-aware extraction: small vision models wrap the JSON in prose,
-        # echo the prompt's inline hints into values, or leave trailing commas.
-        obj = extract_suggestion_json(result.content)
         suggestion = validate_suggestion(
-            obj, model=result.model or "llm", now_iso=dt_util.utcnow().isoformat()
+            raw_sug, model="plantnet", now_iso=dt_util.utcnow().isoformat()
         )
         if suggestion is None:
-            raise vol.Invalid("the model could not identify the plant — try a clearer photo")
-
+            raise vol.Invalid("Pl@ntNet's result could not be used — try a clearer photo")
         coord.plants.upsert(replace(plant, species_suggestion=suggestion))
         await coord.async_save_plants()
         _LOGGER.info(
-            "Species suggestion for %s: %s (%.0f%%)",
+            "Species suggestion (Pl@ntNet) for %s: %s (%.0f%%)",
             plant.name,
             suggestion["species"],
             suggestion["confidence"] * 100,
         )
         return suggestion
 
-    async def handle_identify_plant_species(call: ServiceCall) -> None:
-        if not await _require_admin(hass, call):  # outbound call + config write
-            return
-        data = _IDENTIFY_SPECIES_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None:
-            return
-        plant = coord.plants.get(data["plant_id"])
-        if plant is None:
-            raise vol.Invalid(f"no such plant {data['plant_id']}")
-        await _run_identify(coord, plant)
+    # LLM engine (default).
+    targets = resolve_targets(coord.config)
+    if not targets:
+        raise vol.Invalid(
+            "set up a plant-ID model first (Settings -> Plant identification): a "
+            "local OpenAI-compatible vision URL and/or an external provider key"
+        )
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": _SPECIES_PROMPT},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime};base64,{b64}"},
+                },
+            ],
+        }
+    ]
+    session = async_get_clientsession(hass)
+    # accept only a parseable suggestion, so 'fallback' mode pushes a garbled
+    # local reply down to the external provider instead of giving up.
+    # max_tokens 4000, NOT 400: reasoning models (Gemini 2.5, Claude, grok
+    # -reasoning) burn "thinking" tokens from the same budget before emitting —
+    # at 400 the JSON truncates mid-string (finish_reason=length) and the
+    # identify fails even though the model had the right species. Verified
+    # empirically 2026-07-14: gemini-2.5-flash needs ~2500+; 4000 is safe
+    # headroom and costs nothing extra when unused.
+    result = await call_chat(
+        session,
+        targets,
+        messages,
+        timeout_s=120,
+        max_tokens=4000,
+        accept=lambda c: extract_suggestion_json(c) is not None,
+    )
+    if not result.ok:
+        raise vol.Invalid(f"plant-ID model could not be reached ({result.error})")
+    # Repair-aware extraction: small vision models wrap the JSON in prose,
+    # echo the prompt's inline hints into values, or leave trailing commas.
+    obj = extract_suggestion_json(result.content)
+    suggestion = validate_suggestion(
+        obj, model=result.model or "llm", now_iso=dt_util.utcnow().isoformat()
+    )
+    if suggestion is None:
+        raise vol.Invalid("the model could not identify the plant — try a clearer photo")
 
-    async def _run_research(coord, species_name: str) -> dict:
-        """v1.40.9 — research a NAMED species. v1.40.12 — try the curated care DB
-        FIRST (accurate, offline, no LLM); fall back to the configured vision
-        endpoint in text mode. Returns a bounded suggestion dict or raises
-        vol.Invalid with a user-actionable message."""
-        from homeassistant.util import dt as dt_util
+    coord.plants.upsert(replace(plant, species_suggestion=suggestion))
+    await coord.async_save_plants()
+    _LOGGER.info(
+        "Species suggestion for %s: %s (%.0f%%)",
+        plant.name,
+        suggestion["species"],
+        suggestion["confidence"] * 100,
+    )
+    return suggestion
 
-        from .plant_care_db import lookup_care
-        from .species_id import validate_suggestion
 
-        curated = lookup_care(species_name)
-        if curated:
-            raw = {
-                "species": species_name,
-                "common_name": curated["common"],
-                "confidence": 1.0,
-                "sunlight_class": curated["sun"],
-                "temp_low_f": curated["temp_low"],
-                "temp_high_f": curated["temp_high"],
-                "wucols_category": curated["wucols"],
-                "care_plan_preset": curated["preset"],
-                "water_every_days": curated["water_days"],
-                "fertilize_every_days": curated["fert_days"],
-                "note": curated["note"],
-            }
+async def handle_identify_plant_species(hass: HomeAssistant, call: ServiceCall) -> None:
+    if not await _require_admin(hass, call):  # outbound call + config write
+        return
+    data = _IDENTIFY_SPECIES_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None:
+        return
+    plant = coord.plants.get(data["plant_id"])
+    if plant is None:
+        raise vol.Invalid(f"no such plant {data['plant_id']}")
+    await _run_identify(hass, coord, plant)
+
+
+async def _run_research(hass: HomeAssistant, coord, species_name: str) -> dict:
+    """v1.40.9 — research a NAMED species. v1.40.12 — try the curated care DB
+    FIRST (accurate, offline, no LLM); fall back to the configured vision
+    endpoint in text mode. Returns a bounded suggestion dict or raises
+    vol.Invalid with a user-actionable message."""
+    from homeassistant.util import dt as dt_util
+
+    from .plant_care_db import lookup_care
+    from .species_id import validate_suggestion
+
+    curated = lookup_care(species_name)
+    if curated:
+        raw = {
+            "species": species_name,
+            "common_name": curated["common"],
+            "confidence": 1.0,
+            "sunlight_class": curated["sun"],
+            "temp_low_f": curated["temp_low"],
+            "temp_high_f": curated["temp_high"],
+            "wucols_category": curated["wucols"],
+            "care_plan_preset": curated["preset"],
+            "water_every_days": curated["water_days"],
+            "fertilize_every_days": curated["fert_days"],
+            "note": curated["note"],
+        }
+        sug = validate_suggestion(
+            raw, model="curated-care-db", now_iso=dt_util.utcnow().isoformat()
+        )
+        if sug:
+            return sug
+
+    # v1.52 — cloud care lookup (Perenual) before the LLM, when a key is set.
+    # Opt-in; the curated table above always wins first.
+    perenual_key = str(coord.config.get("perenual_api_key") or "").strip()
+    if perenual_key:
+        import json as _json
+
+        import aiohttp
+        from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
+        from .perenual import parse_perenual_search, perenual_search_url
+
+        pdata: dict = {"matched": False}
+        try:
+            session = async_get_clientsession(hass)
+            async with session.get(
+                perenual_search_url(perenual_key, species_name),
+                timeout=aiohttp.ClientTimeout(total=20),
+            ) as resp:
+                if resp.status == 200:
+                    # Cap the read like every sibling connector — a hostile or
+                    # buggy upstream body must not buffer unbounded into memory.
+                    pdata = parse_perenual_search(_json.loads(await resp.content.read(200_000)))
+        except Exception as err:  # network / parse / anything -> LLM fallback
+            _LOGGER.debug("Perenual lookup failed, using LLM fallback: %s", err)
+            pdata = {"matched": False}
+        # Only let Perenual win when it actually contributed CARE data — a
+        # bare name match (no water-use, no sun) shouldn't short-circuit the
+        # richer LLM path, since the user already typed the species.
+        if pdata.get("matched") and (pdata.get("wucols_category") or pdata.get("sunlight_class")):
             sug = validate_suggestion(
-                raw, model="curated-care-db", now_iso=dt_util.utcnow().isoformat()
+                {
+                    "species": pdata["species"],
+                    "common_name": pdata.get("common_name") or "",
+                    "confidence": pdata.get("confidence", 0.6),
+                    "sunlight_class": pdata.get("sunlight_class"),
+                    "wucols_category": pdata.get("wucols_category"),
+                    "water_every_days": pdata.get("water_every_days"),
+                    "note": pdata.get("note"),
+                },
+                model="perenual",
+                now_iso=dt_util.utcnow().isoformat(),
             )
             if sug:
                 return sug
 
-        # v1.52 — cloud care lookup (Perenual) before the LLM, when a key is set.
-        # Opt-in; the curated table above always wins first.
-        perenual_key = str(coord.config.get("perenual_api_key") or "").strip()
-        if perenual_key:
-            import json as _json
+    from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-            import aiohttp
-            from homeassistant.helpers.aiohttp_client import async_get_clientsession
+    from .llm_client import call_chat, resolve_targets
+    from .species_id import extract_suggestion_json
 
-            from .perenual import parse_perenual_search, perenual_search_url
+    targets = resolve_targets(coord.config)
+    if not targets:
+        raise vol.Invalid(
+            "set up a plant-ID model first (Settings -> Plant identification) to research a species"
+        )
+    prompt = _RESEARCH_PROMPT.replace("{SPECIES}", species_name)
+    session = async_get_clientsession(hass)
+    # 4000 not 400 — reasoning-model thinking budget; see _run_identify.
+    result = await call_chat(
+        session,
+        targets,
+        [{"role": "user", "content": prompt}],
+        timeout_s=120,
+        max_tokens=4000,
+        accept=lambda c: extract_suggestion_json(c) is not None,
+    )
+    if not result.ok:
+        raise vol.Invalid(f"could not research that species ({result.error})")
+    obj = extract_suggestion_json(result.content)
+    if isinstance(obj, dict) and not str(obj.get("species") or "").strip():
+        obj["species"] = species_name  # the name IS the answer; satisfy the validator
+    suggestion = validate_suggestion(
+        obj, model=result.model or "llm", now_iso=dt_util.utcnow().isoformat()
+    )
+    if suggestion is None:
+        raise vol.Invalid("could not research that species -- check the name and try again")
+    return suggestion
 
-            pdata: dict = {"matched": False}
-            try:
-                session = async_get_clientsession(hass)
-                async with session.get(
-                    perenual_search_url(perenual_key, species_name),
-                    timeout=aiohttp.ClientTimeout(total=20),
-                ) as resp:
-                    if resp.status == 200:
-                        # Cap the read like every sibling connector — a hostile or
-                        # buggy upstream body must not buffer unbounded into memory.
-                        pdata = parse_perenual_search(_json.loads(await resp.content.read(200_000)))
-            except Exception as err:  # network / parse / anything -> LLM fallback
-                _LOGGER.debug("Perenual lookup failed, using LLM fallback: %s", err)
-                pdata = {"matched": False}
-            # Only let Perenual win when it actually contributed CARE data — a
-            # bare name match (no water-use, no sun) shouldn't short-circuit the
-            # richer LLM path, since the user already typed the species.
-            if pdata.get("matched") and (
-                pdata.get("wucols_category") or pdata.get("sunlight_class")
-            ):
-                sug = validate_suggestion(
-                    {
-                        "species": pdata["species"],
-                        "common_name": pdata.get("common_name") or "",
-                        "confidence": pdata.get("confidence", 0.6),
-                        "sunlight_class": pdata.get("sunlight_class"),
-                        "wucols_category": pdata.get("wucols_category"),
-                        "water_every_days": pdata.get("water_every_days"),
-                        "note": pdata.get("note"),
-                    },
-                    model="perenual",
-                    now_iso=dt_util.utcnow().isoformat(),
-                )
-                if sug:
-                    return sug
 
-        from homeassistant.helpers.aiohttp_client import async_get_clientsession
+async def handle_research_plant_species(hass: HomeAssistant, call: ServiceCall) -> None:
+    """v1.40.9 — the user typed the correct species; research its care details by
+    NAME and apply them (keeping the user's species + canopy)."""
+    if not await _require_admin(hass, call):  # outbound call + data write
+        return
+    data = _RESEARCH_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None:
+        return
+    plant = coord.plants.get(data["plant_id"])
+    if plant is None:
+        raise vol.Invalid(f"no such plant {data['plant_id']}")
+    species_name = (data["species"].strip() or (plant.species or "").strip())[:120]
+    if not species_name:
+        raise vol.Invalid("enter the plant's species first, then research it")
 
-        from .llm_client import call_chat, resolve_targets
-        from .species_id import extract_suggestion_json
+    from homeassistant.util import dt as dt_util
 
-        targets = resolve_targets(coord.config)
-        if not targets:
-            raise vol.Invalid(
-                "set up a plant-ID model first (Settings -> Plant identification) to research a "
-                "species"
-            )
-        prompt = _RESEARCH_PROMPT.replace("{SPECIES}", species_name)
-        session = async_get_clientsession(hass)
-        # 4000 not 400 — reasoning-model thinking budget; see _run_identify.
-        result = await call_chat(
+    from .species_id import suggested_lux_range
+
+    sug = await _run_research(hass, coord, species_name)
+    # Apply the researched attributes; KEEP the user's species text + canopy.
+    overrides: dict = {"species": species_name, "species_suggestion": None}
+    if sug.get("common_name"):
+        overrides["common_name"] = sug["common_name"]
+    overrides["sunlight_class"] = sug.get("sunlight_class")
+    if sug.get("temp_low_f") is not None and sug.get("temp_high_f") is not None:
+        overrides["temp_low_f"] = sug["temp_low_f"]
+        overrides["temp_high_f"] = sug["temp_high_f"]
+    if sug.get("wucols_category"):
+        overrides["wucols_category"] = sug["wucols_category"]
+    overrides["care_plan_preset"] = sug.get("care_plan_preset")
+    overrides["water_every_days"] = sug.get("water_every_days")
+    overrides["fertilize_every_days"] = sug.get("fertilize_every_days")
+    overrides["id_confidence"] = sug.get("confidence")
+    overrides["id_model"] = sug.get("model") or ""
+    overrides["id_note"] = sug.get("note") or ""
+    overrides["identified_at"] = dt_util.utcnow().isoformat()
+    rng = suggested_lux_range(sug)
+    if rng is not None:
+        overrides["lux_low"], overrides["lux_high"] = rng
+    coord.plants.upsert(replace(plant, **overrides))
+    await coord.async_save_plants()
+    # Seed the care plan from the preset (skip kinds already present).
+    seeded = 0
+    if sug.get("care_plan_preset"):
+        existing_kinds = {t.kind for t in coord.care_tasks.for_plant(plant.id)}
+        for t in seed_care_plan(
+            plant.id, sug["care_plan_preset"], id_factory=lambda: uuid.uuid4().hex[:12]
+        ):
+            if t.kind not in existing_kinds:
+                coord.care_tasks.add(t)
+                seeded += 1
+        if seeded:
+            await coord.async_save_care_tasks()
+    if coord.notifier is not None:
+        await coord.notifier.notify(
+            f"Researched {species_name}: sun, temperature range, water-use, and a "
+            f"care plan applied ({sug['confidence'] * 100:.0f}% confidence).",
+            title="Plant details researched",
+            event_type="plant_researched",
+        )
+
+
+async def handle_test_vision_endpoint(hass: HomeAssistant, call: ServiceCall) -> ServiceResponse:
+    """v1.39.1 — probe the configured vision endpoint with a tiny text-only
+    request and report reachability + model reply, so a bad URL/model shows
+    up in Settings instead of at the first failed Identify."""
+    if not await _require_admin(hass, call):
+        return {"ok": False, "detail": "admin required"}
+    _TEST_VISION_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None:
+        return {"ok": False, "detail": "no coordinator"}
+    from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
+    from .llm_client import call_chat, configured_targets
+
+    # Probe EVERY configured endpoint (local + external), regardless of the
+    # llm_mode — so the user can confirm their external key works before
+    # switching the mode away from local-only.
+    targets = configured_targets(coord.config)
+    if not targets:
+        return {
+            "ok": False,
+            "detail": "no plant-ID model configured (set a local vision URL or an "
+            "external provider)",
+        }
+    session = async_get_clientsession(hass)
+    parts: list[str] = []
+    all_ok = True
+    # Probe each configured target on its own so the report shows which of
+    # local / external is reachable (not just the first that answers).
+    # max_tokens 512 not 5: reasoning models (Gemini 2.5) spend "thinking"
+    # tokens from the same budget — at 5 the reply comes back EMPTY and the
+    # probe falsely reports a working endpoint as failed. Also a slightly
+    # longer timeout for the same reason.
+    for t in targets:
+        r = await call_chat(
             session,
-            targets,
-            [{"role": "user", "content": prompt}],
-            timeout_s=120,
-            max_tokens=4000,
-            accept=lambda c: extract_suggestion_json(c) is not None,
+            [t],
+            [{"role": "user", "content": "Reply with exactly: OK"}],
+            timeout_s=60,
+            max_tokens=512,
         )
-        if not result.ok:
-            raise vol.Invalid(f"could not research that species ({result.error})")
-        obj = extract_suggestion_json(result.content)
-        if isinstance(obj, dict) and not str(obj.get("species") or "").strip():
-            obj["species"] = species_name  # the name IS the answer; satisfy the validator
-        suggestion = validate_suggestion(
-            obj, model=result.model or "llm", now_iso=dt_util.utcnow().isoformat()
-        )
-        if suggestion is None:
-            raise vol.Invalid("could not research that species -- check the name and try again")
-        return suggestion
+        if r.ok:
+            parts.append(f"{t.label}: OK ({t.model} -> {r.content[:20].strip()})")
+        else:
+            all_ok = False
+            parts.append(f"{t.label}: FAILED ({r.error})")
+    return {"ok": all_ok, "detail": "; ".join(parts)}
 
-    async def handle_research_plant_species(call: ServiceCall) -> None:
-        """v1.40.9 — the user typed the correct species; research its care details by
-        NAME and apply them (keeping the user's species + canopy)."""
-        if not await _require_admin(hass, call):  # outbound call + data write
-            return
-        data = _RESEARCH_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None:
-            return
-        plant = coord.plants.get(data["plant_id"])
-        if plant is None:
-            raise vol.Invalid(f"no such plant {data['plant_id']}")
-        species_name = (data["species"].strip() or (plant.species or "").strip())[:120]
-        if not species_name:
-            raise vol.Invalid("enter the plant's species first, then research it")
 
-        from homeassistant.util import dt as dt_util
+async def handle_verify_species_name(hass: HomeAssistant, call: ServiceCall) -> ServiceResponse:
+    """v1.46 — verify a typed species name against GBIF's open taxonomy (no API
+    key, no LLM). Returns the accepted scientific name + typo corrections /
+    suggestions, so a manual plant add can confirm the name is right."""
+    if not await _require_admin(hass, call):  # outbound fetch — admin only
+        return {"matched": False, "note": "admin required"}
+    data = _VERIFY_SPECIES_SCHEMA(dict(call.data))
 
-        from .species_id import suggested_lux_range
+    import json as _json
 
-        sug = await _run_research(coord, species_name)
-        # Apply the researched attributes; KEEP the user's species text + canopy.
-        overrides: dict = {"species": species_name, "species_suggestion": None}
-        if sug.get("common_name"):
-            overrides["common_name"] = sug["common_name"]
-        overrides["sunlight_class"] = sug.get("sunlight_class")
-        if sug.get("temp_low_f") is not None and sug.get("temp_high_f") is not None:
-            overrides["temp_low_f"] = sug["temp_low_f"]
-            overrides["temp_high_f"] = sug["temp_high_f"]
-        if sug.get("wucols_category"):
-            overrides["wucols_category"] = sug["wucols_category"]
-        overrides["care_plan_preset"] = sug.get("care_plan_preset")
-        overrides["water_every_days"] = sug.get("water_every_days")
-        overrides["fertilize_every_days"] = sug.get("fertilize_every_days")
-        overrides["id_confidence"] = sug.get("confidence")
-        overrides["id_model"] = sug.get("model") or ""
-        overrides["id_note"] = sug.get("note") or ""
-        overrides["identified_at"] = dt_util.utcnow().isoformat()
-        rng = suggested_lux_range(sug)
-        if rng is not None:
-            overrides["lux_low"], overrides["lux_high"] = rng
-        coord.plants.upsert(replace(plant, **overrides))
-        await coord.async_save_plants()
-        # Seed the care plan from the preset (skip kinds already present).
-        seeded = 0
-        if sug.get("care_plan_preset"):
-            existing_kinds = {t.kind for t in coord.care_tasks.for_plant(plant.id)}
-            for t in seed_care_plan(
-                plant.id, sug["care_plan_preset"], id_factory=lambda: uuid.uuid4().hex[:12]
-            ):
-                if t.kind not in existing_kinds:
-                    coord.care_tasks.add(t)
-                    seeded += 1
-            if seeded:
-                await coord.async_save_care_tasks()
-        if coord.notifier is not None:
-            await coord.notifier.notify(
-                f"Researched {species_name}: sun, temperature range, water-use, and a "
-                f"care plan applied ({sug['confidence'] * 100:.0f}% confidence).",
-                title="Plant details researched",
-                event_type="plant_researched",
-            )
+    import aiohttp
+    from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-    async def handle_test_vision_endpoint(call: ServiceCall) -> ServiceResponse:
-        """v1.39.1 — probe the configured vision endpoint with a tiny text-only
-        request and report reachability + model reply, so a bad URL/model shows
-        up in Settings instead of at the first failed Identify."""
-        if not await _require_admin(hass, call):
-            return {"ok": False, "detail": "admin required"}
-        _TEST_VISION_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None:
-            return {"ok": False, "detail": "no coordinator"}
-        from homeassistant.helpers.aiohttp_client import async_get_clientsession
+    from .species_name import gbif_match_url, parse_gbif_match
 
-        from .llm_client import call_chat, configured_targets
+    session = async_get_clientsession(hass)
+    try:
+        async with session.get(
+            gbif_match_url(data["name"]),
+            headers={"Accept": "application/json"},
+            timeout=aiohttp.ClientTimeout(total=15),
+        ) as resp:
+            if resp.status != 200:
+                return {"matched": False, "note": f"GBIF returned HTTP {resp.status}"}
+            raw = await resp.content.read(200_000)
+    except Exception as err:  # network error -> graceful, name check is optional
+        return {"matched": False, "note": f"could not reach GBIF: {str(err)[:80]}"}
+    try:
+        payload = _json.loads(raw)
+    except ValueError:
+        return {"matched": False, "note": "GBIF reply was not valid JSON"}
+    return parse_gbif_match(payload)
 
-        # Probe EVERY configured endpoint (local + external), regardless of the
-        # llm_mode — so the user can confirm their external key works before
-        # switching the mode away from local-only.
-        targets = configured_targets(coord.config)
-        if not targets:
-            return {
-                "ok": False,
-                "detail": "no plant-ID model configured (set a local vision URL or an "
-                "external provider)",
-            }
-        session = async_get_clientsession(hass)
-        parts: list[str] = []
-        all_ok = True
-        # Probe each configured target on its own so the report shows which of
-        # local / external is reachable (not just the first that answers).
-        # max_tokens 512 not 5: reasoning models (Gemini 2.5) spend "thinking"
-        # tokens from the same budget — at 5 the reply comes back EMPTY and the
-        # probe falsely reports a working endpoint as failed. Also a slightly
-        # longer timeout for the same reason.
-        for t in targets:
-            r = await call_chat(
-                session,
-                [t],
-                [{"role": "user", "content": "Reply with exactly: OK"}],
-                timeout_s=60,
-                max_tokens=512,
-            )
-            if r.ok:
-                parts.append(f"{t.label}: OK ({t.model} -> {r.content[:20].strip()})")
-            else:
-                all_ok = False
-                parts.append(f"{t.label}: FAILED ({r.error})")
-        return {"ok": all_ok, "detail": "; ".join(parts)}
 
-    async def handle_verify_species_name(call: ServiceCall) -> ServiceResponse:
-        """v1.46 — verify a typed species name against GBIF's open taxonomy (no API
-        key, no LLM). Returns the accepted scientific name + typo corrections /
-        suggestions, so a manual plant add can confirm the name is right."""
-        if not await _require_admin(hass, call):  # outbound fetch — admin only
-            return {"matched": False, "note": "admin required"}
-        data = _VERIFY_SPECIES_SCHEMA(dict(call.data))
+async def handle_lookup_hardiness_zone(hass: HomeAssistant, call: ServiceCall) -> ServiceResponse:
+    """v1.50 — look up the USDA plant-hardiness zone for a US ZIP via phzmapi
+    (no key, no LLM). Stores the zone + its frost temperature on the config so
+    the panel can show it and flag frost-tender plants, and returns it."""
+    if not await _require_admin(hass, call):  # outbound fetch + config write
+        return {"matched": False, "note": "admin required"}
+    data = _HARDINESS_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None:
+        return {"matched": False, "note": "no coordinator"}
 
-        import json as _json
+    import json as _json
 
-        import aiohttp
-        from homeassistant.helpers.aiohttp_client import async_get_clientsession
+    import aiohttp
+    from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-        from .species_name import gbif_match_url, parse_gbif_match
+    from .hardiness import parse_phzm, phzm_url
 
-        session = async_get_clientsession(hass)
-        try:
-            async with session.get(
-                gbif_match_url(data["name"]),
-                headers={"Accept": "application/json"},
-                timeout=aiohttp.ClientTimeout(total=15),
-            ) as resp:
-                if resp.status != 200:
-                    return {"matched": False, "note": f"GBIF returned HTTP {resp.status}"}
-                raw = await resp.content.read(200_000)
-        except Exception as err:  # network error -> graceful, name check is optional
-            return {"matched": False, "note": f"could not reach GBIF: {str(err)[:80]}"}
-        try:
-            payload = _json.loads(raw)
-        except ValueError:
-            return {"matched": False, "note": "GBIF reply was not valid JSON"}
-        return parse_gbif_match(payload)
+    session = async_get_clientsession(hass)
+    try:
+        async with session.get(
+            phzm_url(data["zip"]),
+            headers={"Accept": "application/json"},
+            timeout=aiohttp.ClientTimeout(total=15),
+        ) as resp:
+            if resp.status == 404:
+                return {"matched": False, "note": "no zone found for that ZIP"}
+            if resp.status != 200:
+                return {"matched": False, "note": f"phzmapi returned HTTP {resp.status}"}
+            raw = await resp.content.read(100_000)
+    except Exception as err:
+        return {"matched": False, "note": f"could not reach phzmapi: {str(err)[:80]}"}
+    try:
+        result = parse_phzm(_json.loads(raw))
+    except ValueError:
+        return {"matched": False, "note": "phzmapi reply was not valid JSON"}
+    if result["matched"]:
+        import re as _re
 
-    async def handle_lookup_hardiness_zone(call: ServiceCall) -> ServiceResponse:
-        """v1.50 — look up the USDA plant-hardiness zone for a US ZIP via phzmapi
-        (no key, no LLM). Stores the zone + its frost temperature on the config so
-        the panel can show it and flag frost-tender plants, and returns it."""
-        if not await _require_admin(hass, call):  # outbound fetch + config write
-            return {"matched": False, "note": "admin required"}
-        data = _HARDINESS_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None:
-            return {"matched": False, "note": "no coordinator"}
-
-        import json as _json
-
-        import aiohttp
-        from homeassistant.helpers.aiohttp_client import async_get_clientsession
-
-        from .hardiness import parse_phzm, phzm_url
-
-        session = async_get_clientsession(hass)
-        try:
-            async with session.get(
-                phzm_url(data["zip"]),
-                headers={"Accept": "application/json"},
-                timeout=aiohttp.ClientTimeout(total=15),
-            ) as resp:
-                if resp.status == 404:
-                    return {"matched": False, "note": "no zone found for that ZIP"}
-                if resp.status != 200:
-                    return {"matched": False, "note": f"phzmapi returned HTTP {resp.status}"}
-                raw = await resp.content.read(100_000)
-        except Exception as err:
-            return {"matched": False, "note": f"could not reach phzmapi: {str(err)[:80]}"}
-        try:
-            result = parse_phzm(_json.loads(raw))
-        except ValueError:
-            return {"matched": False, "note": "phzmapi reply was not valid JSON"}
-        if result["matched"]:
-            import re as _re
-
-            coord.config["hardiness_zip"] = _re.sub(r"\D", "", data["zip"])[:5]
-            coord.config["hardiness_zone"] = result["zone"]
-            coord.config["hardiness_temp_low_f"] = result["temp_low_f"]
-            coord.config["hardiness_temp_high_f"] = result["temp_high_f"]
-            await coord.async_save_config()
-            _LOGGER.info("Hardiness zone set to %s", result["zone"])
-        return result
-
-    async def handle_propose_watering_advice(call: ServiceCall) -> None:
-        """v1.39 — store the external LLM advisor's proposals (rail-bounded).
-        ADVISORY ONLY: each item is applied later by the USER via the existing
-        validated services; nothing here changes watering."""
-        if not await _require_admin(hass, call):
-            return
-        data = _PROPOSE_ADVICE_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None:
-            return
-        from homeassistant.util import dt as dt_util
-
-        from .watering_advisor import validate_advice
-
-        advice = validate_advice(
-            data["advice"],
-            model=data.get("model", ""),
-            now_iso=dt_util.utcnow().isoformat(),
-            known_schedule_ids={sch.id for sch in coord.schedule_store.all()},
-            known_plant_ids={p.id for p in coord.plants.all()},
-        )
-        if advice is None:
-            raise vol.Invalid("no usable advice items after validation")
-        coord.config["watering_advice"] = advice
+        coord.config["hardiness_zip"] = _re.sub(r"\D", "", data["zip"])[:5]
+        coord.config["hardiness_zone"] = result["zone"]
+        coord.config["hardiness_temp_low_f"] = result["temp_low_f"]
+        coord.config["hardiness_temp_high_f"] = result["temp_high_f"]
         await coord.async_save_config()
-        _LOGGER.info("Watering advice stored: %d item(s)", len(advice["items"]))
-        if coord.notifier is not None:
-            await coord.notifier.notify(
-                f"The watering advisor has {len(advice['items'])} suggestion(s) — review "
-                "them in the panel (Today tab). Nothing changes until you apply an item.",
-                title="Watering advice ready",
-                event_type="watering_advice",
-            )
+        _LOGGER.info("Hardiness zone set to %s", result["zone"])
+    return result
 
-    async def handle_add_advisor_preference(call: ServiceCall) -> None:
-        """v1.61 — record standing guidance for the advisor.
 
-        Declining a suggestion is not enough on its own: the nightly run has no
-        memory, so it would propose the very same thing again tomorrow. These
-        preferences persist and are handed to every later run, which is what
-        makes "no, I water the trees late on purpose" actually stick.
-        """
-        if not await _require_admin(hass, call):
-            return
-        data = _ADD_ADVISOR_PREFERENCE_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None:
-            return
-        from homeassistant.util import dt as dt_util
+async def handle_propose_watering_advice(hass: HomeAssistant, call: ServiceCall) -> None:
+    """v1.39 — store the external LLM advisor's proposals (rail-bounded).
+    ADVISORY ONLY: each item is applied later by the USER via the existing
+    validated services; nothing here changes watering."""
+    if not await _require_admin(hass, call):
+        return
+    data = _PROPOSE_ADVICE_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None:
+        return
+    from homeassistant.util import dt as dt_util
 
-        prefs = list(coord.config.get("advisor_preferences") or [])
-        prefs.append(
-            {
-                "text": data["text"].strip(),
-                "about": data.get("about", "").strip(),
-                "at": dt_util.utcnow().isoformat(),
-            }
+    from .watering_advisor import validate_advice
+
+    advice = validate_advice(
+        data["advice"],
+        model=data.get("model", ""),
+        now_iso=dt_util.utcnow().isoformat(),
+        known_schedule_ids={sch.id for sch in coord.schedule_store.all()},
+        known_plant_ids={p.id for p in coord.plants.all()},
+    )
+    if advice is None:
+        raise vol.Invalid("no usable advice items after validation")
+    coord.config["watering_advice"] = advice
+    await coord.async_save_config()
+    _LOGGER.info("Watering advice stored: %d item(s)", len(advice["items"]))
+    if coord.notifier is not None:
+        await coord.notifier.notify(
+            f"The watering advisor has {len(advice['items'])} suggestion(s) — review "
+            "them in the panel (Today tab). Nothing changes until you apply an item.",
+            title="Watering advice ready",
+            event_type="watering_advice",
         )
-        # Bounded: this text is pasted into every advisor prompt, so it must not
-        # grow without limit. Newest guidance wins.
-        coord.config["advisor_preferences"] = prefs[-_MAX_ADVISOR_PREFERENCES:]
+
+
+async def handle_add_advisor_preference(hass: HomeAssistant, call: ServiceCall) -> None:
+    """v1.61 — record standing guidance for the advisor.
+
+    Declining a suggestion is not enough on its own: the nightly run has no
+    memory, so it would propose the very same thing again tomorrow. These
+    preferences persist and are handed to every later run, which is what
+    makes "no, I water the trees late on purpose" actually stick.
+    """
+    if not await _require_admin(hass, call):
+        return
+    data = _ADD_ADVISOR_PREFERENCE_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None:
+        return
+    from homeassistant.util import dt as dt_util
+
+    prefs = list(coord.config.get("advisor_preferences") or [])
+    prefs.append(
+        {
+            "text": data["text"].strip(),
+            "about": data.get("about", "").strip(),
+            "at": dt_util.utcnow().isoformat(),
+        }
+    )
+    # Bounded: this text is pasted into every advisor prompt, so it must not
+    # grow without limit. Newest guidance wins.
+    coord.config["advisor_preferences"] = prefs[-_MAX_ADVISOR_PREFERENCES:]
+    await coord.async_save_config()
+    _LOGGER.info(
+        "advisor preference recorded (%d stored)",
+        len(coord.config["advisor_preferences"]),
+    )
+
+
+async def handle_delete_advisor_preference(hass: HomeAssistant, call: ServiceCall) -> None:
+    if not await _require_admin(hass, call):
+        return
+    data = _DELETE_ADVISOR_PREFERENCE_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None:
+        return
+    prefs = list(coord.config.get("advisor_preferences") or [])
+    i = int(data["index"])
+    if 0 <= i < len(prefs):
+        prefs.pop(i)
+        coord.config["advisor_preferences"] = prefs
         await coord.async_save_config()
-        _LOGGER.info(
-            "advisor preference recorded (%d stored)",
-            len(coord.config["advisor_preferences"]),
+
+
+async def handle_dismiss_watering_advice(hass: HomeAssistant, call: ServiceCall) -> None:
+    if not await _require_admin(hass, call):
+        return
+    _DISMISS_ADVICE_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None:
+        return
+    if coord.config.pop("watering_advice", None) is not None:
+        await coord.async_save_config()
+        _LOGGER.info("Watering advice dismissed")
+
+
+async def handle_add_plant_from_photo(hass: HomeAssistant, call: ServiceCall) -> None:
+    """v1.38 — snap a photo, get a plant: provisional record on the chosen zone
+    (+ the user's emitter facts), photo attached (EXIF-GPS place), then identify
+    and AUTO-APPLY the care sheet incl. photo-estimated canopy. Identify failure
+    is non-fatal: plant + photo stay; retry from the plant later."""
+    if not await _require_admin(hass, call):
+        return
+    data = _ADD_PLANT_FROM_PHOTO_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None:
+        return
+    from homeassistant.util import dt as dt_util
+
+    if (data.get("emitter_count") is None) != (data.get("emitter_gph") is None):
+        raise vol.Invalid("set both emitter_count and emitter_gph, or neither")
+    name = data["name"].strip() or f"New plant {dt_util.now().strftime('%b %d %H:%M')}"
+    user_species = data["species"].strip()  # v1.40.5 — kept over the vision guess
+    plant = PlantRecord(
+        id=uuid.uuid4().hex[:12],
+        name=name,
+        species=user_species,
+        wucols_category="moderate",  # provisional; the suggestion replaces it
+        canopy_area_sqft=20.0,  # provisional; the photo estimate replaces it
+        zone_entity_id=data["zone_entity_id"],
+        emitter_count=data.get("emitter_count"),
+        emitter_gph=data.get("emitter_gph"),
+    )
+    coord.plants.add(plant)
+    await coord.async_save_plants()
+    photo_payload = {"plant_id": plant.id, "image_base64": data["image_base64"]}
+    for k in ("latitude", "longitude"):
+        if k in data:
+            photo_payload[k] = data[k]
+    try:
+        await hass.services.async_call(
+            DOMAIN, SERVICE_ADD_PLANT_PHOTO, photo_payload, blocking=True, context=call.context
         )
-
-    async def handle_delete_advisor_preference(call: ServiceCall) -> None:
-        if not await _require_admin(hass, call):
-            return
-        data = _DELETE_ADVISOR_PREFERENCE_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None:
-            return
-        prefs = list(coord.config.get("advisor_preferences") or [])
-        i = int(data["index"])
-        if 0 <= i < len(prefs):
-            prefs.pop(i)
-            coord.config["advisor_preferences"] = prefs
-            await coord.async_save_config()
-
-    async def handle_dismiss_watering_advice(call: ServiceCall) -> None:
-        if not await _require_admin(hass, call):
-            return
-        _DISMISS_ADVICE_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None:
-            return
-        if coord.config.pop("watering_advice", None) is not None:
-            await coord.async_save_config()
-            _LOGGER.info("Watering advice dismissed")
-
-    async def handle_add_plant_from_photo(call: ServiceCall) -> None:
-        """v1.38 — snap a photo, get a plant: provisional record on the chosen zone
-        (+ the user's emitter facts), photo attached (EXIF-GPS place), then identify
-        and AUTO-APPLY the care sheet incl. photo-estimated canopy. Identify failure
-        is non-fatal: plant + photo stay; retry from the plant later."""
-        if not await _require_admin(hass, call):
-            return
-        data = _ADD_PLANT_FROM_PHOTO_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None:
-            return
-        from homeassistant.util import dt as dt_util
-
-        if (data.get("emitter_count") is None) != (data.get("emitter_gph") is None):
-            raise vol.Invalid("set both emitter_count and emitter_gph, or neither")
-        name = data["name"].strip() or f"New plant {dt_util.now().strftime('%b %d %H:%M')}"
-        user_species = data["species"].strip()  # v1.40.5 — kept over the vision guess
-        plant = PlantRecord(
-            id=uuid.uuid4().hex[:12],
-            name=name,
-            species=user_species,
-            wucols_category="moderate",  # provisional; the suggestion replaces it
-            canopy_area_sqft=20.0,  # provisional; the photo estimate replaces it
-            zone_entity_id=data["zone_entity_id"],
-            emitter_count=data.get("emitter_count"),
-            emitter_gph=data.get("emitter_gph"),
-        )
-        coord.plants.add(plant)
+    except Exception:
+        # No photo -> nothing to identify; don't strand a photo-less record.
+        coord.plants.delete(plant.id)
         await coord.async_save_plants()
-        photo_payload = {"plant_id": plant.id, "image_base64": data["image_base64"]}
-        for k in ("latitude", "longitude"):
-            if k in data:
-                photo_payload[k] = data[k]
-        try:
-            await hass.services.async_call(
-                DOMAIN, SERVICE_ADD_PLANT_PHOTO, photo_payload, blocking=True, context=call.context
-            )
-        except Exception:
-            # No photo -> nothing to identify; don't strand a photo-less record.
+        raise
+    fresh = coord.plants.get(plant.id)
+    if fresh is None or not fresh.photos:
+        # add_plant_photo fails SILENTLY (logs + returns) — detect it here so
+        # we never strand a photo-less guess-record or claim false success.
+        if fresh is not None:
             coord.plants.delete(plant.id)
             await coord.async_save_plants()
-            raise
-        fresh = coord.plants.get(plant.id)
-        if fresh is None or not fresh.photos:
-            # add_plant_photo fails SILENTLY (logs + returns) — detect it here so
-            # we never strand a photo-less guess-record or claim false success.
-            if fresh is not None:
-                coord.plants.delete(plant.id)
-                await coord.async_save_plants()
-            raise vol.Invalid("the photo could not be stored — plant not created")
-        try:
-            suggestion = await _run_identify(coord, fresh)
-        except vol.Invalid as err:
-            _LOGGER.warning("add_plant_from_photo: identify skipped: %s", err)
-            if coord.notifier is not None:
-                await coord.notifier.notify(
-                    f"{name} was added with its photo, but identification failed: {err}. "
-                    "Use Identify species on the plant to retry.",
-                    title="Plant added (not identified)",
-                    event_type="plant_added_unidentified",
-                )
-            return
-        common = str(suggestion.get("common_name") or "").strip()
-        if common and not data["name"].strip():
-            coord.plants.upsert(replace(coord.plants.get(plant.id), name=common[:80]))
-            await coord.async_save_plants()
-        await hass.services.async_call(
-            DOMAIN,
-            SERVICE_APPLY_SPECIES_SUGGESTION,
-            {"plant_id": plant.id, "seed_plan": True, "apply_canopy": True},
-            blocking=True,
-            context=call.context,
-        )
-        # v1.40.5 — the vision apply overwrites species; if the user typed one,
-        # keep THEIR text (we still took the vision care plan / category / canopy).
-        if user_species:
-            cur = coord.plants.get(plant.id)
-            if cur is not None and cur.species != user_species:
-                coord.plants.upsert(replace(cur, species=user_species))
-                await coord.async_save_plants()
+        raise vol.Invalid("the photo could not be stored — plant not created")
+    try:
+        suggestion = await _run_identify(hass, coord, fresh)
+    except vol.Invalid as err:
+        _LOGGER.warning("add_plant_from_photo: identify skipped: %s", err)
         if coord.notifier is not None:
             await coord.notifier.notify(
-                f"Added {common or suggestion['species']} ({suggestion['species']}) — "
-                f"{suggestion['confidence'] * 100:.0f}% confident. Species, canopy, light "
-                "range, water-use category, and care plan applied."
-                + (
-                    ""
-                    if data.get("emitter_count")
-                    else " Add its drip emitters (count x GPH) for delivered-water math."
-                ),
-                title="Plant added from photo",
-                event_type="plant_added_from_photo",
+                f"{name} was added with its photo, but identification failed: {err}. "
+                "Use Identify species on the plant to retry.",
+                title="Plant added (not identified)",
+                event_type="plant_added_unidentified",
             )
-
-    async def handle_apply_species_suggestion(call: ServiceCall) -> None:
-        if not await _require_admin(hass, call):
-            return
-        data = _APPLY_SUGGESTION_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None:
-            return
-        plant = coord.plants.get(data["plant_id"])
-        if plant is None or not isinstance(plant.species_suggestion, dict):
-            raise vol.Invalid("no pending suggestion for that plant")
-        sug = plant.species_suggestion
-
-        from .species_id import suggested_lux_range
-
-        common, sci = sug.get("common_name") or "", sug.get("species") or ""
-        species_text = (f"{common} ({sci})" if common and sci else common or sci)[:120]
-        overrides: dict = {"species": species_text, "species_suggestion": None}
-        rng = suggested_lux_range(sug)
-        if rng is not None:
-            overrides["lux_low"], overrides["lux_high"] = rng
-        if sug.get("wucols_category"):
-            overrides["wucols_category"] = sug["wucols_category"]
-        if data["apply_canopy"] and sug.get("canopy_area_sqft"):
-            overrides["canopy_area_sqft"] = float(sug["canopy_area_sqft"])
-        # v1.40.7 — persist the FULL attribute set the model returned (nothing dropped).
-        overrides["common_name"] = sug.get("common_name") or ""
-        overrides["sunlight_class"] = sug.get("sunlight_class")
-        if sug.get("temp_low_f") is not None and sug.get("temp_high_f") is not None:
-            overrides["temp_low_f"] = sug["temp_low_f"]
-            overrides["temp_high_f"] = sug["temp_high_f"]
-        overrides["care_plan_preset"] = sug.get("care_plan_preset")
-        overrides["water_every_days"] = sug.get("water_every_days")
-        overrides["fertilize_every_days"] = sug.get("fertilize_every_days")
-        overrides["id_confidence"] = sug.get("confidence")
-        overrides["id_model"] = sug.get("model") or ""
-        overrides["id_note"] = sug.get("note") or ""
-        overrides["identified_at"] = sug.get("identified_at") or ""
-        # v1.40.12 — for species we cover, the curated DB's accurate water-use /
-        # care OVERRIDES the model's guess (which is generically "moderate"). This
-        # is the photo-identify path; the by-name research already uses curated data.
-        from .plant_care_db import lookup_care
-
-        curated = lookup_care(species_text)
-        if curated:
-            overrides["wucols_category"] = curated["wucols"]
-            overrides["sunlight_class"] = curated["sun"]
-            overrides["temp_low_f"] = curated["temp_low"]
-            overrides["temp_high_f"] = curated["temp_high"]
-            overrides["care_plan_preset"] = curated["preset"]
-            overrides["water_every_days"] = curated["water_days"]
-            overrides["fertilize_every_days"] = curated["fert_days"]
-        coord.plants.upsert(replace(plant, **overrides))
+        return
+    common = str(suggestion.get("common_name") or "").strip()
+    if common and not data["name"].strip():
+        coord.plants.upsert(replace(coord.plants.get(plant.id), name=common[:80]))
         await coord.async_save_plants()
-
-        seeded = 0
-        _seed_preset = (curated or {}).get("preset") or sug.get("care_plan_preset")
-        if data["seed_plan"] and _seed_preset:
-            existing_kinds = {t.kind for t in coord.care_tasks.for_plant(plant.id)}
-            for t in seed_care_plan(
-                plant.id, _seed_preset, id_factory=lambda: uuid.uuid4().hex[:12]
-            ):
-                if t.kind not in existing_kinds:
-                    coord.care_tasks.add(t)
-                    seeded += 1
-            if seeded:
-                await coord.async_save_care_tasks()
-        _LOGGER.info(
-            "Applied species suggestion to %s: %s (+%d care task(s))",
-            plant.name,
-            species_text,
-            seeded,
-        )
-
-    async def handle_dismiss_species_suggestion(call: ServiceCall) -> None:
-        if not await _require_admin(hass, call):
-            return
-        data = _DISMISS_SUGGESTION_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None:
-            return
-        plant = coord.plants.get(data["plant_id"])
-        if plant is None or plant.species_suggestion is None:
-            return
-        coord.plants.upsert(replace(plant, species_suggestion=None))
-        await coord.async_save_plants()
-
-    async def handle_delete_care_task(call: ServiceCall) -> None:
-        if not await _require_admin(hass, call):  # destructive — admin only
-            return
-        data = _DELETE_CARE_TASK_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None:
-            return
-        if coord.care_tasks.delete(data["task_id"]):
-            await coord.async_save_care_tasks()
-            _LOGGER.info("Deleted care task %s", data["task_id"])
-
-    async def handle_complete_care_task(call: ServiceCall) -> None:
-        if not await _require_admin(hass, call):
-            return
-        data = _COMPLETE_CARE_TASK_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None:
-            return
-        existing = coord.care_tasks.get(data["task_id"])
-        if existing is None:
-            _LOGGER.warning("complete_care_task: no such task %s", data["task_id"])
-            return
-        from homeassistant.util import dt as dt_util
-
-        coord.care_tasks.upsert(existing.completed(int(dt_util.now().timestamp())))
-        await coord.async_save_care_tasks()
-        _LOGGER.info("Care task %s marked done", existing.id)
-
-    async def handle_set_yard_map(call: ServiceCall) -> None:
-        if not await _require_admin(hass, call):  # writes file + outbound fetch — admin only
-            return
-        data = _SET_YARD_MAP_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None:
-            return
-        import os
-
-        import aiohttp
-        from homeassistant.helpers.aiohttp_client import async_get_clientsession
-        from homeassistant.util import dt as dt_util
-
-        from .yard_map import (
-            bbox_from_center,
-            bbox_from_cfg,
-            export_host_allowed,
-            export_url,
-            image_size_for_bbox,
-            safe_export_size,
-        )
-
-        # v1.58.1 — center resolution: explicit lat/lon wins; else the map's
-        # CURRENT center (a refresh/nudge must not snap back to the HA home);
-        # else the HA home location (first setup).
-        prev_cfg = coord.config.get("yard_map") or {}
-
-        # v1.59 — ROTATION-ONLY fast path. Rotation is a display transform, so
-        # spinning the aerial must not re-download it (or a ↻ tap would cost a
-        # fetch and a fresh image version). Only when rotation is the ONLY thing
-        # asked for: update the stored angle and return.
-        from .yard_map import normalize_rotation
-
-        raw_keys = set(call.data)
-        if "rotation_deg" in raw_keys and not (raw_keys - {"rotation_deg"}):
-            if not prev_cfg:
-                _LOGGER.warning("set_yard_map: no aerial yet — fetch one before rotating")
-                return
-            new_cfg = dict(prev_cfg)
-            new_cfg["rotation_deg"] = normalize_rotation(data["rotation_deg"])
-            coord.config["yard_map"] = new_cfg
-            await coord.async_save_config()
-            return
-        if "latitude" in data or "longitude" in data:
-            lat = data.get("latitude", hass.config.latitude)
-            lon = data.get("longitude", hass.config.longitude)
-        elif prev_cfg.get("center_lat") is not None and prev_cfg.get("center_lon") is not None:
-            lat = prev_cfg["center_lat"]
-            lon = prev_cfg["center_lon"]
-        else:
-            lat = hass.config.latitude
-            lon = hass.config.longitude
-        span = float(data.get("span_m", 60.0))
-        if lat is None or lon is None:
-            _LOGGER.warning("set_yard_map: no location — set HA latitude/longitude or pass them")
-            return
-        # v1.58.1 — frame nudge: one-shot meter DELTAS from the resolved center
-        # ("the yard is clipped on the north — shift 3 m north"). The shifted
-        # center is what gets stored, so the framing sticks with no re-apply.
-        from .yard_map import offset_center
-
-        off_n = float(data.get("offset_north_m") or 0.0)
-        off_e = float(data.get("offset_east_m") or 0.0)
-        if off_n or off_e:
-            lat, lon = offset_center(float(lat), float(lon), off_n, off_e)
-
-        bbox = bbox_from_center(float(lat), float(lon), span)
-        width, height = image_size_for_bbox(bbox)
-        # v1.42 — a custom aerial source (e.g. a county assessor's orthophoto
-        # MapServer) is usually far sharper than Esri's global layer, and has no
-        # 0.3 m/px cache floor. So the downscale-then-upscale dance below is
-        # ESRI-ONLY: applying it to a custom source would blur good imagery back
-        # to Esri quality for no reason.
-        template = str(coord.config.get("map_export_url_template") or "").strip()
-        if template:
-            fetch_w, fetch_h = width, height
-        else:
-            # Esri's export HTTP-500s on requests sharper than its imagery cache
-            # (~0.3 m/px) — fetch at the sharpest scale it will serve, then upscale
-            # locally back to the display size (same bbox, marker math untouched).
-            fetch_w, fetch_h = safe_export_size(span, width, height)
-        url = export_url(bbox, fetch_w, fetch_h, template or None)
-
-        # v1.52.1 — re-check the final host at fetch time (defends a stored value
-        # that predates the config-write SSRF guard). Esri's default host passes.
-        if not export_host_allowed(url):
-            _LOGGER.warning("set_yard_map: aerial host not allowed, refusing to fetch")
-            return
-
-        session = async_get_clientsession(hass)
-        try:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
-                if resp.status != 200:
-                    _LOGGER.warning("set_yard_map: aerial service returned HTTP %s", resp.status)
-                    return
-                if resp.content_length is not None and resp.content_length > 15_000_000:
-                    _LOGGER.warning("set_yard_map: aerial response too large, refusing")
-                    return
-                # Bounded FULL read: accumulate the whole image but bail past the cap.
-                # (resp.content.read(N) would return only the first buffered chunk and
-                # TRUNCATE a multi-chunk image; iter_chunked reads to EOF, and a chunked
-                # / no-Content-Length body still can't buffer past the cap.)
-                chunks: list[bytes] = []
-                total = 0
-                async for chunk in resp.content.iter_chunked(65536):
-                    total += len(chunk)
-                    if total > 15_000_000:
-                        _LOGGER.warning("set_yard_map: aerial body too large, refusing")
-                        return
-                    chunks.append(chunk)
-                content = b"".join(chunks)
-        except Exception as err:  # network / timeout / client errors — never crash
-            _LOGGER.warning("set_yard_map: aerial fetch failed: %s", err)
-            return
-        if not content or len(content) < 1024:
-            _LOGGER.warning("set_yard_map: aerial fetch returned too little data")
-            return
-        if not _looks_like_image(content):
-            # The aerial host returns image bytes; an error page (HTML, HTTP 200)
-            # must not be saved as yard_map.jpg and served from /local.
-            _LOGGER.warning("set_yard_map: aerial fetch did not return an image")
-            return
-
-        abs_dir = hass.config.path("www", "complete_irrigation")
-        abs_path = os.path.join(abs_dir, "yard_map.jpg")
-
-        def _save() -> None:
-            os.makedirs(abs_dir, exist_ok=True)
-            payload = content
-            if (fetch_w, fetch_h) != (width, height):
-                # Fetched coarser than display size (Esri cache-scale floor) —
-                # upscale for crisp rendering. Pillow ships with HA core; if it's
-                # somehow unavailable, save the small image (still fully usable).
-                try:
-                    import io
-
-                    from PIL import Image
-
-                    img = Image.open(io.BytesIO(content))
-                    # Decoded-dimension sanity vs what we asked for — a decompression
-                    # bomb must neither be resized in-memory nor saved raw to /local.
-                    if img.width * img.height > fetch_w * fetch_h * 4:
-                        _LOGGER.warning("set_yard_map: decoded image absurdly large, refusing")
-                        return
-                    img = img.convert("RGB").resize((width, height), Image.LANCZOS)
-                    buf = io.BytesIO()
-                    img.save(buf, format="JPEG", quality=88)
-                    payload = buf.getvalue()
-                except Exception as err:  # keep the small original rather than fail
-                    _LOGGER.warning("set_yard_map: upscale skipped (%s)", err)
-            with open(abs_path, "wb") as fh:
-                fh.write(payload)
-
-        try:
-            await hass.async_add_executor_job(_save)
-        except OSError as err:
-            _LOGGER.warning("set_yard_map: could not write image: %s", err)
-            return
-
-        # v1.43/v1.59 — MIGRATE plant markers to the new frame before adopting
-        # it. The logic lives in plant.reproject_plants so it is directly
-        # testable: until v1.62 the only thing exercising it was a hand-written
-        # copy inside a test file, and that copy omitted the legacy-anchor
-        # branch — the exact branch that keeps pre-v1.59 placements alive.
-        from .plant import reproject_plants
-
-        old_bbox = bbox_from_cfg(coord.config.get("yard_map"))
-        updated, moved, dropped = reproject_plants(list(coord.plants.all()), old_bbox, bbox)
-        for plant in updated:
-            coord.plants.upsert(plant)
-
-        version = dt_util.utcnow().strftime("%Y%m%d%H%M%S")
-        coord.config["yard_map"] = {
-            "center_lat": float(lat),
-            "center_lon": float(lon),
-            "span_m": span,
-            "bbox": {
-                "west": bbox.west,
-                "south": bbox.south,
-                "east": bbox.east,
-                "north": bbox.north,
-            },
-            "width": width,
-            "height": height,
-            "image_path": f"/local/complete_irrigation/yard_map.jpg?v={version}",
-            "version": version,
-            # v1.59 — a refresh/nudge/zoom must not silently straighten a map the
-            # user deliberately turned, so the angle SURVIVES a re-fetch (an
-            # explicit rotation_deg in this same call still wins).
-            "rotation_deg": normalize_rotation(
-                data.get("rotation_deg", prev_cfg.get("rotation_deg", 0.0))
-            ),
-        }
-        # v1.62.2 — CONFIG FIRST, then plants. These are two separate .storage
-        # writes and cannot be made atomic, so the question is only which order
-        # fails safe. Plants-first was the dangerous one: a crash in between left
-        # markers re-projected into the NEW frame while the stored bbox still
-        # described the OLD one, and the very next drag would then convert screen
-        # coords against the wrong frame and write a WRONG ground anchor —
-        # unrecoverable, because the anchor is the only truth. Config-first
-        # merely leaves markers briefly drawn against the new frame using their
-        # old derived positions; the anchors are untouched and the next
-        # set_yard_map re-derives them correctly.
-        await coord.async_save_config()
-        if moved or dropped:
-            await coord.async_save_plants()
-            _LOGGER.info(
-                "set_yard_map: re-projected %d marker(s) to the new view; "
-                "%d fell outside it (kept, just not drawn)",
-                moved,
-                dropped,
-            )
-        _LOGGER.info(
-            "Yard map updated (%dx%d) centered %.5f,%.5f span %.0fm", width, height, lat, lon, span
-        )
-        # Tell the user when zooming pushed plants out of view — otherwise they'd
-        # just silently vanish from the map with no explanation.
-        if dropped and coord.notifier is not None:
-            await coord.notifier.notify(
-                f"Yard map is now {span:.0f} m across. {dropped} plant marker(s) are outside "
-                "this view, so they aren't drawn — their positions are kept, and they "
-                "reappear when the view covers them again.",
-                title="Yard map zoomed",
-                event_type="yard_map_zoom",
-            )
-
-    hass.services.async_register(DOMAIN, SERVICE_RUN_ZONE, handle_run_zone, schema=_RUN_ZONE_SCHEMA)
-    hass.services.async_register(
-        DOMAIN, SERVICE_STOP_ZONE, handle_stop_zone, schema=_STOP_ZONE_SCHEMA
-    )
-    hass.services.async_register(
-        DOMAIN, SERVICE_ADD_SCHEDULE, handle_add_schedule, schema=_ADD_SCHEDULE_SCHEMA
-    )
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_UPDATE_SCHEDULE,
-        handle_update_schedule,
-        schema=_UPDATE_SCHEDULE_SCHEMA,
-    )
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_DELETE_SCHEDULE,
-        handle_delete_schedule,
-        schema=_DELETE_SCHEDULE_SCHEMA,
-    )
-    hass.services.async_register(
-        DOMAIN, SERVICE_SPLIT_SCHEDULE, handle_split_schedule, schema=_SPLIT_SCHEDULE_SCHEMA
-    )
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_DISMISS_SCHEDULE_ADVICE,
-        handle_dismiss_schedule_advice,
-        schema=_DISMISS_SCHEDULE_ADVICE_SCHEMA,
-    )
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_SET_SCHEDULE_ENABLED,
-        handle_set_schedule_enabled,
-        schema=_SET_SCHEDULE_ENABLED_SCHEMA,
-    )
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_RUN_SCHEDULE,
-        handle_run_schedule,
-        schema=_RUN_SCHEDULE_SCHEMA,
-    )
-    hass.services.async_register(
-        DOMAIN, SERVICE_ADD_PLANT, handle_add_plant, schema=_ADD_PLANT_SCHEMA
-    )
-    hass.services.async_register(
-        DOMAIN, SERVICE_UPDATE_PLANT, handle_update_plant, schema=_UPDATE_PLANT_SCHEMA
-    )
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_ADD_ADVISOR_PREFERENCE,
-        handle_add_advisor_preference,
-        schema=_ADD_ADVISOR_PREFERENCE_SCHEMA,
-    )
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_DELETE_ADVISOR_PREFERENCE,
-        handle_delete_advisor_preference,
-        schema=_DELETE_ADVISOR_PREFERENCE_SCHEMA,
-    )
-    hass.services.async_register(
-        DOMAIN, SERVICE_ADD_ZONE_REGION, handle_add_zone_region, schema=_ADD_ZONE_REGION_SCHEMA
-    )
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_DELETE_ZONE_REGION,
-        handle_delete_zone_region,
-        schema=_DELETE_ZONE_REGION_SCHEMA,
-    )
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_ASSIGN_AREA_REGION,
-        handle_assign_area_region,
-        schema=_ASSIGN_AREA_REGION_SCHEMA,
-    )
-    hass.services.async_register(
-        DOMAIN, SERVICE_DELETE_PLANT, handle_delete_plant, schema=_DELETE_PLANT_SCHEMA
-    )
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_DUPLICATE_PLANT,
-        handle_duplicate_plant,
-        schema=_DUPLICATE_PLANT_SCHEMA,
-        supports_response=SupportsResponse.OPTIONAL,
-    )
-    hass.services.async_register(
-        DOMAIN, SERVICE_SET_YARD_MAP, handle_set_yard_map, schema=_SET_YARD_MAP_SCHEMA
-    )
-    hass.services.async_register(
-        DOMAIN, SERVICE_ADD_PLANT_PHOTO, handle_add_plant_photo, schema=_ADD_PLANT_PHOTO_SCHEMA
-    )
-    hass.services.async_register(
-        DOMAIN, SERVICE_SET_PLANT_HEALTH, handle_set_plant_health, schema=_SET_PLANT_HEALTH_SCHEMA
-    )
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_SET_PLANT_LIGHT_RANGE,
-        handle_set_plant_light_range,
-        schema=_SET_PLANT_LIGHT_RANGE_SCHEMA,
-    )
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_START_LIGHT_SURVEY,
-        handle_start_light_survey,
-        schema=_START_LIGHT_SURVEY_SCHEMA,
-    )
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_CANCEL_LIGHT_SURVEY,
-        handle_cancel_light_survey,
-        schema=_CANCEL_LIGHT_SURVEY_SCHEMA,
-    )
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_START_AREA_LIGHT_SURVEY,
-        handle_start_area_light_survey,
-        schema=_START_AREA_LIGHT_SURVEY_SCHEMA,
-    )
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_CANCEL_AREA_LIGHT_SURVEY,
-        handle_cancel_area_light_survey,
-        schema=_CANCEL_AREA_LIGHT_SURVEY_SCHEMA,
-    )
-    hass.services.async_register(
-        DOMAIN, SERVICE_ADD_CARE_TASK, handle_add_care_task, schema=_ADD_CARE_TASK_SCHEMA
-    )
-    hass.services.async_register(
-        DOMAIN, SERVICE_UPDATE_CARE_TASK, handle_update_care_task, schema=_UPDATE_CARE_TASK_SCHEMA
-    )
-    hass.services.async_register(
-        DOMAIN, SERVICE_DELETE_CARE_TASK, handle_delete_care_task, schema=_DELETE_CARE_TASK_SCHEMA
-    )
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_COMPLETE_CARE_TASK,
-        handle_complete_care_task,
-        schema=_COMPLETE_CARE_TASK_SCHEMA,
-    )
-    hass.services.async_register(
-        DOMAIN, SERVICE_SEED_CARE_PLAN, handle_seed_care_plan, schema=_SEED_CARE_PLAN_SCHEMA
-    )
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_IDENTIFY_PLANT_SPECIES,
-        handle_identify_plant_species,
-        schema=_IDENTIFY_SPECIES_SCHEMA,
-    )
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_RESEARCH_PLANT_SPECIES,
-        handle_research_plant_species,
-        schema=_RESEARCH_SCHEMA,
-    )
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_ADD_PLANT_FROM_PHOTO,
-        handle_add_plant_from_photo,
-        schema=_ADD_PLANT_FROM_PHOTO_SCHEMA,
-    )
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_PROPOSE_WATERING_ADVICE,
-        handle_propose_watering_advice,
-        schema=_PROPOSE_ADVICE_SCHEMA,
-    )
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_DISMISS_WATERING_ADVICE,
-        handle_dismiss_watering_advice,
-        schema=_DISMISS_ADVICE_SCHEMA,
-    )
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_TEST_VISION_ENDPOINT,
-        handle_test_vision_endpoint,
-        schema=_TEST_VISION_SCHEMA,
-        supports_response=SupportsResponse.ONLY,
-    )
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_VERIFY_SPECIES_NAME,
-        handle_verify_species_name,
-        schema=_VERIFY_SPECIES_SCHEMA,
-        supports_response=SupportsResponse.ONLY,
-    )
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_LOOKUP_HARDINESS_ZONE,
-        handle_lookup_hardiness_zone,
-        schema=_HARDINESS_SCHEMA,
-        supports_response=SupportsResponse.ONLY,
-    )
-    hass.services.async_register(
+    await hass.services.async_call(
         DOMAIN,
         SERVICE_APPLY_SPECIES_SUGGESTION,
-        handle_apply_species_suggestion,
-        schema=_APPLY_SUGGESTION_SCHEMA,
+        {"plant_id": plant.id, "seed_plan": True, "apply_canopy": True},
+        blocking=True,
+        context=call.context,
     )
-    hass.services.async_register(
-        DOMAIN,
+    # v1.40.5 — the vision apply overwrites species; if the user typed one,
+    # keep THEIR text (we still took the vision care plan / category / canopy).
+    if user_species:
+        cur = coord.plants.get(plant.id)
+        if cur is not None and cur.species != user_species:
+            coord.plants.upsert(replace(cur, species=user_species))
+            await coord.async_save_plants()
+    if coord.notifier is not None:
+        await coord.notifier.notify(
+            f"Added {common or suggestion['species']} ({suggestion['species']}) — "
+            f"{suggestion['confidence'] * 100:.0f}% confident. Species, canopy, light "
+            "range, water-use category, and care plan applied."
+            + (
+                ""
+                if data.get("emitter_count")
+                else " Add its drip emitters (count x GPH) for delivered-water math."
+            ),
+            title="Plant added from photo",
+            event_type="plant_added_from_photo",
+        )
+
+
+async def handle_apply_species_suggestion(hass: HomeAssistant, call: ServiceCall) -> None:
+    if not await _require_admin(hass, call):
+        return
+    data = _APPLY_SUGGESTION_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None:
+        return
+    plant = coord.plants.get(data["plant_id"])
+    if plant is None or not isinstance(plant.species_suggestion, dict):
+        raise vol.Invalid("no pending suggestion for that plant")
+    sug = plant.species_suggestion
+
+    from .species_id import suggested_lux_range
+
+    common, sci = sug.get("common_name") or "", sug.get("species") or ""
+    species_text = (f"{common} ({sci})" if common and sci else common or sci)[:120]
+    overrides: dict = {"species": species_text, "species_suggestion": None}
+    rng = suggested_lux_range(sug)
+    if rng is not None:
+        overrides["lux_low"], overrides["lux_high"] = rng
+    if sug.get("wucols_category"):
+        overrides["wucols_category"] = sug["wucols_category"]
+    if data["apply_canopy"] and sug.get("canopy_area_sqft"):
+        overrides["canopy_area_sqft"] = float(sug["canopy_area_sqft"])
+    # v1.40.7 — persist the FULL attribute set the model returned (nothing dropped).
+    overrides["common_name"] = sug.get("common_name") or ""
+    overrides["sunlight_class"] = sug.get("sunlight_class")
+    if sug.get("temp_low_f") is not None and sug.get("temp_high_f") is not None:
+        overrides["temp_low_f"] = sug["temp_low_f"]
+        overrides["temp_high_f"] = sug["temp_high_f"]
+    overrides["care_plan_preset"] = sug.get("care_plan_preset")
+    overrides["water_every_days"] = sug.get("water_every_days")
+    overrides["fertilize_every_days"] = sug.get("fertilize_every_days")
+    overrides["id_confidence"] = sug.get("confidence")
+    overrides["id_model"] = sug.get("model") or ""
+    overrides["id_note"] = sug.get("note") or ""
+    overrides["identified_at"] = sug.get("identified_at") or ""
+    # v1.40.12 — for species we cover, the curated DB's accurate water-use /
+    # care OVERRIDES the model's guess (which is generically "moderate"). This
+    # is the photo-identify path; the by-name research already uses curated data.
+    from .plant_care_db import lookup_care
+
+    curated = lookup_care(species_text)
+    if curated:
+        overrides["wucols_category"] = curated["wucols"]
+        overrides["sunlight_class"] = curated["sun"]
+        overrides["temp_low_f"] = curated["temp_low"]
+        overrides["temp_high_f"] = curated["temp_high"]
+        overrides["care_plan_preset"] = curated["preset"]
+        overrides["water_every_days"] = curated["water_days"]
+        overrides["fertilize_every_days"] = curated["fert_days"]
+    coord.plants.upsert(replace(plant, **overrides))
+    await coord.async_save_plants()
+
+    seeded = 0
+    _seed_preset = (curated or {}).get("preset") or sug.get("care_plan_preset")
+    if data["seed_plan"] and _seed_preset:
+        existing_kinds = {t.kind for t in coord.care_tasks.for_plant(plant.id)}
+        for t in seed_care_plan(plant.id, _seed_preset, id_factory=lambda: uuid.uuid4().hex[:12]):
+            if t.kind not in existing_kinds:
+                coord.care_tasks.add(t)
+                seeded += 1
+        if seeded:
+            await coord.async_save_care_tasks()
+    _LOGGER.info(
+        "Applied species suggestion to %s: %s (+%d care task(s))",
+        plant.name,
+        species_text,
+        seeded,
+    )
+
+
+async def handle_dismiss_species_suggestion(hass: HomeAssistant, call: ServiceCall) -> None:
+    if not await _require_admin(hass, call):
+        return
+    data = _DISMISS_SUGGESTION_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None:
+        return
+    plant = coord.plants.get(data["plant_id"])
+    if plant is None or plant.species_suggestion is None:
+        return
+    coord.plants.upsert(replace(plant, species_suggestion=None))
+    await coord.async_save_plants()
+
+
+async def handle_delete_care_task(hass: HomeAssistant, call: ServiceCall) -> None:
+    if not await _require_admin(hass, call):  # destructive — admin only
+        return
+    data = _DELETE_CARE_TASK_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None:
+        return
+    if coord.care_tasks.delete(data["task_id"]):
+        await coord.async_save_care_tasks()
+        _LOGGER.info("Deleted care task %s", data["task_id"])
+
+
+async def handle_complete_care_task(hass: HomeAssistant, call: ServiceCall) -> None:
+    if not await _require_admin(hass, call):
+        return
+    data = _COMPLETE_CARE_TASK_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None:
+        return
+    existing = coord.care_tasks.get(data["task_id"])
+    if existing is None:
+        _LOGGER.warning("complete_care_task: no such task %s", data["task_id"])
+        return
+    from homeassistant.util import dt as dt_util
+
+    coord.care_tasks.upsert(existing.completed(int(dt_util.now().timestamp())))
+    await coord.async_save_care_tasks()
+    _LOGGER.info("Care task %s marked done", existing.id)
+
+
+async def handle_set_yard_map(hass: HomeAssistant, call: ServiceCall) -> None:
+    if not await _require_admin(hass, call):  # writes file + outbound fetch — admin only
+        return
+    data = _SET_YARD_MAP_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None:
+        return
+    import os
+
+    import aiohttp
+    from homeassistant.helpers.aiohttp_client import async_get_clientsession
+    from homeassistant.util import dt as dt_util
+
+    from .yard_map import (
+        bbox_from_center,
+        bbox_from_cfg,
+        export_host_allowed,
+        export_url,
+        image_size_for_bbox,
+        safe_export_size,
+    )
+
+    # v1.58.1 — center resolution: explicit lat/lon wins; else the map's
+    # CURRENT center (a refresh/nudge must not snap back to the HA home);
+    # else the HA home location (first setup).
+    prev_cfg = coord.config.get("yard_map") or {}
+
+    # v1.59 — ROTATION-ONLY fast path. Rotation is a display transform, so
+    # spinning the aerial must not re-download it (or a ↻ tap would cost a
+    # fetch and a fresh image version). Only when rotation is the ONLY thing
+    # asked for: update the stored angle and return.
+    from .yard_map import normalize_rotation
+
+    raw_keys = set(call.data)
+    if "rotation_deg" in raw_keys and not (raw_keys - {"rotation_deg"}):
+        if not prev_cfg:
+            _LOGGER.warning("set_yard_map: no aerial yet — fetch one before rotating")
+            return
+        new_cfg = dict(prev_cfg)
+        new_cfg["rotation_deg"] = normalize_rotation(data["rotation_deg"])
+        coord.config["yard_map"] = new_cfg
+        await coord.async_save_config()
+        return
+    if "latitude" in data or "longitude" in data:
+        lat = data.get("latitude", hass.config.latitude)
+        lon = data.get("longitude", hass.config.longitude)
+    elif prev_cfg.get("center_lat") is not None and prev_cfg.get("center_lon") is not None:
+        lat = prev_cfg["center_lat"]
+        lon = prev_cfg["center_lon"]
+    else:
+        lat = hass.config.latitude
+        lon = hass.config.longitude
+    span = float(data.get("span_m", 60.0))
+    if lat is None or lon is None:
+        _LOGGER.warning("set_yard_map: no location — set HA latitude/longitude or pass them")
+        return
+    # v1.58.1 — frame nudge: one-shot meter DELTAS from the resolved center
+    # ("the yard is clipped on the north — shift 3 m north"). The shifted
+    # center is what gets stored, so the framing sticks with no re-apply.
+    from .yard_map import offset_center
+
+    off_n = float(data.get("offset_north_m") or 0.0)
+    off_e = float(data.get("offset_east_m") or 0.0)
+    if off_n or off_e:
+        lat, lon = offset_center(float(lat), float(lon), off_n, off_e)
+
+    bbox = bbox_from_center(float(lat), float(lon), span)
+    width, height = image_size_for_bbox(bbox)
+    # v1.42 — a custom aerial source (e.g. a county assessor's orthophoto
+    # MapServer) is usually far sharper than Esri's global layer, and has no
+    # 0.3 m/px cache floor. So the downscale-then-upscale dance below is
+    # ESRI-ONLY: applying it to a custom source would blur good imagery back
+    # to Esri quality for no reason.
+    template = str(coord.config.get("map_export_url_template") or "").strip()
+    if template:
+        fetch_w, fetch_h = width, height
+    else:
+        # Esri's export HTTP-500s on requests sharper than its imagery cache
+        # (~0.3 m/px) — fetch at the sharpest scale it will serve, then upscale
+        # locally back to the display size (same bbox, marker math untouched).
+        fetch_w, fetch_h = safe_export_size(span, width, height)
+    url = export_url(bbox, fetch_w, fetch_h, template or None)
+
+    # v1.52.1 — re-check the final host at fetch time (defends a stored value
+    # that predates the config-write SSRF guard). Esri's default host passes.
+    if not export_host_allowed(url):
+        _LOGGER.warning("set_yard_map: aerial host not allowed, refusing to fetch")
+        return
+
+    session = async_get_clientsession(hass)
+    try:
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+            if resp.status != 200:
+                _LOGGER.warning("set_yard_map: aerial service returned HTTP %s", resp.status)
+                return
+            if resp.content_length is not None and resp.content_length > 15_000_000:
+                _LOGGER.warning("set_yard_map: aerial response too large, refusing")
+                return
+            # Bounded FULL read: accumulate the whole image but bail past the cap.
+            # (resp.content.read(N) would return only the first buffered chunk and
+            # TRUNCATE a multi-chunk image; iter_chunked reads to EOF, and a chunked
+            # / no-Content-Length body still can't buffer past the cap.)
+            chunks: list[bytes] = []
+            total = 0
+            async for chunk in resp.content.iter_chunked(65536):
+                total += len(chunk)
+                if total > 15_000_000:
+                    _LOGGER.warning("set_yard_map: aerial body too large, refusing")
+                    return
+                chunks.append(chunk)
+            content = b"".join(chunks)
+    except Exception as err:  # network / timeout / client errors — never crash
+        _LOGGER.warning("set_yard_map: aerial fetch failed: %s", err)
+        return
+    if not content or len(content) < 1024:
+        _LOGGER.warning("set_yard_map: aerial fetch returned too little data")
+        return
+    if not _looks_like_image(content):
+        # The aerial host returns image bytes; an error page (HTML, HTTP 200)
+        # must not be saved as yard_map.jpg and served from /local.
+        _LOGGER.warning("set_yard_map: aerial fetch did not return an image")
+        return
+
+    abs_dir = hass.config.path("www", "complete_irrigation")
+    abs_path = os.path.join(abs_dir, "yard_map.jpg")
+
+    def _save() -> None:
+        os.makedirs(abs_dir, exist_ok=True)
+        payload = content
+        if (fetch_w, fetch_h) != (width, height):
+            # Fetched coarser than display size (Esri cache-scale floor) —
+            # upscale for crisp rendering. Pillow ships with HA core; if it's
+            # somehow unavailable, save the small image (still fully usable).
+            try:
+                import io
+
+                from PIL import Image
+
+                img = Image.open(io.BytesIO(content))
+                # Decoded-dimension sanity vs what we asked for — a decompression
+                # bomb must neither be resized in-memory nor saved raw to /local.
+                if img.width * img.height > fetch_w * fetch_h * 4:
+                    _LOGGER.warning("set_yard_map: decoded image absurdly large, refusing")
+                    return
+                img = img.convert("RGB").resize((width, height), Image.LANCZOS)
+                buf = io.BytesIO()
+                img.save(buf, format="JPEG", quality=88)
+                payload = buf.getvalue()
+            except Exception as err:  # keep the small original rather than fail
+                _LOGGER.warning("set_yard_map: upscale skipped (%s)", err)
+        with open(abs_path, "wb") as fh:
+            fh.write(payload)
+
+    try:
+        await hass.async_add_executor_job(_save)
+    except OSError as err:
+        _LOGGER.warning("set_yard_map: could not write image: %s", err)
+        return
+
+    # v1.43/v1.59 — MIGRATE plant markers to the new frame before adopting
+    # it. The logic lives in plant.reproject_plants so it is directly
+    # testable: until v1.62 the only thing exercising it was a hand-written
+    # copy inside a test file, and that copy omitted the legacy-anchor
+    # branch — the exact branch that keeps pre-v1.59 placements alive.
+    from .plant import reproject_plants
+
+    old_bbox = bbox_from_cfg(coord.config.get("yard_map"))
+    updated, moved, dropped = reproject_plants(list(coord.plants.all()), old_bbox, bbox)
+    for plant in updated:
+        coord.plants.upsert(plant)
+
+    version = dt_util.utcnow().strftime("%Y%m%d%H%M%S")
+    coord.config["yard_map"] = {
+        "center_lat": float(lat),
+        "center_lon": float(lon),
+        "span_m": span,
+        "bbox": {
+            "west": bbox.west,
+            "south": bbox.south,
+            "east": bbox.east,
+            "north": bbox.north,
+        },
+        "width": width,
+        "height": height,
+        "image_path": f"/local/complete_irrigation/yard_map.jpg?v={version}",
+        "version": version,
+        # v1.59 — a refresh/nudge/zoom must not silently straighten a map the
+        # user deliberately turned, so the angle SURVIVES a re-fetch (an
+        # explicit rotation_deg in this same call still wins).
+        "rotation_deg": normalize_rotation(
+            data.get("rotation_deg", prev_cfg.get("rotation_deg", 0.0))
+        ),
+    }
+    # v1.62.2 — CONFIG FIRST, then plants. These are two separate .storage
+    # writes and cannot be made atomic, so the question is only which order
+    # fails safe. Plants-first was the dangerous one: a crash in between left
+    # markers re-projected into the NEW frame while the stored bbox still
+    # described the OLD one, and the very next drag would then convert screen
+    # coords against the wrong frame and write a WRONG ground anchor —
+    # unrecoverable, because the anchor is the only truth. Config-first
+    # merely leaves markers briefly drawn against the new frame using their
+    # old derived positions; the anchors are untouched and the next
+    # set_yard_map re-derives them correctly.
+    await coord.async_save_config()
+    if moved or dropped:
+        await coord.async_save_plants()
+        _LOGGER.info(
+            "set_yard_map: re-projected %d marker(s) to the new view; "
+            "%d fell outside it (kept, just not drawn)",
+            moved,
+            dropped,
+        )
+    _LOGGER.info(
+        "Yard map updated (%dx%d) centered %.5f,%.5f span %.0fm", width, height, lat, lon, span
+    )
+    # Tell the user when zooming pushed plants out of view — otherwise they'd
+    # just silently vanish from the map with no explanation.
+    if dropped and coord.notifier is not None:
+        await coord.notifier.notify(
+            f"Yard map is now {span:.0f} m across. {dropped} plant marker(s) are outside "
+            "this view, so they aren't drawn — their positions are kept, and they "
+            "reappear when the view covers them again.",
+            title="Yard map zoomed",
+            event_type="yard_map_zoom",
+        )
+
+
+async def handle_set_weather_config(hass: HomeAssistant, call: ServiceCall) -> None:
+    if not await _require_admin(hass, call):  # config write — admin only
+        return
+    data = _SET_WEATHER_CONFIG_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None:
+        return
+    eto_was_auto = bool(coord.config.get("eto_auto"))
+    for key in (
+        "rain_sensor",
+        "rain_sensors",
+        "rain_lockout_min_inches",
+        "temperature_sensor",
+        "hot_threshold_f",
+        "boost_percent",
+        "wind_sensor",
+        "wind_defer_mph",
+        "eto_in_week",
+        "eto_auto",
+        "weather_entity",
+        "eto_provider",
+        "drip_efficiency",
+    ):
+        if key in data:
+            coord.config[key] = data[key]
+    # If the user sets a non-empty rain_sensors list, mirror the first
+    # one into rain_sensor so the existing lockout logic keeps working
+    # without a coordinator change.
+    rs_list = data.get("rain_sensors")
+    if rs_list:
+        coord.config["rain_sensor"] = rs_list[0]
+    await coord.async_save_config()
+    # v1.28 — if auto ETo just turned on (or the weather entity changed
+    # while it's on), fetch a fresh figure now rather than waiting for the
+    # daily 03:00 refresh. Await it (don't fire-and-forget) so the service
+    # only returns once the new value is stored — the Yard UI's refetch
+    # right after this call then sees the fresh figure with no timing race.
+    if coord.config.get("eto_auto") and (
+        not eto_was_auto or "weather_entity" in data or "eto_provider" in data
+    ):
+        await coord._refresh_auto_eto()
+    _LOGGER.info("Weather config updated: %s", data)
+
+
+async def handle_set_zone_moisture(hass: HomeAssistant, call: ServiceCall) -> None:
+    if not await _require_admin_if_configured(hass, call):
+        return
+    data = _SET_ZONE_MOISTURE_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None:
+        return
+    zone_id = data.pop("zone_entity_id")
+    coord.config.setdefault("zones", {})[zone_id] = {k: v for k, v in data.items() if v is not None}
+    await coord.async_save_config()
+    _LOGGER.info("Zone moisture config updated for %s: %s", zone_id, data)
+
+
+async def handle_clear_rain_lockout(hass: HomeAssistant, call: ServiceCall) -> None:
+    if not await _require_admin_if_configured(hass, call):
+        return
+    coord = _find_coordinator(hass)
+    if coord is None:
+        return
+    coord.clear_lockout()
+    _LOGGER.info("Rain lockout cleared by service call")
+
+
+async def handle_set_notification_config(hass: HomeAssistant, call: ServiceCall) -> None:
+    if not await _require_admin(hass, call):  # config write — admin only
+        return
+    data = _SET_NOTIFICATION_CONFIG_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None or coord.notifier is None:
+        return
+    coord.notifier.update_config(**data)
+    coord.config.setdefault("notifications", {}).update(data)
+    await coord.async_save_config()
+    _LOGGER.info("Notification config updated: %s", data)
+
+
+async def handle_test_notification(hass: HomeAssistant, call: ServiceCall) -> None:
+    if not await _require_admin_if_configured(hass, call):
+        return
+    data = _TEST_NOTIFICATION_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None or coord.notifier is None:
+        return
+    from .notifications import CATEGORY_CRITICAL
+
+    await coord.notifier.notify(
+        data["message"],
+        title="Test notification",
+        category=CATEGORY_CRITICAL,
+        event_type="test",
+    )
+
+
+async def handle_set_conflict_policy(hass: HomeAssistant, call: ServiceCall) -> None:
+    if not await _require_admin(hass, call):  # config write — admin only
+        return
+    data = _SET_CONFLICT_POLICY_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None:
+        return
+    coord.config["conflict_policy"] = data["policy"]
+    await coord.async_save_config()
+    _LOGGER.info("Conflict policy updated: %s", data["policy"])
+
+
+async def handle_set_general_config(hass: HomeAssistant, call: ServiceCall) -> None:
+    """PRD #38 + #81 — generic bucket for one-off global settings.
+
+    Each entry in _GENERAL_CONFIG_FIELDS describes how to persist
+    one accepted key. v1.16: loop-driven so a new field is a 2-line
+    table edit instead of another `if` arm."""
+    if not await _require_admin(hass, call):  # config write — admin only
+        return
+    data = _SET_GENERAL_CONFIG_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None:
+        return
+    for key, transform in _GENERAL_CONFIG_FIELDS.items():
+        if key in data:
+            coord.config[key] = transform(data[key])
+    await coord.async_save_config()
+    # Never log credentials. Mask the API key outright, and strip any query
+    # string from the external URL — a "custom"/Google-style endpoint can
+    # carry a key in a `?key=…` param, which must not land in the HA log.
+    safe = {}
+    for k, v in data.items():
+        if k in ("llm_external_api_key", "plantnet_api_key", "perenual_api_key"):
+            safe[k] = "***"
+        elif k == "llm_external_url" and isinstance(v, str) and "?" in v:
+            safe[k] = v.split("?", 1)[0] + "?<redacted>"
+        else:
+            safe[k] = v
+    _LOGGER.info("General config updated: %s", safe)
+
+
+async def handle_start_establishment(hass: HomeAssistant, call: ServiceCall) -> None:
+    if not await _require_admin(hass, call):  # config write — admin only
+        return
+    from datetime import date, time, timedelta
+
+    data = _START_ESTABLISHMENT_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None:
+        return
+
+    zone_id = data["zone_entity_id"]
+    cycles = data["cycles_per_day"]
+    minutes = data["minutes_per_cycle"]
+    days = data["days"]
+    start_hour = data["start_hour"]
+
+    # Evenly distribute cycles across a 12-hour daytime window
+    end_date_val = date.today() + timedelta(days=days)
+    cycle_spacing = max(1, 12 // cycles)
+    for i in range(cycles):
+        hour = (start_hour + i * cycle_spacing) % 24
+        sched = Schedule(
+            id=uuid.uuid4().hex[:12],
+            name=f"New planting {zone_id.split('.', 1)[-1]} cycle {i + 1}",
+            zone_entity_id=zone_id,
+            start_time=time(hour, 0),
+            duration_minutes=minutes,
+            weekdays=(0, 1, 2, 3, 4, 5, 6),  # daily
+            enabled=True,
+            end_date=end_date_val,
+            created_via="establishment",
+        )
+        coord.schedule_store.add(sched)
+
+    await coord.async_save()
+    _LOGGER.info(
+        "Establishment mode started: %d cycles/day x %d min for %d days on %s (until %s)",
+        cycles,
+        minutes,
+        days,
+        zone_id,
+        end_date_val.isoformat(),
+    )
+
+
+async def handle_clear_run_history(hass: HomeAssistant, _call: ServiceCall) -> None:
+    if not await _require_admin(hass, _call):  # destructive — admin only
+        return
+    coord = _find_coordinator(hass)
+    if coord is None:
+        return
+    removed = coord.run_history.clear()
+    await coord.async_save_run_history()
+    _LOGGER.info("Cleared %d run-history record(s)", removed)
+
+
+# Every service, in registration order: (name, handler, schema, response mode).
+# The handlers live at module level and take `hass` explicitly, so each one can
+# be imported and tested on its own instead of only existing inside a closure.
+_SERVICES: list[tuple[str, Any, Any, Any]] = [
+    (SERVICE_RUN_ZONE, handle_run_zone, _RUN_ZONE_SCHEMA, None),
+    (SERVICE_STOP_ZONE, handle_stop_zone, _STOP_ZONE_SCHEMA, None),
+    (SERVICE_ADD_SCHEDULE, handle_add_schedule, _ADD_SCHEDULE_SCHEMA, None),
+    (SERVICE_UPDATE_SCHEDULE, handle_update_schedule, _UPDATE_SCHEDULE_SCHEMA, None),
+    (SERVICE_DELETE_SCHEDULE, handle_delete_schedule, _DELETE_SCHEDULE_SCHEMA, None),
+    (SERVICE_SPLIT_SCHEDULE, handle_split_schedule, _SPLIT_SCHEDULE_SCHEMA, None),
+    (
+        SERVICE_DISMISS_SCHEDULE_ADVICE,
+        handle_dismiss_schedule_advice,
+        _DISMISS_SCHEDULE_ADVICE_SCHEMA,
+        None,
+    ),
+    (SERVICE_SET_SCHEDULE_ENABLED, handle_set_schedule_enabled, _SET_SCHEDULE_ENABLED_SCHEMA, None),
+    (SERVICE_RUN_SCHEDULE, handle_run_schedule, _RUN_SCHEDULE_SCHEMA, None),
+    (SERVICE_ADD_PLANT, handle_add_plant, _ADD_PLANT_SCHEMA, None),
+    (SERVICE_UPDATE_PLANT, handle_update_plant, _UPDATE_PLANT_SCHEMA, None),
+    (
+        SERVICE_ADD_ADVISOR_PREFERENCE,
+        handle_add_advisor_preference,
+        _ADD_ADVISOR_PREFERENCE_SCHEMA,
+        None,
+    ),
+    (
+        SERVICE_DELETE_ADVISOR_PREFERENCE,
+        handle_delete_advisor_preference,
+        _DELETE_ADVISOR_PREFERENCE_SCHEMA,
+        None,
+    ),
+    (SERVICE_ADD_ZONE_REGION, handle_add_zone_region, _ADD_ZONE_REGION_SCHEMA, None),
+    (SERVICE_DELETE_ZONE_REGION, handle_delete_zone_region, _DELETE_ZONE_REGION_SCHEMA, None),
+    (SERVICE_ASSIGN_AREA_REGION, handle_assign_area_region, _ASSIGN_AREA_REGION_SCHEMA, None),
+    (SERVICE_DELETE_PLANT, handle_delete_plant, _DELETE_PLANT_SCHEMA, None),
+    (
+        SERVICE_DUPLICATE_PLANT,
+        handle_duplicate_plant,
+        _DUPLICATE_PLANT_SCHEMA,
+        SupportsResponse.OPTIONAL,
+    ),
+    (SERVICE_SET_YARD_MAP, handle_set_yard_map, _SET_YARD_MAP_SCHEMA, None),
+    (SERVICE_ADD_PLANT_PHOTO, handle_add_plant_photo, _ADD_PLANT_PHOTO_SCHEMA, None),
+    (SERVICE_SET_PLANT_HEALTH, handle_set_plant_health, _SET_PLANT_HEALTH_SCHEMA, None),
+    (
+        SERVICE_SET_PLANT_LIGHT_RANGE,
+        handle_set_plant_light_range,
+        _SET_PLANT_LIGHT_RANGE_SCHEMA,
+        None,
+    ),
+    (SERVICE_START_LIGHT_SURVEY, handle_start_light_survey, _START_LIGHT_SURVEY_SCHEMA, None),
+    (SERVICE_CANCEL_LIGHT_SURVEY, handle_cancel_light_survey, _CANCEL_LIGHT_SURVEY_SCHEMA, None),
+    (
+        SERVICE_START_AREA_LIGHT_SURVEY,
+        handle_start_area_light_survey,
+        _START_AREA_LIGHT_SURVEY_SCHEMA,
+        None,
+    ),
+    (
+        SERVICE_CANCEL_AREA_LIGHT_SURVEY,
+        handle_cancel_area_light_survey,
+        _CANCEL_AREA_LIGHT_SURVEY_SCHEMA,
+        None,
+    ),
+    (SERVICE_ADD_CARE_TASK, handle_add_care_task, _ADD_CARE_TASK_SCHEMA, None),
+    (SERVICE_UPDATE_CARE_TASK, handle_update_care_task, _UPDATE_CARE_TASK_SCHEMA, None),
+    (SERVICE_DELETE_CARE_TASK, handle_delete_care_task, _DELETE_CARE_TASK_SCHEMA, None),
+    (SERVICE_COMPLETE_CARE_TASK, handle_complete_care_task, _COMPLETE_CARE_TASK_SCHEMA, None),
+    (SERVICE_SEED_CARE_PLAN, handle_seed_care_plan, _SEED_CARE_PLAN_SCHEMA, None),
+    (SERVICE_IDENTIFY_PLANT_SPECIES, handle_identify_plant_species, _IDENTIFY_SPECIES_SCHEMA, None),
+    (SERVICE_RESEARCH_PLANT_SPECIES, handle_research_plant_species, _RESEARCH_SCHEMA, None),
+    (SERVICE_ADD_PLANT_FROM_PHOTO, handle_add_plant_from_photo, _ADD_PLANT_FROM_PHOTO_SCHEMA, None),
+    (SERVICE_PROPOSE_WATERING_ADVICE, handle_propose_watering_advice, _PROPOSE_ADVICE_SCHEMA, None),
+    (SERVICE_DISMISS_WATERING_ADVICE, handle_dismiss_watering_advice, _DISMISS_ADVICE_SCHEMA, None),
+    (
+        SERVICE_TEST_VISION_ENDPOINT,
+        handle_test_vision_endpoint,
+        _TEST_VISION_SCHEMA,
+        SupportsResponse.ONLY,
+    ),
+    (
+        SERVICE_VERIFY_SPECIES_NAME,
+        handle_verify_species_name,
+        _VERIFY_SPECIES_SCHEMA,
+        SupportsResponse.ONLY,
+    ),
+    (
+        SERVICE_LOOKUP_HARDINESS_ZONE,
+        handle_lookup_hardiness_zone,
+        _HARDINESS_SCHEMA,
+        SupportsResponse.ONLY,
+    ),
+    (
+        SERVICE_APPLY_SPECIES_SUGGESTION,
+        handle_apply_species_suggestion,
+        _APPLY_SUGGESTION_SCHEMA,
+        None,
+    ),
+    (
         SERVICE_DISMISS_SPECIES_SUGGESTION,
         handle_dismiss_species_suggestion,
-        schema=_DISMISS_SUGGESTION_SCHEMA,
-    )
-
-    # ── Weather + per-zone moisture configuration ──────────────────
-
-    async def handle_set_weather_config(call: ServiceCall) -> None:
-        if not await _require_admin(hass, call):  # config write — admin only
-            return
-        data = _SET_WEATHER_CONFIG_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None:
-            return
-        eto_was_auto = bool(coord.config.get("eto_auto"))
-        for key in (
-            "rain_sensor",
-            "rain_sensors",
-            "rain_lockout_min_inches",
-            "temperature_sensor",
-            "hot_threshold_f",
-            "boost_percent",
-            "wind_sensor",
-            "wind_defer_mph",
-            "eto_in_week",
-            "eto_auto",
-            "weather_entity",
-            "eto_provider",
-            "drip_efficiency",
-        ):
-            if key in data:
-                coord.config[key] = data[key]
-        # If the user sets a non-empty rain_sensors list, mirror the first
-        # one into rain_sensor so the existing lockout logic keeps working
-        # without a coordinator change.
-        rs_list = data.get("rain_sensors")
-        if rs_list:
-            coord.config["rain_sensor"] = rs_list[0]
-        await coord.async_save_config()
-        # v1.28 — if auto ETo just turned on (or the weather entity changed
-        # while it's on), fetch a fresh figure now rather than waiting for the
-        # daily 03:00 refresh. Await it (don't fire-and-forget) so the service
-        # only returns once the new value is stored — the Yard UI's refetch
-        # right after this call then sees the fresh figure with no timing race.
-        if coord.config.get("eto_auto") and (
-            not eto_was_auto or "weather_entity" in data or "eto_provider" in data
-        ):
-            await coord._refresh_auto_eto()
-        _LOGGER.info("Weather config updated: %s", data)
-
-    async def handle_set_zone_moisture(call: ServiceCall) -> None:
-        if not await _require_admin_if_configured(hass, call):
-            return
-        data = _SET_ZONE_MOISTURE_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None:
-            return
-        zone_id = data.pop("zone_entity_id")
-        coord.config.setdefault("zones", {})[zone_id] = {
-            k: v for k, v in data.items() if v is not None
-        }
-        await coord.async_save_config()
-        _LOGGER.info("Zone moisture config updated for %s: %s", zone_id, data)
-
-    async def handle_clear_rain_lockout(call: ServiceCall) -> None:
-        if not await _require_admin_if_configured(hass, call):
-            return
-        coord = _find_coordinator(hass)
-        if coord is None:
-            return
-        coord.clear_lockout()
-        _LOGGER.info("Rain lockout cleared by service call")
-
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_SET_WEATHER_CONFIG,
-        handle_set_weather_config,
-        schema=_SET_WEATHER_CONFIG_SCHEMA,
-    )
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_SET_ZONE_MOISTURE,
-        handle_set_zone_moisture,
-        schema=_SET_ZONE_MOISTURE_SCHEMA,
-    )
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_CLEAR_RAIN_LOCKOUT,
-        handle_clear_rain_lockout,
-        schema=_CLEAR_RAIN_LOCKOUT_SCHEMA,
-    )
-
-    async def handle_set_notification_config(call: ServiceCall) -> None:
-        if not await _require_admin(hass, call):  # config write — admin only
-            return
-        data = _SET_NOTIFICATION_CONFIG_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None or coord.notifier is None:
-            return
-        coord.notifier.update_config(**data)
-        coord.config.setdefault("notifications", {}).update(data)
-        await coord.async_save_config()
-        _LOGGER.info("Notification config updated: %s", data)
-
-    async def handle_test_notification(call: ServiceCall) -> None:
-        if not await _require_admin_if_configured(hass, call):
-            return
-        data = _TEST_NOTIFICATION_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None or coord.notifier is None:
-            return
-        from .notifications import CATEGORY_CRITICAL
-
-        await coord.notifier.notify(
-            data["message"],
-            title="Test notification",
-            category=CATEGORY_CRITICAL,
-            event_type="test",
-        )
-
-    hass.services.async_register(
-        DOMAIN,
+        _DISMISS_SUGGESTION_SCHEMA,
+        None,
+    ),
+    (SERVICE_SET_WEATHER_CONFIG, handle_set_weather_config, _SET_WEATHER_CONFIG_SCHEMA, None),
+    (SERVICE_SET_ZONE_MOISTURE, handle_set_zone_moisture, _SET_ZONE_MOISTURE_SCHEMA, None),
+    (SERVICE_CLEAR_RAIN_LOCKOUT, handle_clear_rain_lockout, _CLEAR_RAIN_LOCKOUT_SCHEMA, None),
+    (
         SERVICE_SET_NOTIFICATION_CONFIG,
         handle_set_notification_config,
-        schema=_SET_NOTIFICATION_CONFIG_SCHEMA,
-    )
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_TEST_NOTIFICATION,
-        handle_test_notification,
-        schema=_TEST_NOTIFICATION_SCHEMA,
-    )
+        _SET_NOTIFICATION_CONFIG_SCHEMA,
+        None,
+    ),
+    (SERVICE_TEST_NOTIFICATION, handle_test_notification, _TEST_NOTIFICATION_SCHEMA, None),
+    (SERVICE_SET_CONFLICT_POLICY, handle_set_conflict_policy, _SET_CONFLICT_POLICY_SCHEMA, None),
+    (SERVICE_SET_GENERAL_CONFIG, handle_set_general_config, _SET_GENERAL_CONFIG_SCHEMA, None),
+    (SERVICE_START_ESTABLISHMENT, handle_start_establishment, _START_ESTABLISHMENT_SCHEMA, None),
+    (SERVICE_CLEAR_RUN_HISTORY, handle_clear_run_history, vol.Schema({}), None),
+]
 
-    async def handle_set_conflict_policy(call: ServiceCall) -> None:
-        if not await _require_admin(hass, call):  # config write — admin only
-            return
-        data = _SET_CONFLICT_POLICY_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None:
-            return
-        coord.config["conflict_policy"] = data["policy"]
-        await coord.async_save_config()
-        _LOGGER.info("Conflict policy updated: %s", data["policy"])
 
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_SET_CONFLICT_POLICY,
-        handle_set_conflict_policy,
-        schema=_SET_CONFLICT_POLICY_SCHEMA,
-    )
-
-    async def handle_set_general_config(call: ServiceCall) -> None:
-        """PRD #38 + #81 — generic bucket for one-off global settings.
-
-        Each entry in _GENERAL_CONFIG_FIELDS describes how to persist
-        one accepted key. v1.16: loop-driven so a new field is a 2-line
-        table edit instead of another `if` arm."""
-        if not await _require_admin(hass, call):  # config write — admin only
-            return
-        data = _SET_GENERAL_CONFIG_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None:
-            return
-        for key, transform in _GENERAL_CONFIG_FIELDS.items():
-            if key in data:
-                coord.config[key] = transform(data[key])
-        await coord.async_save_config()
-        # Never log credentials. Mask the API key outright, and strip any query
-        # string from the external URL — a "custom"/Google-style endpoint can
-        # carry a key in a `?key=…` param, which must not land in the HA log.
-        safe = {}
-        for k, v in data.items():
-            if k in ("llm_external_api_key", "plantnet_api_key", "perenual_api_key"):
-                safe[k] = "***"
-            elif k == "llm_external_url" and isinstance(v, str) and "?" in v:
-                safe[k] = v.split("?", 1)[0] + "?<redacted>"
-            else:
-                safe[k] = v
-        _LOGGER.info("General config updated: %s", safe)
-
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_SET_GENERAL_CONFIG,
-        handle_set_general_config,
-        schema=_SET_GENERAL_CONFIG_SCHEMA,
-    )
-
-    async def handle_start_establishment(call: ServiceCall) -> None:
-        if not await _require_admin(hass, call):  # config write — admin only
-            return
-        from datetime import date, time, timedelta
-
-        data = _START_ESTABLISHMENT_SCHEMA(dict(call.data))
-        coord = _find_coordinator(hass)
-        if coord is None:
-            return
-
-        zone_id = data["zone_entity_id"]
-        cycles = data["cycles_per_day"]
-        minutes = data["minutes_per_cycle"]
-        days = data["days"]
-        start_hour = data["start_hour"]
-
-        # Evenly distribute cycles across a 12-hour daytime window
-        end_date_val = date.today() + timedelta(days=days)
-        cycle_spacing = max(1, 12 // cycles)
-        for i in range(cycles):
-            hour = (start_hour + i * cycle_spacing) % 24
-            sched = Schedule(
-                id=uuid.uuid4().hex[:12],
-                name=f"New planting {zone_id.split('.', 1)[-1]} cycle {i + 1}",
-                zone_entity_id=zone_id,
-                start_time=time(hour, 0),
-                duration_minutes=minutes,
-                weekdays=(0, 1, 2, 3, 4, 5, 6),  # daily
-                enabled=True,
-                end_date=end_date_val,
-                created_via="establishment",
-            )
-            coord.schedule_store.add(sched)
-
-        await coord.async_save()
-        _LOGGER.info(
-            "Establishment mode started: %d cycles/day x %d min for %d days on %s (until %s)",
-            cycles,
-            minutes,
-            days,
-            zone_id,
-            end_date_val.isoformat(),
-        )
-
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_START_ESTABLISHMENT,
-        handle_start_establishment,
-        schema=_START_ESTABLISHMENT_SCHEMA,
-    )
-
-    async def handle_clear_run_history(_call: ServiceCall) -> None:
-        if not await _require_admin(hass, _call):  # destructive — admin only
-            return
-        coord = _find_coordinator(hass)
-        if coord is None:
-            return
-        removed = coord.run_history.clear()
-        await coord.async_save_run_history()
-        _LOGGER.info("Cleared %d run-history record(s)", removed)
-
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_CLEAR_RUN_HISTORY,
-        handle_clear_run_history,
-        schema=vol.Schema({}),
-    )
+async def _async_register_services(hass: HomeAssistant) -> None:
+    """Register every service. Idempotent — safe to call from multiple entries."""
+    if hass.services.has_service(DOMAIN, SERVICE_RUN_ZONE):
+        return
+    for service, handler, schema, response in _SERVICES:
+        kwargs: dict[str, Any] = {"schema": schema}
+        if response is not None:
+            kwargs["supports_response"] = response
+        # partial binds hass; HA unwraps partials when classifying the job type.
+        hass.services.async_register(DOMAIN, service, partial(handler, hass), **kwargs)
 
 
 def _async_unregister_services(hass: HomeAssistant) -> None:
