@@ -72,7 +72,7 @@
   // v1.16: one constant fed to every version-pill render + the console
   // banner. Pre-v1.16 the version was hard-coded in 10+ places and got
   // out of sync with manifest.json on most releases.
-  const PANEL_VERSION = "v1.62.2";
+  const PANEL_VERSION = "v1.63.0";
   // v1.41 — external plant-ID providers (mirrors llm_client.PROVIDERS). URL is
   // auto-filled when a provider is picked; model is an editable hint. All speak
   // the same OpenAI /v1/chat/completions shape, so one settings form covers them.
@@ -6603,8 +6603,8 @@
       });
 
       const statusBadge = (s) => {
-        const cls = `history-status history-status-${s}`;
-        return `<span class="${cls}">${s}</span>`;
+        const cls = `history-status history-status-${escapeAttr(s)}`;
+        return `<span class="${cls}">${escapeHtml(s)}</span>`;
       };
 
       const fmtRow = (r) => {
@@ -6649,7 +6649,7 @@
             ? `<tr class="history-expanded-row"><td colspan="6"><pre class="history-triggers">${escapeHtml(JSON.stringify(r.triggers, null, 2))}</pre></td></tr>`
             : "";
         return (
-          `<tr class="history-row history-row-${r.status}">` +
+          `<tr class="history-row history-row-${escapeAttr(r.status)}">` +
           `<td class="history-when">${escapeHtml(dateStr)}</td>` +
           `<td class="history-zone">${escapeHtml(r.zone_name || r.zone_entity_id)}</td>` +
           `<td class="history-schedule">${sched}</td>` +
@@ -6696,7 +6696,7 @@
           ? `<span class="history-dim">${meaningful.map(escapeHtml).join(", ")}</span>`
           : `<span class="history-dim">—</span>`;
         return (
-          `<tr class="history-row history-row-${sessStatus}">` +
+          `<tr class="history-row history-row-${escapeAttr(sessStatus)}">` +
           `<td class="history-when">${escapeHtml(dateStr)}</td>` +
           `<td class="history-zone">${escapeHtml(g.zone_name || g.zone_entity_id)}</td>` +
           `<td class="history-schedule">${escapeHtml(g.base)} <span class="history-dim">(${n} blocks)</span></td>` +
@@ -7429,8 +7429,10 @@
             `<div class="forecast-icon">${cond.icon}</div>` +
             `<div class="forecast-label">${escapeHtml(cond.label)}</div>` +
             (day.temperature != null
-              ? `<div class="forecast-temp">${day.temperature}${unitT}` +
-                (day.templow != null ? ` / ${day.templow}${unitT}` : "") +
+              ? `<div class="forecast-temp">${escapeHtml(day.temperature)}${escapeHtml(unitT)}` +
+                (day.templow != null
+                  ? ` / ${escapeHtml(day.templow)}${escapeHtml(unitT)}`
+                  : "") +
                 `</div>`
               : "") +
             `</div>`

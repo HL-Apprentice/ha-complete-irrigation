@@ -109,7 +109,10 @@ class IrrigationCalendarICSView(HomeAssistantView):
             lines.extend(
                 [
                     "BEGIN:VEVENT",
-                    f"UID:{r.schedule_id}_{start.isoformat()}@complete_irrigation",
+                    # schedule_id is escaped too: Schedule.from_dict takes id
+                    # straight from .storage without validation, so a corrupted
+                    # store must not be able to inject CRLF + new ICS fields.
+                    f"UID:{_ics_escape(r.schedule_id)}_{start.isoformat()}@complete_irrigation",
                     f"DTSTAMP:{_ics_dt(now)}",
                     f"DTSTART:{_ics_dt(start)}",
                     f"DTEND:{_ics_dt(end)}",

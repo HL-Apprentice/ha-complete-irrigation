@@ -76,20 +76,17 @@ async def get_config(hass, connection, msg):
     if coord is None:
         connection.send_result(msg["id"], {})
         return
+    # v1.63 — redact secrets by PATTERN, not by a hand-maintained pop list.
+    # This used to clone the config and pop the three keys someone remembered
+    # (added reactively in v1.41 / v1.51 / v1.52), which fails OPEN: any new
+    # credential field would ship to the browser until a human noticed. Now
+    # anything that looks like a credential is stripped by default and replaced
+    # with a `<key>_set` boolean, so the settings UI still knows what is stored.
+    from .config_redact import redact_config
+
+    payload = redact_config(coord.config)
     # Also include current lockout state for the panel banner
-    payload = dict(coord.config)
     payload["lockout_until"] = coord.lockout_until.isoformat() if coord.lockout_until else None
-    # v1.41 — never ship the external-LLM API key to the browser. Expose only
-    # WHETHER one is stored, so the settings UI can show "key saved" and decide
-    # its placeholder without the secret ever leaving the box.
-    payload["llm_external_api_key_set"] = bool(payload.get("llm_external_api_key"))
-    payload.pop("llm_external_api_key", None)
-    # v1.51 — same for the Pl@ntNet key.
-    payload["plantnet_api_key_set"] = bool(payload.get("plantnet_api_key"))
-    payload.pop("plantnet_api_key", None)
-    # v1.52 — same for the Perenual key.
-    payload["perenual_api_key_set"] = bool(payload.get("perenual_api_key"))
-    payload.pop("perenual_api_key", None)
     connection.send_result(msg["id"], payload)
 
 
