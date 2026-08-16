@@ -858,7 +858,7 @@ set_general_config:
         vision model (e.g. Ollama / vLLM on a LAN GPU box). Empty string
         clears it.
       required: false
-      example: "http://192.168.1.10:8000/v1/chat/completions"
+      example: "http://192.168.1.10:11434/v1/chat/completions"
       selector:
         text:
     vision_model:
