@@ -95,6 +95,78 @@ def test_non_dict_input_is_safe():
         assert redact_config(bad) == {}
 
 
+# ── the three holes an adversarial review found in the FIRST cut ─────
+
+
+def test_a_bare_key_suffix_does_not_slip_through():
+    """The first cut matched only the literal substring "api_key", so these
+    real-world names shipped in the clear — the same reactive failure as the
+    deny-list it replaced, just relocated."""
+    cfg = {
+        "openai_key": "a",
+        "access_key": "b",
+        "primary_key": "c",
+        "llm_external_key": "d",
+        "key": "e",
+        "signing_keys": "f",
+    }
+    out = redact_config(cfg)
+    for k in cfg:
+        assert k not in out, f"{k} reached the browser"
+        assert out[f"{k}_set"] is True
+
+
+def test_words_merely_containing_key_are_not_redacted():
+    """The key pattern is anchored, so ordinary config survives."""
+    cfg = {"keyword": "x", "monkey_count": 3, "keypad_mode": "on", "turnkey": True}
+    assert redact_config(cfg) == cfg
+
+
+def test_nested_secrets_are_stripped():
+    """Redaction used to be SHALLOW — nested containers were copied by
+    reference, so anything inside zones/providers went out untouched."""
+    out = redact_config(
+        {
+            "zones": {"switch.a": {"nested_api_key": "DEEP", "min": 20}},
+            "providers": [{"client_secret": "S"}, {"label": "ok"}],
+        }
+    )
+    assert out["zones"]["switch.a"] == {"nested_api_key_set": True, "min": 20}
+    assert out["providers"] == [{"client_secret_set": True}, {"label": "ok"}]
+
+
+def test_deeply_nested_secrets_are_still_stripped():
+    out = redact_config({"a": {"b": {"c": {"d": {"api_key": "deep"}}}}})
+    assert out["a"]["b"]["c"]["d"] == {"api_key_set": True}
+
+
+def test_a_set_suffix_is_only_exempt_when_it_is_actually_a_flag():
+    """*_set used to be a blanket bypass, so a real value named token_set was
+    exempt. A flag we emit is always a bool; a stored credential never is."""
+    out = redact_config({"token_set": "a-real-stored-value"})
+    assert "token_set" not in out
+    assert out["token_set_set"] is True
+    # the genuine boolean flag still round-trips untouched (idempotency)
+    assert redact_config({"token_set": True}) == {"token_set": True}
+
+
+def test_redaction_does_not_alias_the_caller_s_nested_dicts():
+    inner = {"api_key": "sk", "min": 1}
+    out = redact_config({"zones": {"switch.a": inner}})
+    out["zones"]["switch.a"]["min"] = 999
+    assert inner["min"] == 1, "redacted payload aliases the live config"
+    assert inner["api_key"] == "sk", "server lost its own value"
+
+
+def test_url_fields_ship_whole_on_purpose():
+    """Deliberate, not an oversight: the panel renders these in an editable
+    input, so scrubbing would make the admin's next save clobber their own URL.
+    get_config is admin-gated. The case that IS scrubbed is error text
+    (llm_client.safe_error_text), which gets logged and shown to users."""
+    cfg = {"vision_url": "http://gpu.lan:8000/v1", "llm_external_url": "https://api.x/v1"}
+    assert redact_config(cfg) == cfg
+
+
 def test_redaction_never_mutates_the_caller_s_config():
     """The live coordinator config is passed in — redacting must not damage it."""
     cfg = {"llm_external_api_key": "sk-secret", "zones": {}}
