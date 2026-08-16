@@ -3,7 +3,7 @@
 # Local pre-push verification — the same checks CI runs, but on your
 # machine before a single byte hits GitHub.
 #
-# Three checks, in order:
+# Six checks, in order:
 #   1. Lint  (ruff check + format)
 #   2. Tests (pytest, in YOUR venv — HA tests run here)
 #   3. CI parity (pytest with ONLY requirements-dev.txt — catches imports that
@@ -12,6 +12,9 @@
 #   5. Frontend (node syntax check + panel unit tests) — the panel is HALF the
 #      shipped surface and had NO automated verification of any kind until
 #      v1.62, which is where several user-visible regressions landed.
+#   6. Privacy scan (whole tracked tree) — deterministic regex for private IPs,
+#      MACs, home paths, emails and lat/lon PAIRS. Deterministic on purpose: a
+#      model asked to "check for private info" samples, it does not enumerate.
 #
 # A 4th "smoke-test in real HA" check is documented in CONTRIBUTING.md
 # and runs from `scripts/smoke-test.sh` once the local HA env is set up.
@@ -46,7 +49,7 @@ fail() {
 }
 
 # ─── 1. Lint ────────────────────────────────────────────────────────
-step "1/5  Ruff lint"
+step "1/6  Ruff lint"
 if ! python3 -m ruff check custom_components/ tests/ scripts/; then
   fail "lint check failed — fix the issues above (try: python3 -m ruff check --fix ...)"
 fi
@@ -56,7 +59,7 @@ fi
 pass "lint clean"
 
 # ─── 2. Unit tests ──────────────────────────────────────────────────
-step "2/5  Unit tests (pytest, your venv)"
+step "2/6  Unit tests (pytest, your venv)"
 if ! python3 -m pytest tests/ -q; then
   fail "tests failed"
 fi
@@ -72,7 +75,7 @@ pass "all tests passing"
 # So: re-run the suite in a throwaway venv built from requirements-dev.txt alone.
 # Cheap (cached between runs, ~8s) and it catches exactly that class of bug —
 # an import that only resolves because your machine happens to have the package.
-step "3/5  CI parity (pytest with ONLY requirements-dev.txt)"
+step "3/6  CI parity (pytest with ONLY requirements-dev.txt)"
 CI_VENV="${CI_PARITY_VENV:-$HOME/.cache/irrigation-CI-mirror}"
 if [ -n "${SKIP_CI_PARITY:-}" ]; then
   echo "  (skipped: SKIP_CI_PARITY set)"
@@ -95,7 +98,7 @@ else
 fi
 
 # ─── 4. Manifest sanity ─────────────────────────────────────────────
-step "4/5  Manifest sanity"
+step "4/6  Manifest sanity"
 MANIFEST="custom_components/complete_irrigation/manifest.json"
 
 # Required keys
@@ -127,7 +130,7 @@ pass "manifest valid"
 # The panel is ~11k lines and, until v1.62, had NO automated check — not even a
 # syntax parse. A render-time TypeError there takes the WHOLE panel down
 # ("Irrigation panel error"), which is exactly what shipped in v1.60.4.
-step "5/5  Frontend (syntax + panel unit tests)"
+step "5/6  Frontend (syntax + panel unit tests)"
 PANEL="custom_components/complete_irrigation/frontend/complete-irrigation-panel.js"
 if ! command -v node >/dev/null 2>&1; then
   echo "  (skipped: node not installed — CI still runs this)"
@@ -140,6 +143,17 @@ else
     fail "panel unit tests failed"
   fi
   pass "frontend clean ($(grep -c '^✔' /tmp/ci-js-test.log 2>/dev/null || echo '?') panel tests passing)"
+fi
+
+# A real machine on the author's LAN and an 8-decimal bbox of a single
+# residential parcel were published here and survived 32 and 37 releases,
+# past thirty-plus manual multi-model reviews. They survived because those
+# reviews read the DIFF, and each value appeared in a diff exactly once. This
+# step reads the whole tracked tree every time, so "already committed" stops
+# being a hiding place.
+step "6/6  Privacy scan (whole tracked tree, not the diff)"
+if ! python3 scripts/privacy-scan.py; then
+  fail "privacy scan found data that must not ship — see above"
 fi
 
 echo
