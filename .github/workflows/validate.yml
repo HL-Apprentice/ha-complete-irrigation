@@ -118,3 +118,24 @@ jobs:
         run: node --check custom_components/complete_irrigation/frontend/complete-irrigation-panel.js
       - name: Panel unit tests
         run: node --test "tests/js/*.test.js"
+
+  # A machine on the author's LAN and an 8-decimal bbox of a single residential
+  # parcel were published in this repo and survived 32 and 37 releases, past
+  # thirty-plus manual multi-model reviews. Those reviews read the DIFF, and each
+  # value appeared in a diff exactly once — after which no later diff could
+  # contain it. This job reads the WHOLE tracked tree on every push, so
+  # "already committed" stops being a place for private data to hide.
+  #
+  # Deterministic on purpose: a model asked to "check for private information"
+  # samples, it does not enumerate. Models belong in the triage step (is this a
+  # real hostname or a placeholder?), never in the finding step.
+  privacy:
+    name: Privacy scan (whole tree)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Scan every tracked file for private data
+        run: python3 scripts/privacy-scan.py

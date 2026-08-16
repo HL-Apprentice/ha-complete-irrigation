@@ -12,6 +12,9 @@ from custom_components.complete_irrigation.yard_map import (
     valid_export_template,
 )
 
+# Synthetic 60 m x 60 m box on a round base point. Deliberately NOT a real
+# parcel: an 8-decimal lat/lon pair identifies a specific house, and this
+# file ships to everyone who installs the integration.
 BBOX = Bbox(-111.50000000, 33.20000000, -111.49935567, 33.20053899)
 
 # A real county-assessor orthophoto service (the motivating case).
