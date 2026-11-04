@@ -45,6 +45,14 @@
           "description": "How many days to add. Default 1."
         }
       }
+    },
+    "set_zone_moisture": {
+      "fields": {
+        "lockout_zone_type": {
+          "name": "Rain lockout zone type",
+          "description": "Optional override. Leave unset to classify automatically (unclassified zones stay turf)."
+        }
+      }
     }
   }
 }

@@ -535,6 +535,9 @@ def decide_lockouts(
     dry_zone_types: set[str] | frozenset[str] = frozenset(),
     min_inches: float = TABLE_MIN_INCHES,
     today_in: float | None = None,
+    legacy_hours: float | None = None,
+    arm_from_table: bool = True,
+    allow_forecast_extend: bool = True,
 ) -> LockoutUpdate:
     """Next lockout state.
 
@@ -563,9 +566,31 @@ def decide_lockouts(
 
     # ── event rain arms / extends holding types on a rising total ─
     rain = _clean_inches(rainfall_in) if rainfall_in is not None else None
-    if rain is None and rainfall_in is not None:
-        rain = None
-    if rain is not None:
+    if not arm_from_table:
+        # v1.62 fallback (or "do not arm from this sample"). A positive
+        # legacy_hours is the old ET-scaled duration. None means the old
+        # formula declined to lock - record the baseline, do not extend.
+        if rain is not None:
+            rose = last is None or rain > last + 0.001
+            dropped = last is not None and rain < last - 0.01
+            if rose:
+                last = rain
+                if legacy_hours is not None and legacy_hours > 0:
+                    proposed = now + timedelta(hours=float(legacy_hours))
+                    for zone_type in HOLDING_ZONE_TYPES:
+                        current = until.get(zone_type)
+                        if current is None or proposed > current:
+                            until[zone_type] = proposed
+                            extended.discard(zone_type)
+                    logs.append(
+                        f"legacy rain lockout {float(legacy_hours):.1f}h from today's {rain:.2f} in"
+                    )
+            elif dropped:
+                last = rain
+                logs.append(
+                    f"rain total fell to {rain:.2f} in - baseline reset, lockout not extended"
+                )
+    elif rain is not None:
         rose = last is None or rain > last + 0.001
         dropped = last is not None and rain < last - 0.01
         if rose:
@@ -590,8 +615,9 @@ def decide_lockouts(
             last = rain
             logs.append(f"rain total fell to {rain:.2f} in - baseline reset, lockout not extended")
 
-    # ── forecast may add one day to a lockout that is already active
-    if forecast_extends_lockout(forecast_in, forecast_probability_pct):
+    # ── forecast may add one day to a lockout that is already active.
+    # Cached or stale Open-Meteo data must not take this branch.
+    if allow_forecast_extend and forecast_extends_lockout(forecast_in, forecast_probability_pct):
         for zone_type in HOLDING_ZONE_TYPES:
             current = until.get(zone_type)
             if current is None or not (now < current) or zone_type in extended:

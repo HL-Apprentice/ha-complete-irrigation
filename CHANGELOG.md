@@ -4,6 +4,21 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.63.0 — unreleased on origin/main — minor
+
+Not tagged. These commits are already on `main` ahead of tag v1.62.2 and ship
+with the next release:
+
+- **Service handlers are importable.** The 52 handlers that lived inside a
+  2,805-line closure are module-level functions. `get_config` redacts secrets
+  with a fail-closed pattern match instead of a deny-list.
+- **Redaction holes closed.** Nested config, bare `*_key` names, and a blanket
+  `*_set` bypass no longer leak into the panel payload.
+- **Privacy scan.** `scripts/privacy-scan.py` reads the whole tracked tree
+  (not the diff) for private IPs, paths, emails, and coordinate pairs, and CI
+  runs it on every push. The published parcel bbox and LAN example endpoint
+  were replaced with placeholders. That is a forward fix, not a history rewrite.
+
 ## v1.64.0 — 2026-11-04 — minor
 
 **Rain lockout follows the storm and the heat, per zone type.**

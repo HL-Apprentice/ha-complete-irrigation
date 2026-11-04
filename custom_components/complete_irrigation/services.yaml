@@ -710,6 +710,22 @@ set_zone_moisture:
       required: false
       selector:
         text:
+    lockout_zone_type:
+      name: Rain lockout zone type
+      description: >
+        Optional override for which rain-lockout clock this zone uses.
+        Leave unset to classify from the zone's category, plants, and name
+        (unclassified zones stay turf). Empty clears an override.
+      required: false
+      selector:
+        select:
+          options:
+            - ""
+            - deep_drip
+            - flowers_garden
+            - turf
+            - birdbath
+            - germination
     temperature_entities:
       name: Temperature sensors (optional)
       description: One or more temperature sensors for this zone (display-only; averaged when multiple).

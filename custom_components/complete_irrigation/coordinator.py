@@ -73,6 +73,7 @@ from .notifications import (
 )
 from .plant import PlantStore
 from .rain_lockout import (
+    ALL_ZONE_TYPES,
     HOLDING_ZONE_TYPES,
     ZONE_FLOWERS_GARDEN,
     ZONE_GERMINATION,
@@ -95,6 +96,7 @@ from .schedule import ScheduleStore
 from .weather_gate import (
     RAIN_LOCKOUT_MIN_INCHES,
     evaluate_hot_weather,
+    evaluate_rain_lockout,
     evaluate_wind_defer,
     rain_lockout_max_hours,
     rain_to_inches,
@@ -130,6 +132,14 @@ _MISSED_LOOKBACK_MIN = 5
 _RESUME_DELAY_SECONDS = 30
 _RESUME_RETRY_SECONDS = 60
 _RESUME_MAX_ATTEMPTS = 5
+
+# Open-Meteo rain history. One fetch per cache window, never once per tick.
+# connect / sock_read / total are all set so a hung TLS handshake cannot sit
+# on the tick. A cached or failed response must not extend a lockout.
+_OM_CACHE = timedelta(minutes=30)
+_OM_TIMEOUT_TOTAL_S = 15
+_OM_TIMEOUT_CONNECT_S = 5
+_OM_TIMEOUT_SOCK_READ_S = 10
 
 # v1.19 — auto-soak defaults + give-up cooldown. After soak_max_cycles
 # fail to raise moisture above min_pct, the zone won't re-attempt for
@@ -485,6 +495,8 @@ class ScheduleCoordinator:
             ),
             "event_rain_in": self._rain_lockout.last_event_rain_in,
             "sources": dict(self._rain_lockout.sources),
+            # Resolved lockout type per zone (override or classified). Diagnostic.
+            "zones": self.zone_lockout_report(),
         }
 
     async def async_setup(self) -> None:
@@ -2233,6 +2245,9 @@ class ScheduleCoordinator:
         zones = self._config.get("zones") if isinstance(self._config.get("zones"), dict) else {}
         cfg = zones.get(zone_entity_id)
         cfg = cfg if isinstance(cfg, dict) else {}
+        override = cfg.get("lockout_zone_type")
+        if isinstance(override, str) and override in ALL_ZONE_TYPES:
+            return override
         category = cfg.get("category") if isinstance(cfg.get("category"), str) else None
         schedules = []
         try:
@@ -2272,6 +2287,43 @@ class ScheduleCoordinator:
             plant_presets=tuple(presets),
             establishment_active=establishment,
         )
+
+    def _zone_ids_for_lockout(self) -> list[str]:
+        zones = self._config.get("zones") if isinstance(self._config.get("zones"), dict) else {}
+        ids: set[str] = set(zones)
+        try:
+            for sched in self._store.all():
+                for step in sched.all_steps():
+                    ids.add(step.zone_entity_id)
+        except Exception:
+            pass
+        try:
+            for plant in self._plants.all():
+                ids.add(plant.zone_entity_id)
+        except Exception:
+            pass
+        return sorted(ids)
+
+    def zone_lockout_report(self) -> dict[str, dict[str, str | None]]:
+        """Resolved lockout type for every known zone.
+
+        ``source`` is ``override`` when ``zones.<id>.lockout_zone_type`` is set
+        to a known type, otherwise ``classified`` (and an unclassified zone is
+        turf). Read-only: does not write config or schedules.
+        """
+        zones = self._config.get("zones") if isinstance(self._config.get("zones"), dict) else {}
+        report: dict[str, dict[str, str | None]] = {}
+        for zone_id in self._zone_ids_for_lockout():
+            cfg = zones.get(zone_id)
+            cfg = cfg if isinstance(cfg, dict) else {}
+            raw = cfg.get("lockout_zone_type")
+            override = raw if isinstance(raw, str) and raw in ALL_ZONE_TYPES else None
+            report[zone_id] = {
+                "type": self.zone_lockout_type(zone_id),
+                "override": override,
+                "source": "override" if override else "classified",
+            }
+        return report
 
     def _garden_present(self) -> bool:
         """True when a flowers+garden zone is specifically a vegetable garden.
@@ -2432,11 +2484,14 @@ class ScheduleCoordinator:
 
             from .open_meteo import open_meteo_rain_url, parse_open_meteo_rain
 
+            timeout = aiohttp.ClientTimeout(
+                total=_OM_TIMEOUT_TOTAL_S,
+                connect=_OM_TIMEOUT_CONNECT_S,
+                sock_connect=_OM_TIMEOUT_CONNECT_S,
+                sock_read=_OM_TIMEOUT_SOCK_READ_S,
+            )
             session = async_get_clientsession(self._hass)
-            async with session.get(
-                open_meteo_rain_url(lat, lon, tz),
-                timeout=aiohttp.ClientTimeout(total=20),
-            ) as resp:
+            async with session.get(open_meteo_rain_url(lat, lon, tz), timeout=timeout) as resp:
                 if resp.status != 200:
                     _LOGGER.debug("Open-Meteo rain HTTP %s", resp.status)
                     return None
@@ -2446,20 +2501,32 @@ class ScheduleCoordinator:
             _LOGGER.debug("Open-Meteo rain fetch failed: %s", err)
             return None
 
-    async def _read_open_meteo_rain(self, now: datetime) -> dict[str, Any] | None:
+    async def _read_open_meteo_rain(self, now: datetime) -> tuple[dict[str, Any] | None, str]:
+        """Return ``(payload, freshness)``.
+
+        ``freshness`` is ``fresh`` only for a fetch that just succeeded.
+        ``cached`` is a previous success still inside ``_OM_CACHE`` — it must
+        not extend a lockout. ``failed`` means this attempt (or a recent one)
+        failed; the previous payload is dropped so it cannot disagree with
+        Tempest or extend anything. The network is not called on every tick.
+        """
         cached_at = self._open_meteo_rain_at
         if cached_at is not None:
-            age = now - cached_at
-            limit = timedelta(minutes=30 if self._open_meteo_rain else 5)
             try:
-                if age < limit:
-                    return self._open_meteo_rain
+                age = now - cached_at
             except TypeError:
-                pass
+                age = None
+            if age is not None and age < _OM_CACHE:
+                if self._open_meteo_rain is None:
+                    return None, "failed"
+                return self._open_meteo_rain, "cached"
         parsed = await self._fetch_open_meteo_rain(now)
-        self._open_meteo_rain = parsed
         self._open_meteo_rain_at = now
-        return parsed
+        if not isinstance(parsed, dict):
+            self._open_meteo_rain = None
+            return None, "failed"
+        self._open_meteo_rain = parsed
+        return parsed, "fresh"
 
     def _holding_active(self, now: datetime) -> bool:
         return any(
@@ -2474,39 +2541,55 @@ class ScheduleCoordinator:
         entity = self._config.get("rain_sensor")
         if isinstance(entity, str) and entity:
             history = await self._tempest_history_inches(entity, now)
-        om = await self._read_open_meteo_rain(now)
+        om, freshness = await self._read_open_meteo_rain(now)
         om = om if isinstance(om, dict) else None
-        om_past = om.get("past_72h_in") if om else None
-        # Today's total is not a 72h sum. Use it only when Open-Meteo is down
-        # too, and say so. When Open-Meteo answered, it is the 72h source.
+        fresh = freshness == "fresh" and om is not None
+        # A failed or cached Open-Meteo read does not participate. Failure
+        # must not raise RAIN_SOURCE_DISAGREE, and cached/stale data must
+        # not extend a lockout (no forecast extension, not in the blend).
+        om_past = om.get("past_72h_in") if fresh else None
+        allow_forecast = fresh
+        forecast_eto = om.get("forecast_daily_eto_in") if fresh else None
+        current_mm = om.get("current_precip_mm") if fresh else None
+        max_h = rain_lockout_max_hours(self._read_heat_signal_f())
+        floor = self._rain_floor()
+        daily_eto = self._lockout_daily_eto(forecast_eto)
+        legacy_hours: float | None = None
+        arm_from_table = True
         if history is not None:
-            tempest = history
+            tempest: float | None = history
             mode = "tempest+open_meteo" if om_past is not None else "tempest_only"
-        elif om_past is not None:
+        elif fresh and om_past is not None:
             tempest = None
             mode = "open_meteo_only"
-        elif today is not None:
-            tempest = today
-            mode = "tempest_today_only"
         else:
+            # Both 72h sources are unavailable (Open-Meteo failed or is only
+            # cached, and Tempest history did not answer). Use today's sensor
+            # with the v1.62 ET-scaled formula. No reading -> do not arm and
+            # do not extend, so a lockout cannot stick on a dead feed.
             tempest = None
-            mode = "none"
+            arm_from_table = False
+            mode = "legacy_today" if today is not None else "none"
+            if today is not None:
+                legacy_hours = evaluate_rain_lockout(
+                    today, daily_eto, min_inches=floor, max_hours=max_h
+                )
+                legacy_hours = float(legacy_hours) if legacy_hours else None
         if mode != getattr(self, "_rain_input_mode", None):
             self._rain_input_mode = mode
-            _LOGGER.info("Rain lockout rainfall source: %s", mode)
+            _LOGGER.info("Rain lockout rainfall source: %s (%s)", mode, freshness)
         blend = combine_rain_sources(tempest, om_past)
-        forecast_in = om.get("forecast_24h_in") if om else None
-        forecast_prob = om.get("forecast_24h_probability_pct") if om else None
-        forecast_eto = om.get("forecast_daily_eto_in") if om else None
-        current_mm = om.get("current_precip_mm") if om else None
+        rainfall_in = blend.inches if arm_from_table else today
+        forecast_in = om.get("forecast_24h_in") if allow_forecast and om else None
+        forecast_prob = om.get("forecast_24h_probability_pct") if allow_forecast and om else None
         was_holding = self._holding_active(now)
         update = decide_lockouts(
             self._rain_lockout,
             now=now,
-            rainfall_in=blend.inches,
+            rainfall_in=rainfall_in,
             blend=blend,
-            daily_eto_in=self._lockout_daily_eto(forecast_eto),
-            max_hours=rain_lockout_max_hours(self._read_heat_signal_f()),
+            daily_eto_in=daily_eto,
+            max_hours=max_h,
             garden_present=self._garden_present(),
             active_rain=detect_active_rain(
                 weather_states=self._weather_states(),
@@ -2519,8 +2602,11 @@ class ScheduleCoordinator:
                 forecast_prob if isinstance(forecast_prob, (int, float)) else None
             ),
             dry_zone_types=self._dry_lockout_types(),
-            min_inches=self._rain_floor(),
+            min_inches=floor,
             today_in=today,
+            legacy_hours=legacy_hours,
+            arm_from_table=arm_from_table,
+            allow_forecast_extend=allow_forecast,
         )
         self._rain_lockout = update.state
         self._recompute_lockout_until()

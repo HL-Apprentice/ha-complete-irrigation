@@ -407,6 +407,12 @@ _SET_ZONE_MOISTURE_SCHEMA = vol.Schema(
         vol.Optional("temperature_entities"): vol.All(cv.ensure_list, [cv.entity_id]),
         vol.Optional("humidity_entities"): vol.All(cv.ensure_list, [cv.entity_id]),
         vol.Optional("category"): cv.string,
+        # Optional per-zone rain-lockout type. Omitted (the default) keeps
+        # automatic classification. Empty string clears an override. Stored on
+        # the zone config dict, which v1.62.2 loads as an untyped blob.
+        vol.Optional("lockout_zone_type"): vol.In(
+            ("", "deep_drip", "flowers_garden", "turf", "birdbath", "germination")
+        ),
         # v1.18 — fail-closed: skip a scheduled run when NO moisture
         # reading is available for this zone (all sensors offline /
         # unavailable). Default off = legacy fail-open (water anyway).
@@ -3913,7 +3919,20 @@ async def handle_set_zone_moisture(hass: HomeAssistant, call: ServiceCall) -> No
     if coord is None:
         return
     zone_id = data.pop("zone_entity_id")
-    coord.config.setdefault("zones", {})[zone_id] = {k: v for k, v in data.items() if v is not None}
+    zones = coord.config.setdefault("zones", {})
+    previous = zones.get(zone_id)
+    previous = previous if isinstance(previous, dict) else {}
+    new_cfg = {k: v for k, v in data.items() if v is not None and k != "lockout_zone_type"}
+    # The service replaces the zone dict. Preserve a lockout-type override
+    # the caller did not mention so an older client cannot wipe it, and so
+    # the default (no override, classify as before) stays unchanged.
+    if "lockout_zone_type" in data:
+        chosen = data.get("lockout_zone_type") or ""
+        if chosen:
+            new_cfg["lockout_zone_type"] = chosen
+    elif previous.get("lockout_zone_type"):
+        new_cfg["lockout_zone_type"] = previous["lockout_zone_type"]
+    zones[zone_id] = new_cfg
     await coord.async_save_config()
     _LOGGER.info("Zone moisture config updated for %s: %s", zone_id, data)
 

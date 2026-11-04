@@ -157,7 +157,7 @@ async def test_moisture_releases_a_dry_zone_and_does_not_extend_a_wet_one():
             return None
 
         async def _no_meteo(*_args, **_kwargs):
-            return None
+            return None, "failed"
 
         coord._tempest_history_inches = _no_history
         coord._read_open_meteo_rain = _no_meteo
@@ -193,13 +193,16 @@ async def test_forecast_extension_is_applied_by_the_coordinator_once():
         return None
 
     async def _forecast(_now):
-        return {
-            "past_72h_in": 0.30,
-            "forecast_24h_in": 0.40,
-            "forecast_24h_probability_pct": 70,
-            "forecast_daily_eto_in": 0.12,
-            "current_precip_mm": 0.0,
-        }
+        return (
+            {
+                "past_72h_in": 0.30,
+                "forecast_24h_in": 0.40,
+                "forecast_24h_probability_pct": 70,
+                "forecast_daily_eto_in": 0.12,
+                "current_precip_mm": 0.0,
+            },
+            "fresh",
+        )
 
     coord._tempest_history_inches = _no_history
     coord._read_open_meteo_rain = _forecast
@@ -394,3 +397,236 @@ async def test_setup_and_reload_do_not_rewrite_schedules_or_enabled_flags(monkey
     assert coord.schedule_store.get("live-1").enabled is True
     assert disk[schedules_key]["schedules"] == original
     assert not any("schedules" in key for key in saved)
+
+
+# ── zone type: turf fallback, override, diagnostic ────────────────
+
+
+def test_unclassified_zone_is_turf_until_overridden():
+    coord = _coord()
+    coord._config["zones"] = {"switch.zone_9": {}}
+    assert coord.zone_lockout_type("switch.zone_9") == ZONE_TURF
+    report = coord.zone_lockout_report()["switch.zone_9"]
+    assert report == {"type": ZONE_TURF, "override": None, "source": "classified"}
+    public = coord.lockout_public_state()
+    assert public["zones"]["switch.zone_9"]["type"] == ZONE_TURF
+
+    coord._config["zones"]["switch.zone_9"]["lockout_zone_type"] = "deep_drip"
+    assert coord.zone_lockout_type("switch.zone_9") == ZONE_DEEP_DRIP
+    assert coord.zone_lockout_report()["switch.zone_9"]["source"] == "override"
+
+    # An unknown override is ignored; classification (turf) stands.
+    coord._config["zones"]["switch.zone_9"]["lockout_zone_type"] = "not-a-type"
+    assert coord.zone_lockout_type("switch.zone_9") == ZONE_TURF
+    assert coord.zone_lockout_report()["switch.zone_9"]["source"] == "classified"
+
+
+# ── Open-Meteo: timeout, no per-tick fetch, cache never extends ──
+
+
+def _payload(**overrides):
+    base = {
+        "past_72h_in": 0.30,
+        "forecast_24h_in": 0.80,
+        "forecast_24h_probability_pct": 90,
+        "forecast_daily_eto_in": 0.12,
+        "current_precip_mm": 0.0,
+    }
+    base.update(overrides)
+    return base
+
+
+async def test_open_meteo_request_sets_explicit_timeouts():
+    import aiohttp
+
+    from custom_components.complete_irrigation import coordinator as coord_mod
+
+    coord = _coord()
+    coord._hass.config.latitude = 33.3
+    coord._hass.config.longitude = -111.8
+    coord._hass.config.time_zone = "America/Phoenix"
+    seen: dict = {}
+
+    class _Resp:
+        status = 500
+
+    class _CM:
+        async def __aenter__(self):
+            return _Resp()
+
+        async def __aexit__(self, *_a):
+            return False
+
+    class _Session:
+        def get(self, url, timeout=None, **_k):
+            seen["url"] = url
+            seen["timeout"] = timeout
+            return _CM()
+
+    def _session(_hass):
+        return _Session()
+
+    # The fetch imports the helper inside the function.
+    import homeassistant.helpers.aiohttp_client as aio_mod
+
+    original = aio_mod.async_get_clientsession
+    aio_mod.async_get_clientsession = _session
+    try:
+        result = await coord._fetch_open_meteo_rain(dt_util.now())
+    finally:
+        aio_mod.async_get_clientsession = original
+    assert result is None
+    timeout = seen["timeout"]
+    assert isinstance(timeout, aiohttp.ClientTimeout)
+    assert timeout.total == coord_mod._OM_TIMEOUT_TOTAL_S
+    assert timeout.connect == coord_mod._OM_TIMEOUT_CONNECT_S
+    assert timeout.sock_read == coord_mod._OM_TIMEOUT_SOCK_READ_S
+    assert "past_days=3" in seen["url"]
+
+
+async def test_cached_open_meteo_is_not_fetched_again_and_does_not_extend():
+    coord = _coord()
+    now = dt_util.now()
+    coord._notify_lockout_change = lambda: None
+    coord._read_heat_signal_f = lambda: 70.0
+    coord._hass.states.async_entity_ids.return_value = []
+    start = now + timedelta(hours=6)
+    coord._rain_lockout = StoredRainLockout(
+        until_by_type={ZONE_TURF: start},
+        last_event_rain_in=0.30,
+    )
+    calls = {"n": 0}
+
+    async def _fetch(_now):
+        calls["n"] += 1
+        return _payload()
+
+    async def _history(*_a, **_k):
+        return 0.30
+
+    coord._fetch_open_meteo_rain = _fetch
+    coord._tempest_history_inches = _history
+    await coord._evaluate_lockout(now)
+    assert calls["n"] == 1
+    assert coord._rain_lockout.until_by_type[ZONE_TURF] > start
+    # Room to extend again, and the once-per-episode flag cleared. The cache
+    # must still refuse both a second fetch and another extension.
+    coord._rain_lockout.forecast_extended.clear()
+    coord._rain_lockout.until_by_type[ZONE_TURF] = start
+    await coord._evaluate_lockout(now + timedelta(minutes=1))
+    assert calls["n"] == 1
+    assert coord._rain_lockout.until_by_type[ZONE_TURF] == start
+
+
+async def test_open_meteo_failure_uses_tempest_alone_without_disagree():
+    coord = _coord()
+    now = dt_util.now()
+    coord._notify_lockout_change = lambda: None
+    coord._read_heat_signal_f = lambda: 70.0
+    coord._hass.states.async_entity_ids.return_value = []
+    start = now + timedelta(hours=6)
+    # A stale cached forecast that would extend, and a previous disagree flag.
+    coord._open_meteo_rain = _payload(past_72h_in=3.0)
+    coord._open_meteo_rain_at = now - timedelta(hours=2)
+    coord._rain_lockout = StoredRainLockout(
+        until_by_type={ZONE_TURF: start},
+        last_event_rain_in=0.50,
+        rain_source_disagree=True,
+    )
+
+    async def _fetch(_now):
+        return None
+
+    async def _history(*_a, **_k):
+        return 0.50
+
+    coord._fetch_open_meteo_rain = _fetch
+    coord._tempest_history_inches = _history
+    await coord._evaluate_lockout(now)
+    assert coord._rain_lockout.rain_source_disagree is False
+    assert coord._rain_lockout.until_by_type[ZONE_TURF] == start
+    assert coord._open_meteo_rain is None
+
+
+async def test_both_sources_down_uses_legacy_formula_and_does_not_stick():
+    from custom_components.complete_irrigation.weather_gate import evaluate_rain_lockout
+
+    coord = _coord(rain_sensor="sensor.rain")
+    now = dt_util.now()
+    coord._notify_lockout_change = lambda: None
+    coord._read_heat_signal_f = lambda: 70.0  # 48h ceiling, does not bind 12h
+    coord.eto_status = lambda: {"eto_in_week": 2.1}  # 0.30 in/day
+    states = {"sensor.rain": _state("0.25", unit_of_measurement="in")}
+    coord._hass.states.get.side_effect = lambda eid: states.get(eid)
+    coord._hass.states.async_entity_ids.return_value = []
+
+    async def _fetch(_now):
+        return None
+
+    async def _history(*_a, **_k):
+        return None
+
+    coord._fetch_open_meteo_rain = _fetch
+    coord._tempest_history_inches = _history
+    await coord._evaluate_lockout(now)
+    expected = evaluate_rain_lockout(0.25, 2.1 / 7, max_hours=48)
+    assert expected == 12
+    for zone_type in (ZONE_TURF, ZONE_DEEP_DRIP, "flowers_garden"):
+        until = coord._rain_lockout.until_by_type[zone_type]
+        assert round((until - now).total_seconds() / 3600) == 12
+    # The same cumulative total on the next tick must not push the clock.
+    first = coord._rain_lockout.until_by_type[ZONE_TURF]
+    await coord._evaluate_lockout(now + timedelta(minutes=1))
+    assert coord._rain_lockout.until_by_type[ZONE_TURF] == first
+
+    # No sensor either: an existing clock is left to expire, not extended.
+    quiet = _coord()
+    quiet._notify_lockout_change = lambda: None
+    quiet._read_heat_signal_f = lambda: 70.0
+    quiet._hass.states.async_entity_ids.return_value = []
+    quiet._hass.states.get.return_value = None
+    held = now + timedelta(hours=5)
+    quiet._rain_lockout = StoredRainLockout(until_by_type={ZONE_TURF: held})
+    quiet._fetch_open_meteo_rain = _fetch
+    quiet._tempest_history_inches = _history
+    await quiet._evaluate_lockout(now)
+    assert quiet._rain_lockout.until_by_type[ZONE_TURF] == held
+
+
+async def test_lockout_paths_do_not_save_schedules_or_flip_enabled(monkeypatch):
+    import custom_components.complete_irrigation.coordinator as coord_mod
+
+    saved: list[str] = []
+
+    async def _spy(*_a, **_k):
+        saved.append("schedules")
+
+    monkeypatch.setattr(coord_mod, "_async_save_schedules", _spy)
+    coord = _coord()
+    coord._notify_lockout_change = lambda: None
+    coord.notifier = None
+    held = _daily("hold", "switch.zone_9", hour=6, minute=0, enabled=False)
+    live = _daily("live", "switch.zone_9", hour=7, minute=0, enabled=True)
+    coord.schedule_store.add(held)
+    coord.schedule_store.add(live)
+    coord._rain_lockout = StoredRainLockout(
+        until_by_type={ZONE_TURF: dt_util.now() + timedelta(hours=4)}
+    )
+
+    async def _noop(*_a, **_k):
+        return None
+
+    coord.async_save_config = _noop
+    coord.async_save_rain_lockout = _noop
+    coord.async_save_run_history = _noop
+    coord._hass.async_create_task = lambda coro: coro.close()
+    coord._hass.states.get.return_value = None
+    coord._hass.states.async_entity_ids.return_value = []
+    coord._last_tick = dt_util.now() - timedelta(seconds=30)
+
+    await coord._tick(dt_util.now())
+    await coord.note_zone_run_completed("switch.zone_9")
+    coord.clear_lockout()
+    assert saved == []
+    assert coord.schedule_store.get("hold").enabled is False
+    assert coord.schedule_store.get("live").enabled is True
