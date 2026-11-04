@@ -3,7 +3,7 @@
 Per-entry orchestrator. Each tick:
   1. Compute planned runs (next_runs)
   2. Resolve conflicts (resolve_conflicts, default policy = DEFER_NEW)
-  3. Check rain lockout (skip all if active)
+  3. Check rain lockout (skip a zone type while its lockout is active)
   4. For each due run:
        a. Read per-zone moisture sensors (if configured) → MoistureGate
        b. Read forecast → hot-weather boost multiplier
@@ -72,6 +72,20 @@ from .notifications import (
     _parse_hhmm,
 )
 from .plant import PlantStore
+from .rain_lockout import (
+    HOLDING_ZONE_TYPES,
+    ZONE_FLOWERS_GARDEN,
+    ZONE_GERMINATION,
+    StoredRainLockout,
+    classify_zone,
+    combine_rain_sources,
+    decide_lockouts,
+    detect_active_rain,
+    moisture_releases_early,
+    reference_daily_eto,
+    release_zone_type,
+    zone_is_garden,
+)
 from .run_history import (
     DEFAULT_RETENTION_DAYS,
     RunHistoryStore,
@@ -79,8 +93,8 @@ from .run_history import (
 from .run_planner import due_runs_since, longest_run_span_minutes, next_runs
 from .schedule import ScheduleStore
 from .weather_gate import (
+    RAIN_LOCKOUT_MIN_INCHES,
     evaluate_hot_weather,
-    evaluate_rain_lockout,
     evaluate_wind_defer,
     rain_lockout_max_hours,
     rain_to_inches,
@@ -252,6 +266,24 @@ async def _async_save_plants(hass: HomeAssistant, entry_id: str, store: PlantSto
     await helper.async_save({"plants": store.to_serializable()})
 
 
+async def _async_load_rain_lockout(hass: HomeAssistant, entry_id: str) -> dict[str, Any]:
+    """Load the rain-lockout document. Its own Store key - never the schedules file."""
+    from homeassistant.helpers.storage import Store
+
+    helper = Store(hass, STORAGE_VERSION, _storage_key(entry_id, "rain_lockout"))
+    data = await helper.async_load()
+    return data if isinstance(data, dict) else {}
+
+
+async def _async_save_rain_lockout(
+    hass: HomeAssistant, entry_id: str, payload: dict[str, Any]
+) -> None:
+    from homeassistant.helpers.storage import Store
+
+    helper = Store(hass, STORAGE_VERSION, _storage_key(entry_id, "rain_lockout"))
+    await helper.async_save(payload)
+
+
 class ScheduleCoordinator:
     """Per-entry orchestrator for persisted schedules + per-tick firing."""
 
@@ -265,9 +297,17 @@ class ScheduleCoordinator:
         #   boost_percent, zones: {zone_id: {moisture_entities: [...],
         #                                    combine_mode, min, target, max, category}}}
         self._config: dict[str, Any] = {"zones": {}}
-        # Lockout state
+        # Lockout state. `lockout_until` is the latest active per-type end
+        # (the banner / health feed). The per-type clocks live in
+        # `_rain_lockout` and persist in their own Store key.
         self.lockout_until: datetime | None = None
         self._lockout_listeners: list[Callable[[], None]] = []
+        self._rain_lockout: StoredRainLockout = StoredRainLockout()
+        self._lockout_sensor_on: bool = False
+        self._cancel_lockout_expiry = None
+        self._open_meteo_rain: dict[str, Any] | None = None
+        self._open_meteo_rain_at: datetime | None = None
+        self._rain_issue_applied: bool | None = None
         # Notification dispatcher (initialized in async_setup)
         self.notifier: NotificationDispatcher | None = None
         self._cancel_summary = None
@@ -411,11 +451,41 @@ class ScheduleCoordinator:
                 _LOGGER.exception("Lockout listener errored")
 
     def is_locked_out_now(self) -> bool:
-        if self.lockout_until is None:
-            return False
+        """True when any zone type's lockout is still in the future."""
         from homeassistant.util import dt as dt_util
 
-        return dt_util.now() < self.lockout_until
+        return self._any_lockout_active(dt_util.now())
+
+    def _any_lockout_active(self, now: datetime) -> bool:
+        return any(
+            until is not None and now < until for until in self._rain_lockout.until_by_type.values()
+        )
+
+    def is_zone_locked_out(self, zone_entity_id: str, now: datetime | None = None) -> bool:
+        """True when this zone's type is inside its lockout. Germination never is."""
+        from homeassistant.util import dt as dt_util
+
+        zone_type = self.zone_lockout_type(zone_entity_id)
+        if zone_type == ZONE_GERMINATION:
+            return False
+        moment = now if now is not None else dt_util.now()
+        until = self._rain_lockout.until_by_type.get(zone_type)
+        return until is not None and moment < until
+
+    def lockout_public_state(self) -> dict[str, Any]:
+        """Panel / sensor snapshot. `until` values are ISO strings or None."""
+        return {
+            "by_type": {
+                zone_type: (until.isoformat() if until else None)
+                for zone_type, until in self._rain_lockout.until_by_type.items()
+            },
+            "rain_source_disagree": self._rain_lockout.rain_source_disagree,
+            "rain_source_flag": (
+                "RAIN_SOURCE_DISAGREE" if self._rain_lockout.rain_source_disagree else None
+            ),
+            "event_rain_in": self._rain_lockout.last_event_rain_in,
+            "sources": dict(self._rain_lockout.sources),
+        }
 
     async def async_setup(self) -> None:
         from homeassistant.helpers.event import (
@@ -431,6 +501,7 @@ class ScheduleCoordinator:
         self._plants = await _async_load_plants(self._hass, self._entry_id)
         self._care_tasks = await _async_load_care_tasks(self._hass, self._entry_id)
         self._zone_regions = await _async_load_zone_regions(self._hass, self._entry_id)
+        await self._load_rain_lockout()
         # v1.59 — one-time upgrade: give placements made before v1.59 a durable
         # GROUND anchor, computed against the frame they were placed in. Without
         # it they stay frame-relative, and the next aerial re-fetch at a
@@ -607,6 +678,7 @@ class ScheduleCoordinator:
             "_cancel_post_install",
             "_cancel_eto",
             "_cancel_resume",
+            "_cancel_lockout_expiry",
         ):
             cancel = getattr(self, cancel_attr, None)
             if cancel:
@@ -1094,9 +1166,19 @@ class ScheduleCoordinator:
             await self.async_save_care_tasks()
 
     def clear_lockout(self) -> None:
-        if self.lockout_until is not None:
-            self.lockout_until = None
-            self._notify_lockout_change()
+        """End every zone-type lockout. The 72h rain baseline stays, so the same
+        storm does not immediately re-arm - the next rainfall does."""
+        had = any(until is not None for until in self._rain_lockout.until_by_type.values())
+        if not had and self.lockout_until is None:
+            return
+        self._rain_lockout = StoredRainLockout(
+            last_event_rain_in=self._rain_lockout.last_event_rain_in,
+            rain_source_disagree=self._rain_lockout.rain_source_disagree,
+            sources=dict(self._rain_lockout.sources),
+            previous_today_in=self._rain_lockout.previous_today_in,
+        )
+        self._recompute_lockout_until()
+        self._touch_lockout_listeners()
 
     # ── Tick logic ─────────────────────────────────────────────────
 
@@ -1114,8 +1196,10 @@ class ScheduleCoordinator:
             self._last_tick = now
             return
 
-        # Evaluate rain lockout on every tick.
+        # Evaluate rain lockout on every tick, then flip the binary sensor
+        # if a clock expired between notifications (should_poll is False).
         await self._evaluate_lockout(now)
+        self._sync_lockout_sensor()
 
         # PRD #57: per-tick sensor-offline detection. Pushes one
         # notification per crossing; clears when sensor recovers.
@@ -1144,23 +1228,24 @@ class ScheduleCoordinator:
         except Exception:
             _LOGGER.exception("Care/light tick failed (advisory features; watering unaffected)")
 
-        # v1.17.3 — if locked out, only schedules with
-        # ignore_rain_lockout=True still fire. Others wait for the
-        # lockout to expire. last_tick still advances either way so
-        # we don't backfire a flood when lockout clears.
-        locked_out = self.is_locked_out_now()
-
-        # PRD #38 — honor a user-configured inter-zone valve buffer.
+        # v1.64 - lockout is per zone type. A schedule fires unless every
+        # zone it waters is locked. ignore_rain_lockout still opts a schedule
+        # out entirely. Locked occurrences are recorded as skips here and kept
+        # OUT of the resolver so they are not backfired when the lockout ends.
+        # last_tick still advances either way.
         zone_buffer = self._config.get("zone_buffer_seconds")
         enabled_scheds = self._store.enabled_schedules()
-        if locked_out:
-            enabled_scheds = [s for s in enabled_scheds if s.ignore_rain_lockout]
-            if not enabled_scheds:
-                return
+        if enabled_scheds:
+            await self._record_lockout_skips(enabled_scheds, last, now, zone_buffer)
+        firing = [s for s in enabled_scheds if self._schedule_can_fire(s, now)]
+        if not firing:
+            return
+        if len(firing) < len(enabled_scheds):
             _LOGGER.info(
-                "Rain lockout active; %d schedule(s) with ignore_rain_lockout=True still firing",
-                len(enabled_scheds),
+                "Rain lockout active for some zone types; %d schedule(s) still firing",
+                len(firing),
             )
+        enabled_scheds = firing
         # v1.20 — size the window to the longest run so the resolver can see
         # a multi-hour run that started before the window and is still going
         # (the old fixed 2h blinded it to 4-5h Trees/Citrus cycles). Floor at
@@ -1178,6 +1263,9 @@ class ScheduleCoordinator:
             zone_buffer_seconds=int(zone_buffer) if zone_buffer is not None else None,
             sun_times=self.sun_times,
         )
+        # A multi-zone schedule can mix a locked type with an unlocked one.
+        # Drop only the locked steps so they neither fire nor block the resolver.
+        upcoming = [run for run in upcoming if not self._run_blocked_by_lockout(run, now)]
         # Honor a user-selected global conflict policy (Settings tab).
         # Unknown / missing → keep safe default of POLICY_DEFER_NEW.
         configured = self._config.get("conflict_policy", POLICY_DEFER_NEW)
@@ -1717,18 +1805,16 @@ class ScheduleCoordinator:
         to absorb, re-read, and repeat — until moisture >= min_pct or
         soak_max_cycles is exhausted (then notify + cooldown).
         """
-        if self.is_locked_out_now():
-            # Rain lockout: abandon any in-flight sequences — rain is
-            # doing the job — and don't start new ones.
-            if self._soak_state:
-                _LOGGER.info(
-                    "Auto-soak: rain lockout active, abandoning %d sequence(s)",
-                    len(self._soak_state),
-                )
-                self._soak_state.clear()
-            return
-
         for zone_id, zone_cfg in (self._config.get("zones") or {}).items():
+            if self.is_zone_locked_out(zone_id, now):
+                # This zone's type is locked. Other types keep soaking.
+                if zone_id in self._soak_state:
+                    _LOGGER.info(
+                        "Auto-soak %s: rain lockout active for its zone type, abandoning",
+                        zone_id,
+                    )
+                    self._soak_state.pop(zone_id, None)
+                continue
             if not zone_cfg.get("auto_soak_enabled"):
                 self._soak_state.pop(zone_id, None)
                 continue
@@ -2000,81 +2086,611 @@ class ScheduleCoordinator:
 
     # ── Rain lockout ──────────────────────────────────────────────
 
-    async def _evaluate_lockout(self, now: datetime) -> None:
-        """Read rain sensor; activate / extend lockout if rain seen."""
-        rain_entity = self._config.get("rain_sensor")
-        if not rain_entity:
-            return
-
-        state = self._hass.states.get(rain_entity)
-        if state is None:
-            return
-        # Unit-aware: convert the sensor's native unit (Tempest often reports mm)
-        # to INCHES before the tiers/floor apply. Reading mm as inches is the bug
-        # that turns a 0.25mm (0.01") trace into a "0.25 inch" lockout.
-        rainfall_in = rain_to_inches(state.state, state.attributes.get("unit_of_measurement"))
-        if rainfall_in is None:
-            return  # non-numeric or a glitching "nan"/"inf" sensor must not drive lockout
-
-        # Only (re)arm on a RISING edge — new rainfall since the last reading. A
-        # cumulative "daily total" accumulator (a common HA rain sensor that only
-        # resets at midnight) otherwise stays elevated and re-pushes the lockout
-        # forward on every 60s tick, pinning it on for a full extra day of dry
-        # weather. A drop (window emptied / midnight reset) re-baselines so the
-        # next real rain can arm again.
-        last_reading = getattr(self, "_last_rainfall_reading", None)
-        self._last_rainfall_reading = rainfall_in
-        if last_reading is not None and rainfall_in <= last_reading:
-            return
-
-        # ET-scaled lockout (4-model consensus): duration = how many days of live
-        # evaporative demand the effective rainfall replaces. Floor is the user's
-        # monsoon knob (rain below it never locks out); default 0.10 in.
-        from .weather_gate import RAIN_LOCKOUT_MIN_INCHES
-
+    def _recompute_lockout_until(self) -> None:
+        """Banner clock = the latest still-active per-type end, or None."""
         try:
-            floor = float(self._config.get("rain_lockout_min_inches", RAIN_LOCKOUT_MIN_INCHES))
-        except (TypeError, ValueError):
-            floor = RAIN_LOCKOUT_MIN_INCHES
-        # Live daily ETo = effective weekly ETo / 7 (auto FAO-56 when enabled,
-        # else the manual figure); None lets the formula use its short fallback.
-        daily_eto = None
-        try:
-            wk = float(self.eto_status().get("eto_in_week"))
-            if math.isfinite(wk) and wk > 0:
-                daily_eto = wk / 7.0
-        except (TypeError, ValueError, AttributeError):
-            daily_eto = None
-        # Heat-aware ceiling: the lockout MAX shrinks with the day's heat, so a big
-        # rain never strands the yard — at 110F+ plants transpire hard and baked/
-        # hydrophobic desert soil sheds much of the rain. rain_lockout_max_hours maps
-        # the hottest relevant temperature (current temp OR forecast high, whichever
-        # is hotter) to the ceiling: ~48h mild, 24h at 105F, 18h in extreme heat.
-        max_h = rain_lockout_max_hours(self._read_heat_signal_f())
-        hours = evaluate_rain_lockout(rainfall_in, daily_eto, min_inches=floor, max_hours=max_h)
-        if hours is None:
-            return
+            from homeassistant.util import dt as dt_util
 
-        new_until = now + timedelta(hours=hours)
-        # Only extend lockout, never shorten it within the same rain event.
-        if self.lockout_until is None or new_until > self.lockout_until:
-            became_active = self.lockout_until is None
-            self.lockout_until = new_until
-            _LOGGER.info(
-                "Rain lockout active — %sin rain triggered %dh lockout (until %s)",
-                rainfall_in,
-                hours,
-                new_until.isoformat(),
+            now = dt_util.now()
+        except Exception:
+            now = None
+        active = [
+            until
+            for until in self._rain_lockout.until_by_type.values()
+            if until is not None and (now is None or until > now)
+        ]
+        self.lockout_until = max(active) if active else None
+
+    def _touch_lockout_listeners(self) -> None:
+        try:
+            from homeassistant.util import dt as dt_util
+
+            self._lockout_sensor_on = self._any_lockout_active(dt_util.now())
+        except Exception:
+            self._lockout_sensor_on = self.lockout_until is not None
+        self._notify_lockout_change()
+        self._schedule_lockout_expiry()
+
+    def _sync_lockout_sensor(self) -> None:
+        """Write the binary sensor when a lockout expires without an extend/clear.
+
+        The entity uses ``should_poll = False`` and only publishes on the
+        listener, so a clock that simply runs out used to leave it stuck ON.
+        """
+        try:
+            from homeassistant.util import dt as dt_util
+
+            now = dt_util.now()
+        except Exception:
+            return
+        active = self._any_lockout_active(now)
+        if active == self._lockout_sensor_on:
+            return
+        self._lockout_sensor_on = active
+        self._notify_lockout_change()
+        self._schedule_lockout_expiry()
+
+    def _on_lockout_expiry(self, _now: datetime | None = None) -> None:
+        """async_track_point_in_time callback - sensor OFF at lockout_until."""
+        self._cancel_lockout_expiry = None
+        self._sync_lockout_sensor()
+        self._schedule_lockout_expiry()
+
+    def _schedule_lockout_expiry(self) -> None:
+        cancel = self._cancel_lockout_expiry
+        self._cancel_lockout_expiry = None
+        if cancel is not None:
+            try:
+                cancel()
+            except Exception:
+                _LOGGER.debug("rain lockout expiry unschedule failed", exc_info=True)
+        try:
+            from homeassistant.util import dt as dt_util
+
+            now = dt_util.now()
+            upcoming = [
+                until
+                for until in self._rain_lockout.until_by_type.values()
+                if until is not None and until > now
+            ]
+            if not upcoming:
+                return
+            from homeassistant.helpers.event import async_track_point_in_time
+
+            self._cancel_lockout_expiry = async_track_point_in_time(
+                self._hass, self._on_lockout_expiry, min(upcoming)
             )
-            self._notify_lockout_change()
-            if became_active and self.notifier:
+        except Exception:
+            _LOGGER.debug("rain lockout expiry timer not armed", exc_info=True)
+
+    async def _load_rain_lockout(self) -> None:
+        """Read the lockout document. Does not write any store, including schedules."""
+        try:
+            data = await _async_load_rain_lockout(self._hass, self._entry_id)
+            self._rain_lockout = StoredRainLockout.from_dict(data)
+        except Exception:
+            _LOGGER.exception("rain lockout load failed; starting unlocked")
+            self._rain_lockout = StoredRainLockout()
+        self._recompute_lockout_until()
+        try:
+            from homeassistant.util import dt as dt_util
+
+            self._lockout_sensor_on = self._any_lockout_active(dt_util.now())
+        except Exception:
+            self._lockout_sensor_on = False
+        self._schedule_lockout_expiry()
+
+    async def async_save_rain_lockout(self) -> None:
+        try:
+            await _async_save_rain_lockout(self._hass, self._entry_id, self._rain_lockout.to_dict())
+        except Exception:
+            _LOGGER.debug("rain lockout persist skipped", exc_info=True)
+
+    def _rain_floor(self) -> float:
+        try:
+            return float(self._config.get("rain_lockout_min_inches", RAIN_LOCKOUT_MIN_INCHES))
+        except (TypeError, ValueError):
+            return RAIN_LOCKOUT_MIN_INCHES
+
+    def _lockout_daily_eto(self, forecast_daily: Any) -> float | None:
+        """Max of the live weekly ETo / 7 and the forecast daily ETo."""
+        current = None
+        try:
+            week = float(self.eto_status().get("eto_in_week"))
+            if math.isfinite(week) and week > 0:
+                current = week / 7.0
+        except (TypeError, ValueError, AttributeError):
+            current = None
+        return reference_daily_eto(current, forecast_daily)
+
+    def _zone_friendly(self, zone_id: str) -> str:
+        try:
+            state = self._hass.states.get(zone_id)
+        except Exception:
+            return ""
+        if state is None:
+            return ""
+        attrs = getattr(state, "attributes", None)
+        if not isinstance(attrs, dict):
+            return ""
+        name = attrs.get("friendly_name")
+        return name if isinstance(name, str) else ""
+
+    def _establishment_window(self, sched, today) -> bool:
+        if getattr(sched, "created_via", "") != "establishment":
+            return False
+        start = getattr(sched, "start_date", None)
+        end = getattr(sched, "end_date", None)
+        if start is not None and today < start:
+            return False
+        return not (end is not None and today > end)
+
+    def zone_lockout_type(self, zone_entity_id: str) -> str:
+        """Classify a zone from category, plants, schedules, and its name.
+
+        Read-only. Does not change zone config, schedule settings, or enabled flags.
+        """
+        zones = self._config.get("zones") if isinstance(self._config.get("zones"), dict) else {}
+        cfg = zones.get(zone_entity_id)
+        cfg = cfg if isinstance(cfg, dict) else {}
+        category = cfg.get("category") if isinstance(cfg.get("category"), str) else None
+        schedules = []
+        try:
+            schedules = [
+                sched
+                for sched in self._store.all()
+                if any(step.zone_entity_id == zone_entity_id for step in sched.all_steps())
+            ]
+        except Exception:
+            schedules = []
+        establishment = False
+        if any(getattr(sched, "created_via", "") == "establishment" for sched in schedules):
+            try:
+                from homeassistant.util import dt as dt_util
+
+                today = dt_util.now().date()
+            except Exception:
+                today = None
+            if today is not None:
+                establishment = any(self._establishment_window(sched, today) for sched in schedules)
+        presets: list[str] = []
+        try:
+            presets = [
+                preset
+                for plant in self._plants.by_zone(zone_entity_id)
+                if (preset := getattr(plant, "care_plan_preset", None))
+            ]
+        except Exception:
+            presets = []
+        profiles = [getattr(sched, "split_profile", "") or "" for sched in schedules]
+        return classify_zone(
+            entity_id=zone_entity_id,
+            friendly_name=self._zone_friendly(zone_entity_id),
+            category=category,
+            independent=zone_entity_id in self.independent_zones,
+            schedule_profiles=tuple(profiles),
+            plant_presets=tuple(presets),
+            establishment_active=establishment,
+        )
+
+    def _garden_present(self) -> bool:
+        """True when a flowers+garden zone is specifically a vegetable garden.
+
+        That caps the shared flowers+garden clock at 2 days after more than 2 in.
+        """
+        zones = self._config.get("zones") if isinstance(self._config.get("zones"), dict) else {}
+        ids = set(zones)
+        try:
+            for sched in self._store.all():
+                for step in sched.all_steps():
+                    ids.add(step.zone_entity_id)
+        except Exception:
+            pass
+        try:
+            for plant in self._plants.all():
+                ids.add(plant.zone_entity_id)
+        except Exception:
+            pass
+        for zone_id in ids:
+            cfg = zones.get(zone_id)
+            cfg = cfg if isinstance(cfg, dict) else {}
+            category = cfg.get("category") if isinstance(cfg.get("category"), str) else None
+            if self.zone_lockout_type(zone_id) != ZONE_FLOWERS_GARDEN:
+                continue
+            if zone_is_garden(
+                category=category,
+                entity_id=zone_id,
+                friendly_name=self._zone_friendly(zone_id),
+            ):
+                return True
+        return False
+
+    def _dry_lockout_types(self) -> set[str]:
+        """Holding types whose soil is below minimum. High readings are ignored."""
+        dry: set[str] = set()
+        zones = self._config.get("zones") if isinstance(self._config.get("zones"), dict) else {}
+        for zone_id, cfg in zones.items():
+            if not isinstance(cfg, dict) or cfg.get("moisture_disabled"):
+                continue
+            if not cfg.get("moisture_entities"):
+                continue
+            try:
+                current, analysis_ids, _readings, _excluded = self._zone_moisture_reading(cfg)
+            except Exception:
+                continue
+            if not analysis_ids or current is None:
+                continue
+            try:
+                minimum = float(cfg.get("min_pct", DEFAULT_ZONE_MIN_PCT))
+            except (TypeError, ValueError):
+                minimum = float(DEFAULT_ZONE_MIN_PCT)
+            if not moisture_releases_early(current, minimum):
+                continue
+            zone_type = self.zone_lockout_type(zone_id)
+            if zone_type in HOLDING_ZONE_TYPES:
+                dry.add(zone_type)
+        return dry
+
+    def _read_today_rain_inches(self) -> float | None:
+        entity = self._config.get("rain_sensor")
+        if not isinstance(entity, str) or not entity:
+            return None
+        try:
+            state = self._hass.states.get(entity)
+        except Exception:
+            return None
+        if state is None:
+            return None
+        attrs = getattr(state, "attributes", None)
+        unit = attrs.get("unit_of_measurement") if isinstance(attrs, dict) else None
+        return rain_to_inches(
+            getattr(state, "state", None), unit if isinstance(unit, str) else None
+        )
+
+    def _weather_states(self) -> list[str]:
+        try:
+            ids = self._hass.states.async_entity_ids("weather")
+        except Exception:
+            return []
+        if not isinstance(ids, (list, tuple)):
+            return []
+        states: list[str] = []
+        for entity_id in ids:
+            try:
+                state = self._hass.states.get(entity_id)
+            except Exception:
+                continue
+            if state is not None and isinstance(state.state, str):
+                states.append(state.state)
+        return states
+
+    async def _tempest_history_inches(self, entity: str, now: datetime) -> float | None:
+        """Sum of daily peaks over the trailing 72h, in inches.
+
+        ``rain_accumulation_today`` resets each midnight, so a day's statistic
+        max is that day's total. Summing those peaks is the Tempest 72h history.
+        Any recorder miss returns None and the caller falls back.
+        """
+        try:
+            from homeassistant.components.recorder.statistics import statistics_during_period
+        except Exception:
+            return None
+        try:
+            stats = await self._hass.async_add_executor_job(
+                statistics_during_period,
+                self._hass,
+                now - timedelta(hours=72),
+                now,
+                {entity},
+                "day",
+                None,
+                {"max"},
+            )
+        except Exception:
+            return None
+        if not isinstance(stats, dict) or not stats:
+            return None
+        unit_state = None
+        try:
+            unit_state = self._hass.states.get(entity)
+        except Exception:
+            unit_state = None
+        attrs = getattr(unit_state, "attributes", None) if unit_state is not None else None
+        unit = attrs.get("unit_of_measurement") if isinstance(attrs, dict) else None
+        unit = unit if isinstance(unit, str) else None
+        total = 0.0
+        count = 0
+        for rows in stats.values():
+            if not isinstance(rows, (list, tuple)):
+                continue
+            for row in rows:
+                raw = row.get("max") if isinstance(row, dict) else getattr(row, "max", None)
+                inches = rain_to_inches(raw, unit)
+                if inches is None:
+                    continue
+                total += inches
+                count += 1
+        return total if count else None
+
+    async def _fetch_open_meteo_rain(self, now: datetime) -> dict[str, Any] | None:
+        lat_raw = getattr(getattr(self._hass, "config", None), "latitude", None)
+        lon_raw = getattr(getattr(self._hass, "config", None), "longitude", None)
+        # Reject mocks and missing config before opening an HTTP session.
+        if isinstance(lat_raw, bool) or not isinstance(lat_raw, (int, float)):
+            return None
+        if isinstance(lon_raw, bool) or not isinstance(lon_raw, (int, float)):
+            return None
+        lat = float(lat_raw)
+        lon = float(lon_raw)
+        tz = getattr(self._hass.config, "time_zone", None)
+        tz = tz if isinstance(tz, str) and tz else None
+        try:
+            import json as _json
+
+            import aiohttp
+            from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
+            from .open_meteo import open_meteo_rain_url, parse_open_meteo_rain
+
+            session = async_get_clientsession(self._hass)
+            async with session.get(
+                open_meteo_rain_url(lat, lon, tz),
+                timeout=aiohttp.ClientTimeout(total=20),
+            ) as resp:
+                if resp.status != 200:
+                    _LOGGER.debug("Open-Meteo rain HTTP %s", resp.status)
+                    return None
+                raw = await resp.content.read(200_000)
+            return parse_open_meteo_rain(_json.loads(raw), now=now)
+        except Exception as err:
+            _LOGGER.debug("Open-Meteo rain fetch failed: %s", err)
+            return None
+
+    async def _read_open_meteo_rain(self, now: datetime) -> dict[str, Any] | None:
+        cached_at = self._open_meteo_rain_at
+        if cached_at is not None:
+            age = now - cached_at
+            limit = timedelta(minutes=30 if self._open_meteo_rain else 5)
+            try:
+                if age < limit:
+                    return self._open_meteo_rain
+            except TypeError:
+                pass
+        parsed = await self._fetch_open_meteo_rain(now)
+        self._open_meteo_rain = parsed
+        self._open_meteo_rain_at = now
+        return parsed
+
+    def _holding_active(self, now: datetime) -> bool:
+        return any(
+            (until := self._rain_lockout.until_by_type.get(zone_type)) is not None and now < until
+            for zone_type in HOLDING_ZONE_TYPES
+        )
+
+    async def _evaluate_lockout(self, now: datetime) -> None:
+        """72h rainfall + temperature/ETo -> per-zone-type lockout clocks."""
+        today = self._read_today_rain_inches()
+        history = None
+        entity = self._config.get("rain_sensor")
+        if isinstance(entity, str) and entity:
+            history = await self._tempest_history_inches(entity, now)
+        om = await self._read_open_meteo_rain(now)
+        om = om if isinstance(om, dict) else None
+        om_past = om.get("past_72h_in") if om else None
+        # Today's total is not a 72h sum. Use it only when Open-Meteo is down
+        # too, and say so. When Open-Meteo answered, it is the 72h source.
+        if history is not None:
+            tempest = history
+            mode = "tempest+open_meteo" if om_past is not None else "tempest_only"
+        elif om_past is not None:
+            tempest = None
+            mode = "open_meteo_only"
+        elif today is not None:
+            tempest = today
+            mode = "tempest_today_only"
+        else:
+            tempest = None
+            mode = "none"
+        if mode != getattr(self, "_rain_input_mode", None):
+            self._rain_input_mode = mode
+            _LOGGER.info("Rain lockout rainfall source: %s", mode)
+        blend = combine_rain_sources(tempest, om_past)
+        forecast_in = om.get("forecast_24h_in") if om else None
+        forecast_prob = om.get("forecast_24h_probability_pct") if om else None
+        forecast_eto = om.get("forecast_daily_eto_in") if om else None
+        current_mm = om.get("current_precip_mm") if om else None
+        was_holding = self._holding_active(now)
+        update = decide_lockouts(
+            self._rain_lockout,
+            now=now,
+            rainfall_in=blend.inches,
+            blend=blend,
+            daily_eto_in=self._lockout_daily_eto(forecast_eto),
+            max_hours=rain_lockout_max_hours(self._read_heat_signal_f()),
+            garden_present=self._garden_present(),
+            active_rain=detect_active_rain(
+                weather_states=self._weather_states(),
+                today_in=today,
+                previous_today_in=self._rain_lockout.previous_today_in,
+                current_precip_mm=current_mm if isinstance(current_mm, (int, float)) else None,
+            ),
+            forecast_in=forecast_in if isinstance(forecast_in, (int, float)) else None,
+            forecast_probability_pct=(
+                forecast_prob if isinstance(forecast_prob, (int, float)) else None
+            ),
+            dry_zone_types=self._dry_lockout_types(),
+            min_inches=self._rain_floor(),
+            today_in=today,
+        )
+        self._rain_lockout = update.state
+        self._recompute_lockout_until()
+        for line in update.logs:
+            _LOGGER.info("Rain lockout: %s", line)
+        if update.changed:
+            self._touch_lockout_listeners()
+            await self.async_save_rain_lockout()
+            if (
+                not was_holding
+                and self._holding_active(now)
+                and self.notifier is not None
+                and blend.inches is not None
+            ):
                 await self.notifier.notify(
-                    f"Rain detected ({rainfall_in:.2f} in) — all watering paused for {hours}h",
+                    f"Rain over the last 72h ({blend.inches:.2f} in) paused watering. "
+                    "Deep drip, flowers/garden, and turf each hold for their own window.",
                     title="Rain lockout active",
                     category=CATEGORY_IMPORTANT,
                     event_type="rain_lockout_started",
-                    extra={"until": new_until.isoformat(), "hours": hours},
+                    extra={"until": self.lockout_until.isoformat() if self.lockout_until else None},
                 )
+        self._sync_rain_issue()
+
+    def _sync_rain_issue(self) -> None:
+        disagree = bool(self._rain_lockout.rain_source_disagree)
+        if disagree == self._rain_issue_applied:
+            return
+        try:
+            from homeassistant.helpers import issue_registry as ir
+
+            if disagree:
+                sources = self._rain_lockout.sources
+
+                def _fmt(value: Any) -> str:
+                    return f"{float(value):.2f}" if isinstance(value, (int, float)) else "n/a"
+
+                ir.async_create_issue(
+                    self._hass,
+                    DOMAIN,
+                    "rain_source_disagree",
+                    is_fixable=False,
+                    severity=ir.IssueSeverity.WARNING,
+                    translation_key="rain_source_disagree",
+                    translation_placeholders={
+                        "tempest": _fmt(sources.get("tempest_in")),
+                        "open_meteo": _fmt(sources.get("open_meteo_in")),
+                        "combined": _fmt(sources.get("combined_in")),
+                    },
+                )
+            else:
+                ir.async_delete_issue(self._hass, DOMAIN, "rain_source_disagree")
+            self._rain_issue_applied = disagree
+        except Exception:
+            _LOGGER.debug("rain source repair issue not updated", exc_info=True)
+
+    async def extend_lockout(self, zone_type: str = "all", days: float = 1) -> None:
+        """Add ``days`` to one holding type, or to all three. Starts from now if idle.
+
+        A manual extend is not clamped by the heat ceiling - the caller asked
+        for it. Forecast-driven extension still is.
+        """
+        from homeassistant.util import dt as dt_util
+
+        now = dt_util.now()
+        chosen = HOLDING_ZONE_TYPES if zone_type in ("all", "", None) else (zone_type,)
+        until = dict(self._rain_lockout.until_by_type)
+        delta = timedelta(days=float(days))
+        for zone in chosen:
+            if zone not in HOLDING_ZONE_TYPES:
+                continue
+            current = until.get(zone)
+            base = current if current is not None and current > now else now
+            until[zone] = base + delta
+        self._rain_lockout = StoredRainLockout(
+            until_by_type=until,
+            last_event_rain_in=self._rain_lockout.last_event_rain_in,
+            rain_source_disagree=self._rain_lockout.rain_source_disagree,
+            forecast_extended=set(self._rain_lockout.forecast_extended),
+            sources=dict(self._rain_lockout.sources),
+            previous_today_in=self._rain_lockout.previous_today_in,
+        )
+        self._recompute_lockout_until()
+        self._touch_lockout_listeners()
+        _LOGGER.info("Rain lockout extended (%s, %.2f day(s))", zone_type, days)
+        await self.async_save_rain_lockout()
+
+    async def note_zone_run_completed(self, zone_entity_id: str) -> None:
+        """A finished watering ends that zone type's lockout."""
+        updated = release_zone_type(self._rain_lockout, self.zone_lockout_type(zone_entity_id))
+        if updated is self._rain_lockout:
+            return
+        zone_type = self.zone_lockout_type(zone_entity_id)
+        self._rain_lockout = updated
+        self._recompute_lockout_until()
+        self._touch_lockout_listeners()
+        _LOGGER.info("Rain lockout for %s ended - %s finished a run", zone_type, zone_entity_id)
+        await self.async_save_rain_lockout()
+
+    def _schedule_can_fire(self, sched, now: datetime) -> bool:
+        if sched.ignore_rain_lockout:
+            return True
+        return any(
+            not self.is_zone_locked_out(step.zone_entity_id, now) for step in sched.all_steps()
+        )
+
+    def _run_blocked_by_lockout(self, run, now: datetime) -> bool:
+        sched = self._store.get(run.schedule_id)
+        if sched is not None and sched.ignore_rain_lockout:
+            return False
+        return self.is_zone_locked_out(run.zone_entity_id, now)
+
+    async def _record_lockout_skips(
+        self, schedules, last: datetime, now: datetime, zone_buffer
+    ) -> None:
+        """History row for each run the lockout gate skipped this tick."""
+        candidates = [sched for sched in schedules if not sched.ignore_rain_lockout]
+        if not candidates or last is None:
+            return
+        try:
+            runs = next_runs(
+                candidates,
+                from_dt=last,
+                until_dt=now + timedelta(seconds=1),
+                zone_buffer_seconds=int(zone_buffer) if zone_buffer is not None else None,
+                sun_times=self.sun_times,
+            )
+            due = due_runs_since(runs, last, now)
+        except Exception:
+            _LOGGER.exception("rain lockout skip scan failed")
+            return
+        wrote = False
+        for run in due:
+            if not self.is_zone_locked_out(run.zone_entity_id, now):
+                continue
+            zone_type = self.zone_lockout_type(run.zone_entity_id)
+            until = self._rain_lockout.until_by_type.get(zone_type)
+            friendly = self._zone_friendly(run.zone_entity_id) or run.zone_entity_id
+            try:
+                self._run_history.record_skipped(
+                    zone_entity_id=run.zone_entity_id,
+                    zone_name=friendly,
+                    requested_minutes=run.duration_minutes,
+                    schedule_id=run.schedule_id,
+                    schedule_name=run.schedule_name,
+                    fired_at=now,
+                    reason="rain lockout",
+                    triggers={
+                        "rain_lockout": {
+                            "zone_type": zone_type,
+                            "until": until.isoformat() if until else None,
+                            "event_rain_in": self._rain_lockout.last_event_rain_in,
+                        }
+                    },
+                )
+            except Exception:
+                _LOGGER.exception("rain lockout skip record failed for %s", run.zone_entity_id)
+                continue
+            wrote = True
+            _LOGGER.info(
+                "Skipped %s (%s) - rain lockout (%s)",
+                run.zone_entity_id,
+                run.schedule_name,
+                zone_type,
+            )
+        if wrote:
+            try:
+                await self.async_save_run_history()
+            except Exception:
+                _LOGGER.debug("rain lockout skip history not persisted", exc_info=True)
 
     # ── Weather helpers ───────────────────────────────────────────
 
@@ -2590,6 +3206,7 @@ class ScheduleCoordinator:
                     "switch", "turn_off", {"entity_id": zone}, blocking=False
                 )
                 self._run_history.complete_run(zone, ended_at=dt_util.now())
+                await self.note_zone_run_completed(zone)
                 _LOGGER.info(
                     "Restart fail-over: %s was already past its planned end — "
                     "closed out + valve off",

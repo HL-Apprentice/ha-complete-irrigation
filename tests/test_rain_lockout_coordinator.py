@@ -104,12 +104,14 @@ def _lockout_coord(rain_value, unit, *, floor=None, eto_week=2.1, heat_f=105.0):
 
 
 async def test_lockout_reads_mm_not_as_inches():
-    # 6.35mm = 0.25in. Summer daily ETo 0.30, effective 0.15 -> 12h (NOT an over-read).
+    # 6.35mm = 0.25in, not 6.35in. v1.64 day table at 0.25in is 2/1/2 days
+    # (deep/flowers/turf). Daily ETo 2.1/7 = 0.30 -> scale clamp 0.5x, and the
+    # 105F ceiling is 24h, so the longest clock (the banner) is 24h.
     coord = _lockout_coord("6.35", "mm")
     now = dt_util.now()
     await coord._evaluate_lockout(now)
     assert coord.lockout_until is not None
-    assert round((coord.lockout_until - now).total_seconds() / 3600) == 12
+    assert round((coord.lockout_until - now).total_seconds() / 3600) == 24
 
 
 async def test_lockout_trace_mm_does_not_lock():

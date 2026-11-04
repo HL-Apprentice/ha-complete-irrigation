@@ -803,6 +803,40 @@ clear_rain_lockout:
   name: Clear rain lockout
   description: Manually end the current rain lockout (schedules resume immediately).
 
+extend_rain_lockout:
+  name: Extend rain lockout
+  description: >
+    Add days to a rain lockout. Applies to one zone type or to all three
+    holding types (deep drip, flowers and garden, turf). Birdbath and
+    germination zones are not extended. If that type is not currently locked,
+    the extension starts from now.
+  fields:
+    zone_type:
+      name: Zone type
+      description: >
+        Which lockout to extend. "all" extends deep drip, flowers and garden,
+        and turf.
+      required: false
+      default: all
+      selector:
+        select:
+          options:
+            - all
+            - deep_drip
+            - flowers_garden
+            - turf
+    days:
+      name: Days
+      description: How many days to add. Default 1.
+      required: false
+      default: 1
+      selector:
+        number:
+          min: 0.25
+          max: 14
+          step: 0.25
+          mode: box
+
 set_general_config:
   name: Set general integration config
   description: >

@@ -4,6 +4,22 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.64.0 — 2026-11-04 — minor
+
+**Rain lockout follows the storm and the heat, per zone type.**
+
+The lockout is no longer one fixed timer driven by today's rain total. It uses
+the last 72 hours of rain (Tempest history blended with Open-Meteo
+`past_days=3`) and the current plus forecast ETo, with the existing heat
+ceiling still capping how long watering stays paused. Deep drip, flowers and
+garden, and turf each keep their own end time. Birdbath zones pause only while
+rain is falling. Germination zones are never locked out. A finished run, or
+soil moisture below a zone's minimum, can end a lockout early; moisture never
+lengthens one. A wet forecast (≥0.25 in at ≥60% within 24h) can add one day to
+a lockout that is already active. The clocks persist in their own storage file
+across restarts. `extend_rain_lockout` adds time on request, skipped runs show
+up in history, and the rain-lockout sensor turns off when the clock expires.
+
 ## v1.62.2 — 2026-07-28 — patch
 
 **Three data-loss bugs found by red-teaming, all introduced by recent work.**

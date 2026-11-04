@@ -87,6 +87,9 @@ async def get_config(hass, connection, msg):
     payload = redact_config(coord.config)
     # Also include current lockout state for the panel banner
     payload["lockout_until"] = coord.lockout_until.isoformat() if coord.lockout_until else None
+    public = getattr(coord, "lockout_public_state", None)
+    if callable(public):
+        payload["rain_lockout"] = public()
     connection.send_result(msg["id"], payload)
 
 

@@ -24,5 +24,27 @@
       "already_configured": "Complete Irrigation is already configured.",
       "no_zones_found": "No irrigation zones were found. If you're using a custom controller, make sure its switches are exposed in Home Assistant first."
     }
+  },
+  "issues": {
+    "rain_source_disagree": {
+      "title": "Rain totals disagree",
+      "description": "Tempest history ({tempest} in) and Open-Meteo ({open_meteo} in) differ by more than the agreement band over the last 72 hours. The rain lockout is using a conservative blend of {combined} in."
+    }
+  },
+  "services": {
+    "extend_rain_lockout": {
+      "name": "Extend rain lockout",
+      "description": "Add days to a rain lockout for deep drip, flowers and garden, and/or turf. Birdbath and germination zones are not extended.",
+      "fields": {
+        "zone_type": {
+          "name": "Zone type",
+          "description": "Which lockout to extend. \"all\" extends deep drip, flowers and garden, and turf."
+        },
+        "days": {
+          "name": "Days",
+          "description": "How many days to add. Default 1."
+        }
+      }
+    }
   }
 }

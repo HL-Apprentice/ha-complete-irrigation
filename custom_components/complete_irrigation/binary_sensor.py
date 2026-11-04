@@ -61,7 +61,22 @@ class RainLockoutBinarySensor(BinarySensorEntity):
     @property
     def extra_state_attributes(self) -> dict:
         until: datetime | None = self._coordinator.lockout_until
-        return {"until": until.isoformat() if until else None}
+        snapshot = {}
+        public = getattr(self._coordinator, "lockout_public_state", None)
+        if callable(public):
+            snapshot = public()
+        return {
+            "until": until.isoformat() if until else None,
+            "lockout_by_type": snapshot.get("by_type") if isinstance(snapshot, dict) else None,
+            "rain_source_disagree": bool(snapshot.get("rain_source_disagree"))
+            if isinstance(snapshot, dict)
+            else False,
+            "rain_source_flag": snapshot.get("rain_source_flag")
+            if isinstance(snapshot, dict)
+            else None,
+            "event_rain_in": snapshot.get("event_rain_in") if isinstance(snapshot, dict) else None,
+            "rain_sources": snapshot.get("sources") if isinstance(snapshot, dict) else None,
+        }
 
     def _lockout_changed(self) -> None:
         """Called by the coordinator on state changes."""
