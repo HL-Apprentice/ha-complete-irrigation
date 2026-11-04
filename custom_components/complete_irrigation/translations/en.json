@@ -24,5 +24,27 @@
       "already_configured": "Complete Irrigation is already configured.",
       "no_zones_found": "No irrigation zones were found. If you're using a custom controller, make sure its switches are exposed in Home Assistant first."
     }
+  },
+  "services": {
+    "extend_rain_lockout": {
+      "name": "Extend rain lockout",
+      "description": "Add hours to the rain hold for deep drip, flowers and garden, and/or turf. Does not change schedules or their enabled flags.",
+      "fields": {
+        "hours": {
+          "name": "Hours",
+          "description": "How many hours to add (0.25 to 336)."
+        },
+        "zone_type": {
+          "name": "Zone type",
+          "description": "all, deep_drip, flowers_garden, or turf. Defaults to all."
+        }
+      }
+    }
+  },
+  "issues": {
+    "rain_source_disagree": {
+      "title": "Rain sources disagree",
+      "description": "Tempest reported {tempest} in over the last 72 hours and Open-Meteo reported {meteo} in. The rain hold is using the conservative blend ({used} in) until the two sources agree."
+    }
   }
 }

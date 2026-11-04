@@ -98,6 +98,7 @@ SERVICE_SET_SCHEDULE_ENABLED = "set_schedule_enabled"
 SERVICE_SET_WEATHER_CONFIG = "set_weather_config"
 SERVICE_SET_ZONE_MOISTURE = "set_zone_moisture"
 SERVICE_CLEAR_RAIN_LOCKOUT = "clear_rain_lockout"
+SERVICE_EXTEND_RAIN_LOCKOUT = "extend_rain_lockout"
 SERVICE_SET_NOTIFICATION_CONFIG = "set_notification_config"
 SERVICE_TEST_NOTIFICATION = "test_notification"
 SERVICE_START_ESTABLISHMENT = "start_establishment"
@@ -434,6 +435,15 @@ _SET_ZONE_MOISTURE_SCHEMA = vol.Schema(
 )
 
 _CLEAR_RAIN_LOCKOUT_SCHEMA = vol.Schema({})
+
+_EXTEND_RAIN_LOCKOUT_SCHEMA = vol.Schema(
+    {
+        vol.Required("hours"): vol.All(vol.Coerce(float), vol.Range(min=0.25, max=24 * 14)),
+        vol.Optional("zone_type", default="all"): vol.In(
+            ["all", "deep_drip", "flowers_garden", "turf"]
+        ),
+    }
+)
 
 _SET_NOTIFICATION_CONFIG_SCHEMA = vol.Schema(
     {
@@ -1694,6 +1704,10 @@ async def handle_run_zone(hass: HomeAssistant, call: ServiceCall) -> None:
         # Run history: timer expired → completed
         if coord is not None:
             coord.run_history.complete_run(entity_id, ended_at=dt_util.utcnow())
+            # A finished run (the final block, for a chunked run) ends that
+            # zone's rain hold. Intermediate blocks are not the whole run.
+            if is_final_activation:
+                coord.note_zone_run_completed(entity_id)
             await coord.async_save_run_history()
         # v1.30 — clear the restart-resume session only when the WHOLE run is
         # done (a single run, or the final block of a chunked run); an
@@ -3916,6 +3930,18 @@ async def handle_clear_rain_lockout(hass: HomeAssistant, call: ServiceCall) -> N
     _LOGGER.info("Rain lockout cleared by service call")
 
 
+async def handle_extend_rain_lockout(hass: HomeAssistant, call: ServiceCall) -> None:
+    """Add time to the rain hold. Does not touch schedules or their enabled flags."""
+    if not await _require_admin_if_configured(hass, call):
+        return
+    data = _EXTEND_RAIN_LOCKOUT_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None:
+        return
+    coord.extend_lockout(float(data["hours"]), data.get("zone_type"))
+    _LOGGER.info("Rain lockout extended by service call: %s", data)
+
+
 async def handle_set_notification_config(hass: HomeAssistant, call: ServiceCall) -> None:
     if not await _require_admin(hass, call):  # config write — admin only
         return
@@ -4152,6 +4178,7 @@ _SERVICES: list[tuple[str, Any, Any, Any]] = [
     (SERVICE_SET_WEATHER_CONFIG, handle_set_weather_config, _SET_WEATHER_CONFIG_SCHEMA, None),
     (SERVICE_SET_ZONE_MOISTURE, handle_set_zone_moisture, _SET_ZONE_MOISTURE_SCHEMA, None),
     (SERVICE_CLEAR_RAIN_LOCKOUT, handle_clear_rain_lockout, _CLEAR_RAIN_LOCKOUT_SCHEMA, None),
+    (SERVICE_EXTEND_RAIN_LOCKOUT, handle_extend_rain_lockout, _EXTEND_RAIN_LOCKOUT_SCHEMA, None),
     (
         SERVICE_SET_NOTIFICATION_CONFIG,
         handle_set_notification_config,
@@ -4194,6 +4221,7 @@ def _async_unregister_services(hass: HomeAssistant) -> None:
         SERVICE_SET_WEATHER_CONFIG,
         SERVICE_SET_ZONE_MOISTURE,
         SERVICE_CLEAR_RAIN_LOCKOUT,
+        SERVICE_EXTEND_RAIN_LOCKOUT,
         SERVICE_SET_NOTIFICATION_CONFIG,
         SERVICE_TEST_NOTIFICATION,
         SERVICE_START_ESTABLISHMENT,

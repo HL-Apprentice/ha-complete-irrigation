@@ -220,6 +220,10 @@ class IrrigationHealthView(HomeAssistantView):
                     "lockout_until": (
                         coord.lockout_until.isoformat() if coord.lockout_until else None
                     ),
+                    "lockout_until_by_type": coord.lockout_attributes().get("lockout_until"),
+                    "rain_source_disagree": bool(
+                        coord.lockout_attributes().get("RAIN_SOURCE_DISAGREE")
+                    ),
                 },
                 "schedules": schedules,
                 "loops": loops,

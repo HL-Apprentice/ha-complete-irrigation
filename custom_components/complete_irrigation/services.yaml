@@ -803,6 +803,41 @@ clear_rain_lockout:
   name: Clear rain lockout
   description: Manually end the current rain lockout (schedules resume immediately).
 
+extend_rain_lockout:
+  name: Extend rain lockout
+  description: >
+    Add time to the rain hold. Hours are added to a hold that is already
+    active; a zone type that is not holding starts from now. "all" (the
+    default) covers deep drip, flowers and garden, and turf. This does not
+    change schedules or their enabled flags. Germination and birdbath zones
+    are not given a multi-day hold.
+  fields:
+    hours:
+      name: Hours
+      description: How many hours to add (0.25 to 336).
+      required: true
+      selector:
+        number:
+          min: 0.25
+          max: 336
+          step: 0.25
+          mode: box
+          unit_of_measurement: h
+    zone_type:
+      name: Zone type
+      description: >
+        Which hold to extend. "all" updates deep drip, flowers and garden,
+        and turf. Birdbath and germination are not multi-day holds.
+      required: false
+      default: all
+      selector:
+        select:
+          options:
+            - all
+            - deep_drip
+            - flowers_garden
+            - turf
+
 set_general_config:
   name: Set general integration config
   description: >

@@ -4,6 +4,19 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.64.0 — 2026-11-04 — minor
+
+**Rain lockout follows the storm and the heat, per zone type, and it survives a restart.**
+
+The hold used to be one global timer built from today's rain total, then clipped by a heat cap that made most real storms look like a fixed 48 hours. It also vanished on every Home Assistant restart, and the rain-lockout sensor could stay on after the timer had already expired.
+
+- **72-hour rainfall.** The event total combines Tempest history with Open-Meteo (`past_days=3`). When the two agree within max(0.15 in, 40%), the hold uses their mean. When they don't, it uses the lower value plus a quarter of the gap and raises a `RAIN_SOURCE_DISAGREE` repair. If either source is down, the other is used and the miss is logged.
+- **Per zone type.** Deep drip, flowers and garden, and turf each get their own deadline from the rain-amount table, scaled by `0.12 / ETo` (clamped 0.5×–1.5×) and still capped by the existing heat ceiling. Birdbaths pause only while rain is falling. Germination zones are never held.
+- **Early release, never a longer hold from moisture.** A finished run releases that zone. Soil at or above target can release a zone early. A dry reading does not add time. A forecast of at least 0.25 in at 60% or better inside 24 hours can add one day to a hold that is already active, still under the heat ceiling.
+- **Persisted** in its own `.storage/complete_irrigation.rain_lockout.*` file. Schedule storage, including a watering hold's disabled schedules, is not rewritten on startup.
+- **`extend_rain_lockout` service** adds hours to one type or to all three durable types.
+- Skipped runs are written to history at the gate. The rain-lockout binary sensor turns off when the deadline passes.
+
 ## v1.62.2 — 2026-07-28 — patch
 
 **Three data-loss bugs found by red-teaming, all introduced by recent work.**

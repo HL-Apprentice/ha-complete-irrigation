@@ -23,6 +23,20 @@ REAL = {
 }
 
 
+def test_rain_url_requests_past_days_and_hourly_probability():
+    from custom_components.complete_irrigation.open_meteo import open_meteo_rain_url
+
+    url = open_meteo_rain_url(33.0, -112.0, "America/Phoenix")
+    assert url.startswith("https://api.open-meteo.com/v1/forecast")
+    assert "past_days=3" in url
+    assert "hourly=precipitation,precipitation_probability" in url
+    assert "precipitation_sum" in url
+    assert "forecast_days=2" in url
+    assert "key" not in url.lower()
+    # The weekly ETo request must stay free of past days so its sum is a forecast.
+    assert "past_days" not in open_meteo_url(33.0, -112.0)
+
+
 def test_url_has_et0_and_no_key():
     u = open_meteo_url(33.31, -111.81)
     assert u.startswith("https://api.open-meteo.com/v1/forecast")

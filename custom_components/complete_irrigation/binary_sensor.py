@@ -56,14 +56,19 @@ class RainLockoutBinarySensor(BinarySensorEntity):
 
     @property
     def is_on(self) -> bool:
+        # Re-read the clock. The coordinator writes state on arm, extend,
+        # clear, and at lockout_until (plus the regular tick) so expiry
+        # does not leave this entity stuck on.
         return self._coordinator.is_locked_out_now()
 
     @property
     def extra_state_attributes(self) -> dict:
+        attrs = self._coordinator.lockout_attributes()
         until: datetime | None = self._coordinator.lockout_until
-        return {"until": until.isoformat() if until else None}
+        attrs["until"] = until.isoformat() if until else None
+        return attrs
 
     def _lockout_changed(self) -> None:
-        """Called by the coordinator on state changes."""
+        """Called by the coordinator when the hold starts, moves, or expires."""
         if self.hass is not None:
             self.async_write_ha_state()

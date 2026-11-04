@@ -23,6 +23,28 @@ _FORECAST = "https://api.open-meteo.com/v1/forecast"
 _MM_PER_INCH = 25.4
 
 
+def open_meteo_rain_url(lat: float, lon: float, tz: str | None = None) -> str:
+    """72h rainfall + the next 24h of hourly precip, keyless.
+
+    ``past_days=3`` is what makes the daily array include the three local days
+    before today, so a 72h sum can be taken from ``precipitation_sum``. Hourly
+    ``precipitation`` and ``precipitation_probability`` cover the ">= 0.25 in
+    at >= 60% within 24h" extension. ET0 and the daily high ride along so the
+    lockout scale and the existing heat ceiling see the same fetch.
+
+    Separate from ``open_meteo_url``: the weekly-ETo request must stay a
+    7-day forecast with no past days, or the ETo sum would count history.
+    """
+    timezone = quote(tz) if tz else "auto"
+    return (
+        f"{_FORECAST}?latitude={float(lat):.5f}&longitude={float(lon):.5f}"
+        "&daily=precipitation_sum,et0_fao_evapotranspiration,temperature_2m_max"
+        "&hourly=precipitation,precipitation_probability"
+        "&past_days=3&forecast_days=2"
+        f"&timezone={timezone}"
+    )
+
+
 def open_meteo_url(lat: float, lon: float, tz: str | None = None) -> str:
     """Daily-forecast URL for (lat, lon): FAO ET0 + high + precip, 7 days.
 
