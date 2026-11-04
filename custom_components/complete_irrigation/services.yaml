@@ -715,17 +715,23 @@ set_zone_moisture:
       description: >
         Optional override for which rain-lockout clock this zone uses.
         Leave unset to classify from the zone's category, plants, and name
-        (unclassified zones stay turf). Empty clears an override.
+        (unclassified zones stay turf). "auto" clears an override.
       required: false
       selector:
         select:
           options:
-            - ""
-            - deep_drip
-            - flowers_garden
-            - turf
-            - birdbath
-            - germination
+            - label: Automatic
+              value: auto
+            - label: Deep drip
+              value: deep_drip
+            - label: Flowers and garden
+              value: flowers_garden
+            - label: Turf
+              value: turf
+            - label: Birdbath
+              value: birdbath
+            - label: Germination
+              value: germination
     temperature_entities:
       name: Temperature sensors (optional)
       description: One or more temperature sensors for this zone (display-only; averaged when multiple).

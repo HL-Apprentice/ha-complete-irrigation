@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from .category_match import suggest_category
-from .weather_gate import RAIN_LOCKOUT_FALLBACK_DAILY_ETO_IN
+from .weather_gate import RAIN_LOCKOUT_FALLBACK_DAILY_ETO_IN, rain_to_inches
 
 # Holding types get a multi-day lockout from the rain table.
 ZONE_DEEP_DRIP = "deep_drip"
@@ -343,11 +343,18 @@ def _preset_zone_type(preset: str | None) -> str | None:
 
 
 def zone_is_garden(*, category: str | None, entity_id: str = "", friendly_name: str = "") -> bool:
-    """Vegetable garden (the >2 in cap), as opposed to a flower bed."""
+    """Vegetable garden (the >2 in cap), not every bed whose name says garden.
+
+    ``Flower Garden`` is flowers. A vegetable garden is the ``vegetable_garden``
+    category, or a name that says vegetable / ``veg`` as its own word.
+    """
     if category in _GARDEN_CATEGORIES:
         return True
     blob = f"{entity_id} {friendly_name}".lower()
-    return "garden" in blob or "veg" in blob
+    if "vegetable" in blob:
+        return True
+    tokens = [tok for tok in blob.replace("_", " ").replace("-", " ").split() if tok]
+    return "veg" in tokens or "veggies" in tokens
 
 
 def classify_zone(
@@ -355,7 +362,6 @@ def classify_zone(
     entity_id: str,
     friendly_name: str = "",
     category: str | None = None,
-    independent: bool = False,
     schedule_profiles: tuple[str, ...] | list[str] = (),
     plant_presets: tuple[str, ...] | list[str] = (),
     establishment_active: bool = False,
@@ -364,21 +370,23 @@ def classify_zone(
 
     Order, most specific first:
 
-    1. Germination - an in-window establishment schedule, or a name that says
-       germination / new grass. These never take a rain lockout.
-    2. Birdbath - the name says birdbath, or the zone is on its own supply
-       (``independent_zones``, whose documented use is a birdbath fill) and
-       nothing else classified it.
+    1. Germination - only an in-window establishment schedule. A name that says
+       germination or new grass does not exempt the zone forever; use the
+       override for that. These never take a rain lockout.
+    2. Birdbath - the name says birdbath. ``independent_zones`` is not a
+       birdbath; those zones fall through to the turf default unless something
+       else classifies them.
     3. The zone's stored plant ``category`` (lawn / vegetable_garden / trees /
        citrus / bushes).
     4. Majority ``care_plan_preset`` of plants on the zone, then majority
        schedule ``split_profile``.
-    5. Name keywords (the same ones setup uses, plus "flower").
+    5. Name keywords. ``flower`` wins over a bare ``garden`` word so Flower
+       Garden is flowers, not a vegetable garden.
     6. Otherwise turf. Unconfigured zones already default to the lawn moisture
        band, so the lockout default matches that.
     """
     blob = f"{entity_id} {friendly_name}".lower()
-    if establishment_active or "germinat" in blob or "new grass" in blob or "new_grass" in blob:
+    if establishment_active:
         return ZONE_GERMINATION
     if any(token in blob for token in ("birdbath", "bird bath", "bird_bath", "bird-bath")):
         return ZONE_BIRDBATH
@@ -394,17 +402,19 @@ def classify_zone(
     profile_type = _preset_zone_type(_majority([p for p in schedule_profiles if p]))
     if profile_type:
         return profile_type
+    if "flower" in blob and not zone_is_garden(
+        category=category, entity_id=entity_id, friendly_name=friendly_name
+    ):
+        return ZONE_FLOWERS_GARDEN
     suggested = suggest_category(blob)
     if suggested == "lawn":
         return ZONE_TURF
+    # "garden" shares the flowers+garden clock. The vegetable-garden cap is
+    # separate and only applies to vegetable/veg keywords or that category.
     if suggested == "vegetable_garden":
         return ZONE_FLOWERS_GARDEN
     if suggested in _DEEP_CATEGORIES:
         return ZONE_DEEP_DRIP
-    if "flower" in blob:
-        return ZONE_FLOWERS_GARDEN
-    if independent:
-        return ZONE_BIRDBATH
     return ZONE_TURF
 
 
@@ -429,12 +439,37 @@ class StoredRainLockout:
     forecast_extended: set[str] = field(default_factory=set)
     sources: dict[str, Any] = field(default_factory=dict)
     previous_today_in: float | None = None
+    # zone_id -> lockout type. That zone is exempt while its type clock runs.
+    released_zones: dict[str, str] = field(default_factory=dict)
+    # False only for a store that has never recorded a rainfall baseline
+    # (upgrade / empty file). In-memory objects default to already seeded so
+    # tests and a running process arm on a real rise.
+    baseline_seeded: bool = True
+
+    def with_updates(self, **kwargs: Any) -> StoredRainLockout:
+        payload: dict[str, Any] = {
+            "until_by_type": dict(self.until_by_type),
+            "last_event_rain_in": self.last_event_rain_in,
+            "rain_source_disagree": self.rain_source_disagree,
+            "forecast_extended": set(self.forecast_extended),
+            "sources": dict(self.sources),
+            "previous_today_in": self.previous_today_in,
+            "released_zones": dict(self.released_zones),
+            "baseline_seeded": self.baseline_seeded,
+        }
+        payload.update(kwargs)
+        return StoredRainLockout(**payload)
 
     def __post_init__(self) -> None:
         until = {zone_type: self.until_by_type.get(zone_type) for zone_type in ALL_ZONE_TYPES}
         until[ZONE_GERMINATION] = None
         self.until_by_type = until
         self.forecast_extended = {z for z in self.forecast_extended if z in HOLDING_ZONE_TYPES}
+        cleaned: dict[str, str] = {}
+        for zone_id, zone_type in (self.released_zones or {}).items():
+            if isinstance(zone_id, str) and zone_type in HOLDING_ZONE_TYPES:
+                cleaned[zone_id] = zone_type
+        self.released_zones = cleaned
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -451,6 +486,8 @@ class StoredRainLockout:
             "forecast_extended": sorted(self.forecast_extended),
             "sources": dict(self.sources),
             "previous_today_in": self.previous_today_in,
+            "released_zones": dict(self.released_zones),
+            "baseline_seeded": bool(self.baseline_seeded),
         }
 
     @classmethod
@@ -473,6 +510,17 @@ class StoredRainLockout:
             else set()
         )
         sources = data.get("sources") if isinstance(data.get("sources"), dict) else {}
+        raw_released = data.get("released_zones")
+        released: dict[str, str] = {}
+        if isinstance(raw_released, dict):
+            for zone_id, zone_type in raw_released.items():
+                if isinstance(zone_id, str) and zone_type in HOLDING_ZONE_TYPES:
+                    released[zone_id] = str(zone_type)
+        if "baseline_seeded" in data:
+            seeded = bool(data.get("baseline_seeded"))
+        else:
+            # A stored total is already a baseline. Missing both means upgrade.
+            seeded = data.get("last_event_rain_in") is not None
         return cls(
             until_by_type=until,
             last_event_rain_in=last,
@@ -480,6 +528,8 @@ class StoredRainLockout:
             forecast_extended=extended,
             sources=dict(sources),
             previous_today_in=_clean_inches(data.get("previous_today_in")),
+            released_zones=released,
+            baseline_seeded=seeded,
         )
 
 
@@ -499,13 +549,9 @@ def release_zone_type(state: StoredRainLockout, zone_type: str) -> StoredRainLoc
         return state
     until = dict(state.until_by_type)
     until[zone_type] = None
-    return StoredRainLockout(
+    return state.with_updates(
         until_by_type=until,
-        last_event_rain_in=state.last_event_rain_in,
-        rain_source_disagree=state.rain_source_disagree,
         forecast_extended=set(state.forecast_extended) - {zone_type},
-        sources=dict(state.sources),
-        previous_today_in=state.previous_today_in,
     )
 
 
@@ -518,6 +564,7 @@ class LockoutUpdate:
     state: StoredRainLockout
     changed: bool
     logs: tuple[str, ...]
+    armed_types: frozenset[str] = frozenset()
 
 
 def decide_lockouts(
@@ -532,12 +579,14 @@ def decide_lockouts(
     active_rain: bool,
     forecast_in: float | None,
     forecast_probability_pct: float | None,
-    dry_zone_types: set[str] | frozenset[str] = frozenset(),
     min_inches: float = TABLE_MIN_INCHES,
     today_in: float | None = None,
     legacy_hours: float | None = None,
     arm_from_table: bool = True,
     allow_forecast_extend: bool = True,
+    allow_baseline_retreat: bool = True,
+    seed_only: bool = False,
+    dry_zones: dict[str, str] | None = None,
 ) -> LockoutUpdate:
     """Next lockout state.
 
@@ -550,7 +599,36 @@ def decide_lockouts(
     until = {zone_type: state.until_by_type.get(zone_type) for zone_type in ALL_ZONE_TYPES}
     extended = set(state.forecast_extended)
     last = state.last_event_rain_in
+    released = dict(state.released_zones)
     logs: list[str] = []
+    armed_now: set[str] = set()
+    rain = _clean_inches(rainfall_in) if rainfall_in is not None else None
+
+    if seed_only:
+        # No observation yet: stay unseeded and do not arm. Seeding a missing
+        # total would make the first real reading look like new rain.
+        if rain is None:
+            return LockoutUpdate(state=state, changed=False, logs=())
+        seeded_last = last if last is not None else rain
+        sources = {
+            "tempest_in": blend.tempest_in,
+            "open_meteo_in": blend.open_meteo_in,
+            "combined_in": blend.inches,
+            "used": blend.used,
+            "flag": blend.flag,
+        }
+        updated = state.with_updates(
+            last_event_rain_in=seeded_last,
+            baseline_seeded=True,
+            rain_source_disagree=False,
+            sources=sources,
+            previous_today_in=today_in if today_in is not None else state.previous_today_in,
+        )
+        return LockoutUpdate(
+            state=updated,
+            changed=seeded_last != last or not state.baseline_seeded,
+            logs=("seeded rainfall baseline without arming",) if seeded_last != last else (),
+        )
 
     # ── birdbath: only while rain is falling ──────────────────────
     if active_rain:
@@ -565,7 +643,6 @@ def decide_lockouts(
     until[ZONE_GERMINATION] = None
 
     # ── event rain arms / extends holding types on a rising total ─
-    rain = _clean_inches(rainfall_in) if rainfall_in is not None else None
     if not arm_from_table:
         # v1.62 fallback (or "do not arm from this sample"). A positive
         # legacy_hours is the old ET-scaled duration. None means the old
@@ -582,10 +659,11 @@ def decide_lockouts(
                         if current is None or proposed > current:
                             until[zone_type] = proposed
                             extended.discard(zone_type)
+                            armed_now.add(zone_type)
                     logs.append(
                         f"legacy rain lockout {float(legacy_hours):.1f}h from today's {rain:.2f} in"
                     )
-            elif dropped:
+            elif dropped and allow_baseline_retreat:
                 last = rain
                 logs.append(
                     f"rain total fell to {rain:.2f} in - baseline reset, lockout not extended"
@@ -607,11 +685,12 @@ def decide_lockouts(
                 if current is None or proposed > current:
                     until[zone_type] = proposed
                     extended.discard(zone_type)
+                    armed_now.add(zone_type)
                     logs.append(
                         f"{zone_type} lockout {hours:.1f}h from {rain:.2f} in "
                         f"({days}d x ETo scale, heat ceiling {max_hours}h)"
                     )
-        elif dropped:
+        elif dropped and allow_baseline_retreat:
             last = rain
             logs.append(f"rain total fell to {rain:.2f} in - baseline reset, lockout not extended")
 
@@ -635,14 +714,22 @@ def decide_lockouts(
                     f"{zone_type} forecast extension held at the heat ceiling ({max_hours}h)"
                 )
 
-    # ── moisture may only release, and only types the caller flagged
-    for zone_type in dry_zone_types:
-        if zone_type not in HOLDING_ZONE_TYPES:
+    # A new arm of a type puts every zone of that type back under the clock.
+    if armed_now:
+        released = {
+            zone_id: zone_type
+            for zone_id, zone_type in released.items()
+            if zone_type not in armed_now
+        }
+
+    # One dry zone releases only itself, and never on the tick that armed its type.
+    for zone_id, zone_type in (dry_zones or {}).items():
+        if zone_type not in HOLDING_ZONE_TYPES or zone_type in armed_now:
             continue
-        if until.get(zone_type) is not None:
-            until[zone_type] = None
-            extended.discard(zone_type)
-            logs.append(f"{zone_type} lockout released - soil moisture below minimum")
+        current = until.get(zone_type)
+        if current is not None and now < current and released.get(zone_id) != zone_type:
+            released[zone_id] = zone_type
+            logs.append(f"{zone_id} released early - soil moisture below minimum")
 
     sources = {
         "tempest_in": blend.tempest_in,
@@ -653,18 +740,119 @@ def decide_lockouts(
         "forecast_24h_probability_pct": forecast_probability_pct,
         "flag": blend.flag,
     }
-    updated = StoredRainLockout(
+    updated = state.with_updates(
         until_by_type=until,
         last_event_rain_in=last,
         rain_source_disagree=blend.disagree,
         forecast_extended=extended,
         sources=sources,
         previous_today_in=today_in if today_in is not None else state.previous_today_in,
+        released_zones=released,
+        baseline_seeded=True,
     )
     changed = (
         not _untils_equal(state.until_by_type, updated.until_by_type)
         or state.last_event_rain_in != updated.last_event_rain_in
         or state.rain_source_disagree != updated.rain_source_disagree
         or state.forecast_extended != updated.forecast_extended
+        or state.released_zones != updated.released_zones
     )
-    return LockoutUpdate(state=updated, changed=changed, logs=tuple(logs))
+    return LockoutUpdate(
+        state=updated, changed=changed, logs=tuple(logs), armed_types=frozenset(armed_now)
+    )
+
+
+def _stat_get(row: Any, key: str) -> Any:
+    if isinstance(row, dict):
+        return row.get(key)
+    return getattr(row, key, None)
+
+
+def aggregate_tempest_72h(
+    rows: list[Any] | None,
+    *,
+    now: datetime,
+    state_class: str | None,
+    live_today_in: float | None,
+    unit: str | None,
+) -> float | None:
+    """72h inches from recorder rows.
+
+    ``total_increasing`` sensors have no usable ``max`` (it is absent). Their
+    ``sum`` is the running total, so the window is last sum minus first sum,
+    plus any live reading ahead of the last sum (long-term stats lag ~1h).
+
+    A resetting daily total (rain today) uses each local day's peak. The first
+    day is partial when the window opens after midnight: only the increase seen
+    inside the window is counted, not that day's full peak. Today is
+    ``max(statistic peak, live sensor)`` so the lagging statistic cannot hide
+    rain that has already fallen.
+    """
+    window_start = now - timedelta(hours=72)
+    parsed: list[tuple[datetime, Any]] = []
+    for row in rows or []:
+        start = _parse_dt(_stat_get(row, "start"))
+        if start is None:
+            continue
+        if start.tzinfo is None and now.tzinfo is not None:
+            start = start.replace(tzinfo=now.tzinfo)
+        elif start.tzinfo is not None and now.tzinfo is None:
+            start = start.replace(tzinfo=None)
+        if start < window_start or start > now:
+            continue
+        parsed.append((start, row))
+    parsed.sort(key=lambda item: item[0])
+    if not parsed and live_today_in is None:
+        return None
+
+    if state_class == "total_increasing":
+        sums: list[float] = []
+        for _start, row in parsed:
+            raw = _stat_get(row, "sum")
+            if raw is None:
+                raw = _stat_get(row, "state")
+            inches = rain_to_inches(raw, unit) if raw is not None else None
+            if inches is not None:
+                sums.append(inches)
+        if not sums:
+            return live_today_in
+        growth = max(0.0, sums[-1] - sums[0])
+        if live_today_in is not None and live_today_in > sums[-1]:
+            growth += live_today_in - sums[-1]
+        return growth
+
+    by_day: dict[Any, list[Any]] = {}
+    for start, row in parsed:
+        raw = _stat_get(row, "max")
+        if raw is None:
+            raw = _stat_get(row, "state")
+        inches = rain_to_inches(raw, unit) if raw is not None else None
+        if inches is None:
+            continue
+        slot = by_day.get(start.date())
+        if slot is None:
+            by_day[start.date()] = [start, inches, inches]
+        else:
+            slot[2] = max(slot[2], inches)
+    total = 0.0
+    counted = False
+    today = now.date()
+    first_day = window_start.date()
+    for day, (first_start, first_val, peak) in by_day.items():
+        if day == today:
+            used = peak
+            if live_today_in is not None:
+                used = max(used, live_today_in)
+            total += used
+            counted = True
+            continue
+        if day == first_day and first_start > window_start:
+            total += max(0.0, peak - first_val)
+            counted = True
+            continue
+        total += peak
+        counted = True
+    if today not in by_day and live_today_in is not None:
+        total += live_today_in
+        counted = True
+    return total if counted else None

@@ -17,7 +17,9 @@ with the next release:
 - **Privacy scan.** `scripts/privacy-scan.py` reads the whole tracked tree
   (not the diff) for private IPs, paths, emails, and coordinate pairs, and CI
   runs it on every push. The published parcel bbox and LAN example endpoint
-  were replaced with placeholders. That is a forward fix, not a history rewrite.
+  were replaced in the current tree only. Git history was not rewritten:
+  `git log` still contains both values in commits before `0f28300`, and so do
+  the release tarballs of those tags.
 
 ## v1.64.0 — 2026-11-04 — minor
 
@@ -25,15 +27,21 @@ with the next release:
 
 The lockout is no longer one fixed timer driven by today's rain total. It uses
 the last 72 hours of rain (Tempest history blended with Open-Meteo
-`past_days=3`) and the current plus forecast ETo, with the existing heat
-ceiling still capping how long watering stays paused. Deep drip, flowers and
-garden, and turf each keep their own end time. Birdbath zones pause only while
-rain is falling. Germination zones are never locked out. A finished run, or
-soil moisture below a zone's minimum, can end a lockout early; moisture never
-lengthens one. A wet forecast (≥0.25 in at ≥60% within 24h) can add one day to
-a lockout that is already active. The clocks persist in their own storage file
-across restarts. `extend_rain_lockout` adds time on request, skipped runs show
-up in history, and the rain-lockout sensor turns off when the clock expires.
+`past_days=3`) and the current plus forecast ETo. Deep drip, flowers and
+garden, and turf each have their own day table, then one shared heat ceiling
+still caps every type: about 48 hours when it is mild, 24 hours at 105F, down
+to 18 hours at 115F. A large rain therefore often ends every holding type at
+the same time. Whether the ceiling should be per type instead is an owner
+decision; this release does not change the ceiling. Birdbath zones pause only
+while rain is falling. Only an active establishment schedule is germination
+(never locked out). A finished scheduled run releases that one zone, not the
+whole type. Soil moisture below a zone's minimum can release that zone early,
+not its neighbors, and not on the same tick the lockout armed. Moisture never
+lengthens a lockout. A fresh forecast of at least 0.25 in at 60% or higher
+within 24 hours can add one day to an already-active lockout, still inside the
+heat ceiling. The clocks persist in their own storage file. `extend_rain_lockout`
+adds time on request, skipped runs show up in history, and the rain-lockout
+sensor turns off when the clock expires.
 
 ## v1.62.2 — 2026-07-28 — patch
 

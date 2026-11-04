@@ -408,10 +408,10 @@ _SET_ZONE_MOISTURE_SCHEMA = vol.Schema(
         vol.Optional("humidity_entities"): vol.All(cv.ensure_list, [cv.entity_id]),
         vol.Optional("category"): cv.string,
         # Optional per-zone rain-lockout type. Omitted (the default) keeps
-        # automatic classification. Empty string clears an override. Stored on
+        # automatic classification. "auto" clears an override. Stored on
         # the zone config dict, which v1.62.2 loads as an untyped blob.
         vol.Optional("lockout_zone_type"): vol.In(
-            ("", "deep_drip", "flowers_garden", "turf", "birdbath", "germination")
+            ("auto", "deep_drip", "flowers_garden", "turf", "birdbath", "germination")
         ),
         # v1.18 — fail-closed: skip a scheduled run when NO moisture
         # reading is available for this zone (all sensors offline /
@@ -1226,6 +1226,8 @@ def _record_active_session(
         "schedule_name": (meta or {}).get("schedule_name", ""),
         "source": source,
     }
+    if (meta or {}).get("resumed_after_restart"):
+        session["resumed_after_restart"] = True
     if blocks and len(blocks) > 1 and block_gap_seconds:
         session["blocks"] = [int(b) for b in blocks]
         session["block_gap_seconds"] = int(block_gap_seconds)
@@ -1712,7 +1714,8 @@ async def handle_run_zone(hass: HomeAssistant, call: ServiceCall) -> None:
             coord.run_history.complete_run(entity_id, ended_at=dt_util.utcnow())
             await coord.async_save_run_history()
             if is_final_activation:
-                await coord.note_zone_run_completed(entity_id)
+                session = (coord.config.get("active_run_sessions") or {}).get(entity_id) or {}
+                await coord.note_zone_run_completed(entity_id, session)
         # v1.30 — clear the restart-resume session only when the WHOLE run is
         # done (a single run, or the final block of a chunked run); an
         # intermediate block keeps the session so a restart still resumes.
@@ -3928,7 +3931,7 @@ async def handle_set_zone_moisture(hass: HomeAssistant, call: ServiceCall) -> No
     # the default (no override, classify as before) stays unchanged.
     if "lockout_zone_type" in data:
         chosen = data.get("lockout_zone_type") or ""
-        if chosen:
+        if chosen and chosen != "auto":
             new_cfg["lockout_zone_type"] = chosen
     elif previous.get("lockout_zone_type"):
         new_cfg["lockout_zone_type"] = previous["lockout_zone_type"]

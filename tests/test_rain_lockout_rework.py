@@ -8,7 +8,7 @@ test_rain_lockout_policy.py and does not need HA.
 from __future__ import annotations
 
 import copy
-from datetime import time, timedelta
+from datetime import date, time, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -83,9 +83,23 @@ async def test_record_skip_logs_locked_zones_and_leaves_opt_outs_alone():
         )
     )
     coord.schedule_store.add(_daily("bath", "switch.birdbath", hour=6, minute=0))
-    coord.schedule_store.add(_daily("sprouts", "switch.germination", hour=6, minute=0))
-    # Every type looks locked. Germination is still never gated. Birdbath is,
-    # because an active-rain hold sets its clock. The ignore flag opts out.
+    # An in-window establishment schedule is the germination exemption.
+    # The window has to cover both the simulated tick (2026-05-18) and the
+    # real date classification uses. A "new grass" name with no window is turf.
+    coord.schedule_store.add(
+        _daily(
+            "sprouts",
+            "switch.germination",
+            hour=6,
+            minute=0,
+            created_via="establishment",
+            start_date=date(2026, 5, 1),
+            end_date=date(2026, 12, 31),
+        )
+    )
+    coord.schedule_store.add(_daily("newgrass", "switch.new_grass", hour=6, minute=0))
+    # Every holding type looks locked. Birdbath is too, because an active-rain
+    # hold sets its clock. The ignore flag and the establishment window opt out.
     later = now + timedelta(days=2)
     coord._rain_lockout = StoredRainLockout(
         until_by_type={
@@ -99,11 +113,11 @@ async def test_record_skip_logs_locked_zones_and_leaves_opt_outs_alone():
     await coord._record_lockout_skips(coord.schedule_store.enabled_schedules(), last, now, None)
     skipped = [rec for rec in coord.run_history.all() if rec.status == STATUS_SKIPPED]
     zones = sorted(rec.zone_entity_id for rec in skipped)
-    assert zones == ["switch.birdbath", "switch.front_lawn"]
+    assert zones == ["switch.birdbath", "switch.front_lawn", "switch.new_grass"]
     assert all(rec.reason == "rain lockout" for rec in skipped)
     assert all(rec.triggers["rain_lockout"]["zone_type"] for rec in skipped)
-    # The ignored lawn schedule and the germination zone produced no row.
-    assert len(skipped) == 2
+    # The ignored lawn schedule and the in-window germination zone produced no row.
+    assert len(skipped) == 3
 
 
 # ── completed run, moisture direction, forecast glue ──────────────
@@ -121,11 +135,38 @@ async def test_completed_run_releases_only_that_zone_type():
         until_by_type={ZONE_TURF: later, ZONE_DEEP_DRIP: deep},
         last_event_rain_in=0.4,
     )
-    await coord.note_zone_run_completed("switch.front_lawn")
-    assert coord._rain_lockout.until_by_type[ZONE_TURF] is None
+    await coord.note_zone_run_completed(
+        "switch.front_lawn",
+        {"source": "scheduled", "schedule_id": "sched-lawn"},
+    )
+    # No schedule with that id, so a missing schedule does not release.
+    assert "switch.front_lawn" not in coord._rain_lockout.released_zones
+    coord.schedule_store.add(_daily("sched-lawn", "switch.front_lawn", hour=6, minute=0))
+    await coord.note_zone_run_completed(
+        "switch.front_lawn",
+        {"source": "scheduled", "schedule_id": "sched-lawn"},
+    )
+    assert coord._rain_lockout.released_zones["switch.front_lawn"] == ZONE_TURF
+    # The type clock stays up for every other turf zone.
+    assert coord._rain_lockout.until_by_type[ZONE_TURF] == later
+    assert coord.is_zone_locked_out("switch.front_lawn") is False
     assert coord._rain_lockout.until_by_type[ZONE_DEEP_DRIP] == deep
-    # The baseline stays, so the same 72h total cannot immediately re-lock turf.
     assert coord._rain_lockout.last_event_rain_in == pytest.approx(0.4)
+    # Manual, ignore-rain, and restart recovery do not release.
+    await coord.note_zone_run_completed("switch.trees", {"source": "manual"})
+    assert "switch.trees" not in coord._rain_lockout.released_zones
+    ignored = _daily("sched-trees", "switch.trees", hour=5, minute=0, ignore_rain_lockout=True)
+    coord.schedule_store.add(ignored)
+    await coord.note_zone_run_completed(
+        "switch.trees",
+        {"source": "scheduled", "schedule_id": "sched-trees"},
+    )
+    assert "switch.trees" not in coord._rain_lockout.released_zones
+    await coord.note_zone_run_completed(
+        "switch.trees",
+        {"source": "scheduled", "schedule_id": "sched-lawn", "resumed_after_restart": True},
+    )
+    assert "switch.trees" not in coord._rain_lockout.released_zones
 
 
 async def test_moisture_releases_a_dry_zone_and_does_not_extend_a_wet_one():
@@ -156,11 +197,8 @@ async def test_moisture_releases_a_dry_zone_and_does_not_extend_a_wet_one():
         async def _no_history(*_args, **_kwargs):
             return None
 
-        async def _no_meteo(*_args, **_kwargs):
-            return None, "failed"
-
         coord._tempest_history_inches = _no_history
-        coord._read_open_meteo_rain = _no_meteo
+        coord._open_meteo_for_decision = lambda _now: (None, "unavailable")
         coord._rain_lockout = StoredRainLockout(
             until_by_type={ZONE_TURF: turf_until, ZONE_DEEP_DRIP: deep_until},
             last_event_rain_in=0.40,
@@ -169,7 +207,9 @@ async def test_moisture_releases_a_dry_zone_and_does_not_extend_a_wet_one():
 
     dry = _run("10")
     await dry._evaluate_lockout(now)
-    assert dry._rain_lockout.until_by_type[ZONE_TURF] is None
+    assert dry._rain_lockout.until_by_type[ZONE_TURF] == turf_until
+    assert dry._rain_lockout.released_zones.get("switch.front_lawn") == ZONE_TURF
+    assert dry.is_zone_locked_out("switch.front_lawn", now) is False
     assert dry._rain_lockout.until_by_type[ZONE_DEEP_DRIP] == deep_until
 
     wet = _run("80")
@@ -192,38 +232,78 @@ async def test_forecast_extension_is_applied_by_the_coordinator_once():
     async def _no_history(*_args, **_kwargs):
         return None
 
-    async def _forecast(_now):
-        return (
-            {
-                "past_72h_in": 0.30,
-                "forecast_24h_in": 0.40,
-                "forecast_24h_probability_pct": 70,
-                "forecast_daily_eto_in": 0.12,
-                "current_precip_mm": 0.0,
-            },
-            "fresh",
-        )
-
     coord._tempest_history_inches = _no_history
-    coord._read_open_meteo_rain = _forecast
+    coord._open_meteo_rain = {
+        "past_72h_in": 0.30,
+        "forecast_24h_in": 0.40,
+        "forecast_24h_probability_pct": 70,
+        "forecast_daily_eto_in": 0.12,
+        "current_precip_mm": 0.0,
+    }
+    coord._open_meteo_rain_at = now
+    coord._om_unconsumed_fresh = True
     await coord._evaluate_lockout(now)
     assert coord._rain_lockout.until_by_type[ZONE_TURF] == now + timedelta(hours=36)
     await coord._evaluate_lockout(now + timedelta(minutes=1))
     assert coord._rain_lockout.until_by_type[ZONE_TURF] == now + timedelta(hours=36)
 
 
-def test_germination_is_never_locked_and_birdbath_only_with_a_clock():
-    coord = _coord()
+def test_germination_follows_the_window_and_birdbath_needs_a_clock():
+    coord = _coord(independent_zones=["switch.pots"])
     later = dt_util.now() + timedelta(hours=5)
     coord._rain_lockout = StoredRainLockout(
         until_by_type={ZONE_GERMINATION: later, "birdbath": None, ZONE_TURF: later}
     )
+    # A germination or new-grass name is turf unless an establishment window
+    # or an explicit override says otherwise. independent_zones is not birdbath.
+    assert coord.zone_lockout_type("switch.germination_bed") == ZONE_TURF
+    assert coord.is_zone_locked_out("switch.germination_bed") is True
+    assert coord.zone_lockout_type("switch.new_grass") == ZONE_TURF
+    assert coord.zone_lockout_type("switch.pots") == ZONE_TURF
+    assert coord.zone_lockout_type("switch.flower_garden") == "flowers_garden"
+    coord._config["zones"] = {
+        "switch.germination_bed": {"lockout_zone_type": ZONE_GERMINATION},
+    }
     assert coord.zone_lockout_type("switch.germination_bed") == ZONE_GERMINATION
     assert coord.is_zone_locked_out("switch.germination_bed") is False
+    today = dt_util.now().date()
+    coord.schedule_store.add(
+        _daily(
+            "sprouts",
+            "switch.sprouts",
+            hour=6,
+            minute=0,
+            created_via="establishment",
+            start_date=today - timedelta(days=1),
+            end_date=today + timedelta(days=5),
+        )
+    )
+    assert coord.zone_lockout_type("switch.sprouts") == ZONE_GERMINATION
+    assert coord.is_zone_locked_out("switch.sprouts") is False
+    coord.schedule_store.add(
+        _daily(
+            "old-seed",
+            "switch.old_seed",
+            hour=6,
+            minute=0,
+            created_via="establishment",
+            start_date=today - timedelta(days=30),
+            end_date=today - timedelta(days=1),
+        )
+    )
+    assert coord.zone_lockout_type("switch.old_seed") == ZONE_TURF
     assert coord.zone_lockout_type("switch.birdbath") == "birdbath"
     assert coord.is_zone_locked_out("switch.birdbath") is False
     coord._rain_lockout.until_by_type["birdbath"] = later
     assert coord.is_zone_locked_out("switch.birdbath") is True
+    # Active rain watches the configured weather entity only.
+    coord._config["weather_entity"] = "weather.home"
+    states = {
+        "weather.home": _state("rainy"),
+        "weather.other": _state("pouring"),
+    }
+    coord._hass.states.get.side_effect = lambda eid: states.get(eid)
+    assert coord._weather_states() == ["rainy"]
 
 
 # ── extend service ────────────────────────────────────────────────
@@ -506,11 +586,12 @@ async def test_cached_open_meteo_is_not_fetched_again_and_does_not_extend():
 
     coord._fetch_open_meteo_rain = _fetch
     coord._tempest_history_inches = _history
-    await coord._evaluate_lockout(now)
+    # The tick does not await the network. A finished refresh is what marks
+    # the payload fresh for exactly one decision.
+    await coord._refresh_open_meteo(now)
     assert calls["n"] == 1
+    await coord._evaluate_lockout(now)
     assert coord._rain_lockout.until_by_type[ZONE_TURF] > start
-    # Room to extend again, and the once-per-episode flag cleared. The cache
-    # must still refuse both a second fetch and another extension.
     coord._rain_lockout.forecast_extended.clear()
     coord._rain_lockout.until_by_type[ZONE_TURF] = start
     await coord._evaluate_lockout(now + timedelta(minutes=1))
@@ -542,10 +623,13 @@ async def test_open_meteo_failure_uses_tempest_alone_without_disagree():
 
     coord._fetch_open_meteo_rain = _fetch
     coord._tempest_history_inches = _history
+    await coord._refresh_open_meteo(now)
     await coord._evaluate_lockout(now)
     assert coord._rain_lockout.rain_source_disagree is False
     assert coord._rain_lockout.until_by_type[ZONE_TURF] == start
     assert coord._open_meteo_rain is None
+    # The failed fetch must not lower the baseline (that re-arms next time).
+    assert coord._rain_lockout.last_event_rain_in == pytest.approx(0.50)
 
 
 async def test_both_sources_down_uses_legacy_formula_and_does_not_stick():
@@ -591,6 +675,195 @@ async def test_both_sources_down_uses_legacy_formula_and_does_not_stick():
     quiet._tempest_history_inches = _history
     await quiet._evaluate_lockout(now)
     assert quiet._rain_lockout.until_by_type[ZONE_TURF] == held
+
+
+async def test_cached_blend_does_not_rearm_or_undo_clear():
+    """OM 0.6 and Tempest 0.4 stay one blend across ticks, including after clear."""
+    coord = _coord()
+    now = dt_util.now()
+    coord._notify_lockout_change = lambda: None
+    coord._read_heat_signal_f = lambda: 70.0
+    coord._hass.states.async_entity_ids.return_value = []
+    calls = {"n": 0}
+
+    async def _fetch(_now):
+        calls["n"] += 1
+        return _payload(past_72h_in=0.6, forecast_24h_in=0.9, forecast_24h_probability_pct=95)
+
+    async def _history(*_a, **_k):
+        return 0.4
+
+    coord._fetch_open_meteo_rain = _fetch
+    coord._tempest_history_inches = _history
+    await coord._refresh_open_meteo(now)
+    await coord._evaluate_lockout(now)
+    assert calls["n"] == 1
+    assert coord._rain_lockout.rain_source_disagree is False
+    first = dict(coord._rain_lockout.until_by_type)
+    baseline = coord._rain_lockout.last_event_rain_in
+    await coord._evaluate_lockout(now + timedelta(minutes=1))
+    await coord._evaluate_lockout(now + timedelta(minutes=2))
+    assert calls["n"] == 1
+    assert coord._rain_lockout.until_by_type == first
+    assert coord._rain_lockout.last_event_rain_in == baseline
+    assert coord._rain_lockout.rain_source_disagree is False
+    coord.clear_lockout()
+    await coord._evaluate_lockout(now + timedelta(minutes=3))
+    assert calls["n"] == 1
+    assert all(until is None for until in coord._rain_lockout.until_by_type.values())
+    assert coord._rain_lockout.last_event_rain_in == baseline
+
+
+async def test_expiry_callback_is_a_hass_callback():
+    from homeassistant.core import HassJobType, get_hassjob_callable_job_type
+
+    coord = _coord()
+    coord._notify_lockout_change = lambda: None
+    future = dt_util.now() + timedelta(hours=1)
+    coord._rain_lockout = StoredRainLockout(until_by_type={ZONE_TURF: future})
+    captured: dict = {}
+
+    def _track(_hass, action, when):
+        captured["action"] = action
+        captured["when"] = when
+        return lambda: None
+
+    import homeassistant.helpers.event as event_mod
+
+    original = event_mod.async_track_point_in_time
+    event_mod.async_track_point_in_time = _track
+    try:
+        coord._schedule_lockout_expiry()
+    finally:
+        event_mod.async_track_point_in_time = original
+    assert captured["when"] == future
+    assert get_hassjob_callable_job_type(captured["action"]) is HassJobType.Callback
+
+
+async def test_first_load_seeds_baseline_without_arming():
+    coord = _coord(rain_sensor="sensor.rain")
+    now = dt_util.now()
+    coord._notify_lockout_change = lambda: None
+    coord._read_heat_signal_f = lambda: 70.0
+    coord._hass.states.get.return_value = None
+    coord._hass.states.async_entity_ids.return_value = []
+    coord._rain_lockout = StoredRainLockout.from_dict({})
+    assert coord._rain_lockout.baseline_seeded is False
+
+    async def _none(*_a, **_k):
+        return None
+
+    async def _history(*_a, **_k):
+        return 0.60
+
+    coord._tempest_history_inches = _none
+    coord._open_meteo_for_decision = lambda _now: (None, "unavailable")
+    # No observation yet: do not seed a missing total, and do not arm.
+    await coord._evaluate_lockout(now)
+    assert coord._rain_lockout.baseline_seeded is False
+    assert coord._rain_lockout.last_event_rain_in is None
+    assert all(until is None for until in coord._rain_lockout.until_by_type.values())
+    coord._tempest_history_inches = _history
+    await coord._evaluate_lockout(now + timedelta(minutes=1))
+    assert coord._rain_lockout.baseline_seeded is True
+    assert coord._rain_lockout.last_event_rain_in == pytest.approx(0.60)
+    assert all(until is None for until in coord._rain_lockout.until_by_type.values())
+    await coord._evaluate_lockout(now + timedelta(minutes=2))
+    assert all(until is None for until in coord._rain_lockout.until_by_type.values())
+
+
+async def test_tempest_statistics_are_cached(monkeypatch):
+    coord = _coord(rain_sensor="sensor.rain")
+    now = dt_util.now()
+    coord._hass.states.get.return_value = _state(
+        "0.2", unit_of_measurement="in", state_class="total_increasing"
+    )
+    calls = {"n": 0}
+
+    class _Instance:
+        async def async_add_executor_job(self, fn, *args):
+            calls["n"] += 1
+            assert fn.__name__ == "statistics_during_period"
+            return {
+                "sensor.rain": [
+                    {"start": (now - timedelta(hours=70)).isoformat(), "sum": 1.0},
+                    {"start": (now - timedelta(hours=1)).isoformat(), "sum": 1.4},
+                ]
+            }
+
+    monkeypatch.setattr(
+        "homeassistant.components.recorder.get_instance",
+        lambda _hass: _Instance(),
+    )
+    first = await coord._tempest_history_inches("sensor.rain", now)
+    second = await coord._tempest_history_inches("sensor.rain", now + timedelta(minutes=1))
+    assert calls["n"] == 1
+    assert first == pytest.approx(0.4)
+    assert second == first
+
+
+async def test_cached_disagreement_does_not_flap():
+    """A real gap stays flagged on cached ticks. 0.6 vs 0.4 agrees (see above)."""
+    coord = _coord(rain_sensor="sensor.rain")
+    now = dt_util.now()
+    coord._notify_lockout_change = lambda: None
+    coord._read_heat_signal_f = lambda: 70.0
+    coord._hass.states.get.return_value = None
+    coord._hass.states.async_entity_ids.return_value = []
+
+    async def _history(*_a, **_k):
+        return 0.20
+
+    coord._tempest_history_inches = _history
+    coord._open_meteo_rain = _payload(past_72h_in=0.60)
+    coord._open_meteo_rain_at = now
+    coord._om_unconsumed_fresh = True
+    await coord._evaluate_lockout(now)
+    assert coord._rain_lockout.rain_source_disagree is True
+    flagged = coord._rain_lockout.last_event_rain_in
+    await coord._evaluate_lockout(now + timedelta(minutes=1))
+    await coord._evaluate_lockout(now + timedelta(minutes=2))
+    assert coord._rain_lockout.rain_source_disagree is True
+    assert coord._rain_lockout.last_event_rain_in == flagged
+
+
+async def test_legacy_notification_names_only_types_that_armed():
+    coord = _coord(rain_sensor="sensor.rain")
+    now = dt_util.now()
+    notes: list[dict] = []
+
+    class _Notifier:
+        async def notify(self, message, **kwargs):
+            notes.append({"message": message, **kwargs})
+
+    coord.notifier = _Notifier()
+    coord._notify_lockout_change = lambda: None
+    coord._read_heat_signal_f = lambda: 70.0
+    coord.eto_status = lambda: {"eto_in_week": 2.1}
+    states = {"sensor.rain": _state("0.25", unit_of_measurement="in")}
+    coord._hass.states.get.side_effect = lambda eid: states.get(eid)
+    coord._hass.states.async_entity_ids.return_value = []
+    coord._rain_lockout = StoredRainLockout(last_event_rain_in=0.0, baseline_seeded=True)
+
+    async def _none(*_a, **_k):
+        return None
+
+    coord._tempest_history_inches = _none
+    coord._open_meteo_for_decision = lambda _now: (None, "unavailable")
+    await coord._evaluate_lockout(now)
+    assert len(notes) == 1
+    assert notes[0]["title"] == "Rain lockout active"
+    message = notes[0]["message"]
+    assert message.startswith("Rain today (0.25 in) paused watering for ")
+    named = message.removeprefix("Rain today (0.25 in) paused watering for ").removesuffix(".")
+    assert set(part.strip() for part in named.split(",")) == {
+        "deep_drip",
+        "flowers_garden",
+        "turf",
+    }
+    assert set(notes[0]["extra"]["zone_types"]) == {"deep_drip", "flowers_garden", "turf"}
+    await coord._evaluate_lockout(now + timedelta(minutes=1))
+    assert len(notes) == 1
 
 
 async def test_lockout_paths_do_not_save_schedules_or_flip_enabled(monkeypatch):

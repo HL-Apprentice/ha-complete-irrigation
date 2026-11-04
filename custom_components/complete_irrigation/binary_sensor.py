@@ -38,6 +38,7 @@ class RainLockoutBinarySensor(BinarySensorEntity):
     _attr_name = "Rain lockout"
     _attr_icon = "mdi:weather-pouring"
     _attr_should_poll = False  # coordinator triggers updates
+    _unrecorded_attributes = frozenset({"zone_lockout_types", "rain_sources"})
 
     def __init__(self, coordinator, entry_id: str) -> None:
         self._coordinator = coordinator

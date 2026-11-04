@@ -15,6 +15,7 @@ from custom_components.complete_irrigation.rain_lockout import (
     ZONE_TURF,
     RainBlend,
     StoredRainLockout,
+    aggregate_tempest_72h,
     base_lockout_days,
     classify_zone,
     combine_rain_sources,
@@ -27,6 +28,7 @@ from custom_components.complete_irrigation.rain_lockout import (
     release_zone_type,
     scaled_lockout_hours,
     table_days,
+    zone_is_garden,
 )
 
 NOW = datetime(2026, 7, 15, 6, 0, tzinfo=UTC)
@@ -164,10 +166,18 @@ def test_zone_type_from_category_name_and_flags():
         classify_zone(entity_id="switch.citrus_row", schedule_profiles=("tree",)) == ZONE_DEEP_DRIP
     )
     assert classify_zone(entity_id="switch.birdbath") == ZONE_BIRDBATH
-    assert classify_zone(entity_id="switch.zone_9", independent=True) == ZONE_BIRDBATH
     assert classify_zone(entity_id="switch.zone_9") == ZONE_TURF  # lawn moisture default
     assert classify_zone(entity_id="switch.seed", establishment_active=True) == ZONE_GERMINATION
-    assert classify_zone(entity_id="switch.new_grass") == ZONE_GERMINATION
+    # A new-grass name does not exempt the zone once establishment has ended.
+    assert classify_zone(entity_id="switch.new_grass") == ZONE_TURF
+    assert classify_zone(entity_id="switch.flower_garden") == ZONE_FLOWERS_GARDEN
+    assert zone_is_garden(category=None, entity_id="switch.flower_garden") is False
+    # A garden name shares the flowers+garden clock. It is not a vegetable
+    # garden unless the name or category says vegetable/veg.
+    assert classify_zone(entity_id="switch.back_garden") == ZONE_FLOWERS_GARDEN
+    assert zone_is_garden(category=None, entity_id="switch.back_garden") is False
+    assert classify_zone(entity_id="switch.vegetable_bed") == ZONE_FLOWERS_GARDEN
+    assert zone_is_garden(category=None, entity_id="switch.vegetable_bed") is True
 
 
 # ── decide: per type, release, forecast, birdbath ─────────────────
@@ -329,10 +339,10 @@ def test_moisture_can_release_early_and_cannot_extend():
         active_rain=False,
         forecast_in=None,
         forecast_probability_pct=None,
-        dry_zone_types=set(),
     )
     assert wet.state.until_by_type[ZONE_TURF] == turf_until
     assert wet.state.until_by_type[ZONE_DEEP_DRIP] == deep_until
+    assert wet.state.released_zones == {}
 
     dry = decide_lockouts(
         armed,
@@ -345,14 +355,27 @@ def test_moisture_can_release_early_and_cannot_extend():
         active_rain=False,
         forecast_in=None,
         forecast_probability_pct=None,
-        dry_zone_types={ZONE_TURF},
+        dry_zones={"switch.front_lawn": ZONE_TURF},
     )
-    assert dry.state.until_by_type[ZONE_TURF] is None
+    # The type clock stays. Only the dry zone is exempt.
+    assert dry.state.until_by_type[ZONE_TURF] == turf_until
     assert dry.state.until_by_type[ZONE_DEEP_DRIP] == deep_until
-    assert (
-        dry.state.until_by_type[ZONE_TURF] is None
-        or dry.state.until_by_type[ZONE_TURF] <= turf_until
+    assert dry.state.released_zones == {"switch.front_lawn": ZONE_TURF}
+
+    same_tick = decide_lockouts(
+        None,
+        now=NOW,
+        rainfall_in=0.30,
+        blend=_blend(0.30),
+        daily_eto_in=0.12,
+        max_hours=96,
+        garden_present=False,
+        active_rain=False,
+        forecast_in=None,
+        forecast_probability_pct=None,
+        dry_zones={"switch.front_lawn": ZONE_TURF},
     )
+    assert "switch.front_lawn" not in same_tick.state.released_zones
 
 
 def test_forecast_extends_an_active_lockout_once_and_respects_the_ceiling():
@@ -437,3 +460,30 @@ def test_persistence_round_trip():
     empty = StoredRainLockout.from_dict({"lockout_until": {"turf": "not-a-date"}, "nope": 1})
     assert empty.until_by_type[ZONE_TURF] is None
     assert empty.last_event_rain_in is None
+    assert empty.baseline_seeded is False
+
+
+def test_tempest_statistics_total_increasing_and_partial_day():
+    now = NOW
+    rows = [
+        {"start": (now - timedelta(hours=70)).isoformat(), "sum": 10.0},
+        {"start": (now - timedelta(hours=2)).isoformat(), "sum": 10.5},
+    ]
+    # 0.5 in of growth. The live reading is below the running sum, so it is
+    # not added. total_increasing does not need a max column.
+    assert aggregate_tempest_72h(
+        rows, now=now, state_class="total_increasing", live_today_in=0.2, unit="in"
+    ) == pytest.approx(0.5)
+
+    window_start = now - timedelta(hours=72)
+    partial = [
+        {"start": (window_start + timedelta(hours=2)).isoformat(), "max": 0.4},
+        {"start": (window_start + timedelta(hours=6)).isoformat(), "max": 0.9},
+        {"start": (now - timedelta(hours=3)).isoformat(), "max": 0.2},
+        {"start": (now - timedelta(hours=1)).isoformat(), "max": 0.35},
+    ]
+    # Partial first day contributes 0.9 - 0.4 = 0.5, not the 0.9 peak.
+    # Today is max(0.35, live 0.5) = 0.5. Total 1.0.
+    assert aggregate_tempest_72h(
+        partial, now=now, state_class=None, live_today_in=0.5, unit="in"
+    ) == pytest.approx(1.0)
