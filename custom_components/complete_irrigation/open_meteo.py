@@ -125,15 +125,16 @@ def parse_open_meteo_rain(payload: Any, *, now: datetime | None = None) -> dict[
     ``forecast_24h_probability_pct`` is the max hourly probability in that
     window (Open-Meteo reports percent, 0-100). ``forecast_daily_eto_in`` is
     the hotter of today and tomorrow's FAO ET0, in inches. When hourly data
-    is missing, the past 72h falls back to the daily sums for the previous
-    two complete days. Today's daily sum is left out: it includes forecast
-    hours.
+    is missing, ``past_daily_in`` is the daily sums for the previous two
+    complete days. Today's daily sum is left out: it includes forecast
+    hours. That fallback is not written into ``past_72h_in``.
 
     All rain totals are inches. Missing sections stay None - the caller falls
     back to the other source.
     """
     out: dict[str, Any] = {
         "past_72h_in": None,
+        "past_daily_in": None,
         "forecast_24h_in": None,
         "forecast_24h_probability_pct": None,
         "forecast_daily_eto_in": None,
@@ -210,7 +211,7 @@ def parse_open_meteo_rain(payload: Any, *, now: datetime | None = None) -> dict[
                 total += float(day_sums[index])
                 count += 1
         if count:
-            out["past_72h_in"] = round(total / _MM_PER_INCH, 4)
+            out["past_daily_in"] = round(total / _MM_PER_INCH, 4)
 
     et0 = (
         daily.get("et0_fao_evapotranspiration")

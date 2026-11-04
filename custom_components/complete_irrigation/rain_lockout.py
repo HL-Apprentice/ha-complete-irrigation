@@ -42,6 +42,9 @@ FLAG_RAIN_SOURCE_DISAGREE = "RAIN_SOURCE_DISAGREE"
 # same deadband already used when a total falls. It sits well under the
 # 0.10 in table floor, so a real shower still arms.
 SOURCE_RISE_MIN_IN = 0.01
+# Float noise on a tenth of an inch must not clear the strict edge.
+_SOURCE_COMPARE_EPS = 1e-9
+_SOURCE_KEYS = ("tempest", "open_meteo", "open_meteo_daily")
 
 # scale = clamp(0.12 / daily_ETo, 0.5, 1.5). 0.12 in/day is the 1.0x reference
 # (a mild day). Hotter demand shortens the lockout; cool weather lengthens it,
@@ -119,13 +122,22 @@ class RainBlend:
     open_meteo_in: float | None
     disagree: bool
     used: str  # mean | conservative | tempest_only | open_meteo_only | none
+    # ``open_meteo`` is the hourly 72h total. ``open_meteo_daily`` is the
+    # complete-day fallback used only when hourly data is missing. They are
+    # different baselines: switching between them is a first look, not rain.
+    open_meteo_key: str = "open_meteo"
 
     @property
     def flag(self) -> str | None:
         return FLAG_RAIN_SOURCE_DISAGREE if self.disagree else None
 
 
-def combine_rain_sources(tempest_in: Any, open_meteo_in: Any) -> RainBlend:
+def combine_rain_sources(
+    tempest_in: Any,
+    open_meteo_in: Any,
+    *,
+    open_meteo_key: str = "open_meteo",
+) -> RainBlend:
     """Blend two 72h totals.
 
     One missing source falls back to the other (``disagree`` stays false -
@@ -135,18 +147,19 @@ def combine_rain_sources(tempest_in: Any, open_meteo_in: Any) -> RainBlend:
     """
     tempest = _clean_inches(tempest_in)
     meteo = _clean_inches(open_meteo_in)
+    key = open_meteo_key if open_meteo_key in ("open_meteo", "open_meteo_daily") else "open_meteo"
     if tempest is None and meteo is None:
-        return RainBlend(None, None, None, False, "none")
+        return RainBlend(None, None, None, False, "none", key)
     if tempest is None:
-        return RainBlend(meteo, None, meteo, False, "open_meteo_only")
+        return RainBlend(meteo, None, meteo, False, "open_meteo_only", key)
     if meteo is None:
-        return RainBlend(tempest, tempest, None, False, "tempest_only")
+        return RainBlend(tempest, tempest, None, False, "tempest_only", key)
     lo, hi = (tempest, meteo) if tempest <= meteo else (meteo, tempest)
     gap = hi - lo
     tolerance = max(RAIN_AGREE_ABS_IN, RAIN_AGREE_REL * hi)
     if gap <= tolerance:
-        return RainBlend((tempest + meteo) / 2.0, tempest, meteo, False, "mean")
-    return RainBlend(lo + RAIN_DISAGREE_BLEND * gap, tempest, meteo, True, "conservative")
+        return RainBlend((tempest + meteo) / 2.0, tempest, meteo, False, "mean", key)
+    return RainBlend(lo + RAIN_DISAGREE_BLEND * gap, tempest, meteo, True, "conservative", key)
 
 
 def table_days(rainfall_in: float) -> tuple[int, int, int] | None:
@@ -479,8 +492,22 @@ def _observed_sources(blend: RainBlend) -> dict[str, float]:
     if blend.tempest_in is not None:
         observed["tempest"] = float(blend.tempest_in)
     if blend.open_meteo_in is not None:
-        observed["open_meteo"] = float(blend.open_meteo_in)
+        key = blend.open_meteo_key if blend.open_meteo_key in _SOURCE_KEYS else "open_meteo"
+        observed[key] = float(blend.open_meteo_in)
     return observed
+
+
+def _clears_rise(value: float, prior: float) -> bool:
+    """True when ``value`` is past ``prior`` by more than the rise floor.
+
+    The extra ``1e-9`` keeps a value that is exactly one floor step, or a
+    hair over it from binary rounding, from counting as a rise.
+    """
+    return value - prior > SOURCE_RISE_MIN_IN + _SOURCE_COMPARE_EPS
+
+
+def _clears_fall(value: float, prior: float) -> bool:
+    return prior - value > SOURCE_RISE_MIN_IN + _SOURCE_COMPARE_EPS
 
 
 def _source_rose(previous: dict[str, float], observed: dict[str, float]) -> bool:
@@ -491,7 +518,7 @@ def _source_rose(previous: dict[str, float], observed: dict[str, float]) -> bool
     """
     for key, value in observed.items():
         prior = previous.get(key)
-        if prior is not None and value > prior + SOURCE_RISE_MIN_IN:
+        if prior is not None and _clears_rise(value, prior):
             return True
     return False
 
@@ -514,8 +541,12 @@ class StoredRainLockout:
     baseline_seeded: bool = True
     # Last inches seen from each source. A source that drops out keeps its
     # previous value so the recovery sample is compared with that value,
-    # not treated as new rain.
+    # not treated as new rain. ``open_meteo`` and ``open_meteo_daily`` are
+    # separate keys.
     baseline_by_source: dict[str, float] = field(default_factory=dict)
+    # Keys present in the sample that wrote this state. An empty tuple means
+    # an older document: every stored baseline counts as present.
+    last_sample_sources: tuple[str, ...] = ()
 
     def with_updates(self, **kwargs: Any) -> StoredRainLockout:
         payload: dict[str, Any] = {
@@ -528,6 +559,7 @@ class StoredRainLockout:
             "released_zones": dict(self.released_zones),
             "baseline_seeded": self.baseline_seeded,
             "baseline_by_source": dict(self.baseline_by_source),
+            "last_sample_sources": tuple(self.last_sample_sources),
         }
         payload.update(kwargs)
         return StoredRainLockout(**payload)
@@ -544,12 +576,17 @@ class StoredRainLockout:
         self.released_zones = cleaned
         baselines: dict[str, float] = {}
         for key, value in (self.baseline_by_source or {}).items():
-            if key not in ("tempest", "open_meteo"):
+            if key not in _SOURCE_KEYS:
                 continue
             inches = _clean_inches(value)
             if inches is not None:
                 baselines[str(key)] = inches
         self.baseline_by_source = baselines
+        seen: list[str] = []
+        for key in self.last_sample_sources or ():
+            if key in _SOURCE_KEYS and key not in seen:
+                seen.append(str(key))
+        self.last_sample_sources = tuple(seen)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -569,6 +606,7 @@ class StoredRainLockout:
             "released_zones": dict(self.released_zones),
             "baseline_seeded": bool(self.baseline_seeded),
             "baseline_by_source": dict(self.baseline_by_source),
+            "last_sample_sources": list(self.last_sample_sources),
         }
 
     @classmethod
@@ -604,6 +642,8 @@ class StoredRainLockout:
             seeded = data.get("last_event_rain_in") is not None
         raw_baselines = data.get("baseline_by_source")
         baselines = raw_baselines if isinstance(raw_baselines, dict) else {}
+        raw_seen = data.get("last_sample_sources")
+        seen = tuple(str(item) for item in raw_seen) if isinstance(raw_seen, list) else ()
         return cls(
             until_by_type=until,
             last_event_rain_in=last,
@@ -614,6 +654,7 @@ class StoredRainLockout:
             released_zones=released,
             baseline_seeded=seeded,
             baseline_by_source=dict(baselines),
+            last_sample_sources=seen,
         )
 
 
@@ -677,10 +718,12 @@ def decide_lockouts(
     Rainfall and a qualifying forecast may set or extend a holding type.
     Once each source has a baseline, a lockout arms only when a source
     present in both samples rose by more than ``SOURCE_RISE_MIN_IN``.
-    That source's baseline moves only on such an arm, or on a fall of the
-    same size. A smaller step leaves the baseline where it is, so the steps
-    add up. A source that disappears keeps its last baseline, so an outage
-    and recovery is not new rain. Soil moisture may
+    That source's baseline moves only on such an arm, or when that same
+    source falls by more than the floor. The fall is not taken from the
+    blended total. A smaller step leaves the baseline where it is, so the
+    steps add up. A source that disappears keeps its last baseline, so an
+    outage and recovery is not new rain, and the hourly and daily
+    Open-Meteo figures are different sources. Soil moisture may
     only clear one zone. Birdbath follows active rain. Germination stays
     clear. The same rainfall total does not push an existing ``until`` later.
 
@@ -694,6 +737,7 @@ def decide_lockouts(
     last = state.last_event_rain_in
     released = dict(state.released_zones)
     next_baselines = dict(state.baseline_by_source)
+    next_sample = tuple(state.last_sample_sources)
     logs: list[str] = []
     armed_now: set[str] = set()
     rain = _clean_inches(rainfall_in) if rainfall_in is not None else None
@@ -704,8 +748,9 @@ def decide_lockouts(
         if rain is None:
             return LockoutUpdate(state=state, changed=False, logs=())
         seeded_last = last if last is not None else rain
+        seeded_observed = _observed_sources(blend)
         seeded_baselines = dict(next_baselines)
-        seeded_baselines.update(_observed_sources(blend))
+        seeded_baselines.update(seeded_observed)
         sources = {
             "tempest_in": blend.tempest_in,
             "open_meteo_in": blend.open_meteo_in,
@@ -720,6 +765,7 @@ def decide_lockouts(
             sources=sources,
             previous_today_in=today_in if today_in is not None else state.previous_today_in,
             baseline_by_source=seeded_baselines,
+            last_sample_sources=tuple(sorted(seeded_observed)),
         )
         return LockoutUpdate(
             state=updated,
@@ -774,7 +820,11 @@ def decide_lockouts(
     else:
         observed = _observed_sources(blend)
         previous = dict(next_baselines)
-        source_dropped = any(key not in observed for key in previous)
+        # Keys from the previous sample. An older document has none stored,
+        # so every baseline it does have counts as present.
+        previous_present = set(state.last_sample_sources) or set(previous)
+        source_dropped = any(key not in observed for key in previous_present)
+        next_sample = tuple(sorted(observed))
         if observed and previous:
             rose = _source_rose(previous, observed)
         elif observed and state.baseline_seeded and last is not None:
@@ -784,16 +834,11 @@ def decide_lockouts(
             rose = False
         else:
             rose = rain is not None and (last is None or rain > last + 0.001)
-        fell = (
-            rain is not None
-            and last is not None
-            and rain < last - SOURCE_RISE_MIN_IN
-            and not source_dropped
-        )
         # A source we have never stored is recorded, not treated as rain.
         # A source we already stored moves only when this sample arms on
         # that rise or retreats on that fall. Smaller steps stay put and
-        # accumulate against the held baseline.
+        # accumulate against the held baseline. Retreat is per source, and
+        # only when every source from the previous sample is still here.
         for key, value in observed.items():
             if key not in next_baselines:
                 next_baselines[key] = value
@@ -801,8 +846,13 @@ def decide_lockouts(
             last = rain
             for key, value in observed.items():
                 prior = previous.get(key)
-                if prior is not None and value > prior + SOURCE_RISE_MIN_IN:
+                if prior is not None and _clears_rise(value, prior):
                     next_baselines[key] = value
+            if allow_baseline_retreat and not source_dropped:
+                for key, value in observed.items():
+                    prior = previous.get(key)
+                    if prior is not None and _clears_fall(value, prior):
+                        next_baselines[key] = value
             for zone_type in HOLDING_ZONE_TYPES:
                 days = base_lockout_days(
                     rain, zone_type, garden_present=garden_present, min_inches=min_inches
@@ -820,13 +870,18 @@ def decide_lockouts(
                         f"({days}d x ETo scale, heat ceiling {max_hours}h)"
                     )
                 armed_now.add(zone_type)
-        elif fell and allow_baseline_retreat:
-            last = rain
+        elif allow_baseline_retreat and not source_dropped:
+            retreated = False
             for key, value in observed.items():
                 prior = previous.get(key)
-                if prior is not None and value < prior - SOURCE_RISE_MIN_IN:
+                if prior is not None and _clears_fall(value, prior):
                     next_baselines[key] = value
-            logs.append(f"rain total fell to {rain:.2f} in - baseline reset, lockout not extended")
+                    retreated = True
+            if retreated and rain is not None:
+                last = rain
+                logs.append(
+                    f"rain total fell to {rain:.2f} in - baseline reset, lockout not extended"
+                )
 
     # ── forecast may add one day to a lockout that is already active.
     # Cached or stale Open-Meteo data must not take this branch.
@@ -885,6 +940,7 @@ def decide_lockouts(
         released_zones=released,
         baseline_seeded=True,
         baseline_by_source=next_baselines,
+        last_sample_sources=next_sample,
     )
     changed = (
         not _untils_equal(state.until_by_type, updated.until_by_type)
@@ -893,6 +949,7 @@ def decide_lockouts(
         or state.forecast_extended != updated.forecast_extended
         or state.released_zones != updated.released_zones
         or state.baseline_by_source != updated.baseline_by_source
+        or state.last_sample_sources != updated.last_sample_sources
     )
     return LockoutUpdate(
         state=updated, changed=changed, logs=tuple(logs), armed_types=frozenset(armed_now)

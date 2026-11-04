@@ -8,6 +8,7 @@ import pytest
 
 from custom_components.complete_irrigation.rain_lockout import (
     FLAG_RAIN_SOURCE_DISAGREE,
+    SOURCE_RISE_MIN_IN,
     ZONE_BIRDBATH,
     ZONE_DEEP_DRIP,
     ZONE_FLOWERS_GARDEN,
@@ -726,6 +727,113 @@ def test_small_rises_accumulate_until_they_arm():
     )
     assert ZONE_TURF in armed.armed_types
     assert armed.state.baseline_by_source["tempest"] == pytest.approx(0.42)
+
+
+def _decide(state, rain, blend, *, when=NOW):
+    return decide_lockouts(
+        state,
+        now=when,
+        rainfall_in=rain,
+        blend=blend,
+        daily_eto_in=0.12,
+        max_hours=MILD_HOURS,
+        garden_present=False,
+        active_rain=False,
+        forecast_in=None,
+        forecast_probability_pct=None,
+    )
+
+
+def test_hourly_daily_hourly_does_not_arm():
+    hourly = RainBlend(0.60, None, 0.60, False, "open_meteo_only", "open_meteo")
+    daily = RainBlend(0.40, None, 0.40, False, "open_meteo_only", "open_meteo_daily")
+    seeded = decide_lockouts(
+        StoredRainLockout.from_dict({}),
+        now=NOW,
+        rainfall_in=0.60,
+        blend=hourly,
+        daily_eto_in=0.12,
+        max_hours=MILD_HOURS,
+        garden_present=False,
+        active_rain=False,
+        forecast_in=None,
+        forecast_probability_pct=None,
+        seed_only=True,
+    )
+    assert seeded.state.baseline_by_source["open_meteo"] == pytest.approx(0.60)
+    dropped = _decide(seeded.state, 0.40, daily, when=NOW + timedelta(minutes=30))
+    assert dropped.armed_types == frozenset()
+    assert dropped.state.baseline_by_source["open_meteo"] == pytest.approx(0.60)
+    assert dropped.state.baseline_by_source["open_meteo_daily"] == pytest.approx(0.40)
+    back = _decide(dropped.state, 0.60, hourly, when=NOW + timedelta(hours=1))
+    assert back.armed_types == frozenset()
+    assert all(until is None for until in back.state.until_by_type.values())
+    assert back.state.baseline_by_source["open_meteo"] == pytest.approx(0.60)
+
+
+def test_exact_rise_floor_does_not_arm():
+    seeded = decide_lockouts(
+        StoredRainLockout.from_dict({}),
+        now=NOW,
+        rainfall_in=1.0,
+        blend=RainBlend(1.0, None, 1.0, False, "open_meteo_only"),
+        daily_eto_in=0.12,
+        max_hours=MILD_HOURS,
+        garden_present=False,
+        active_rain=False,
+        forecast_in=None,
+        forecast_probability_pct=None,
+        seed_only=True,
+    )
+    exact_total = 1.0 + SOURCE_RISE_MIN_IN
+    exact = _decide(
+        seeded.state,
+        exact_total,
+        RainBlend(exact_total, None, exact_total, False, "open_meteo_only"),
+        when=NOW + timedelta(minutes=30),
+    )
+    assert exact.armed_types == frozenset()
+    assert exact.state.baseline_by_source["open_meteo"] == pytest.approx(1.0)
+    over = _decide(
+        exact.state,
+        1.0 + SOURCE_RISE_MIN_IN + 1e-6,
+        RainBlend(
+            1.0 + SOURCE_RISE_MIN_IN + 1e-6,
+            None,
+            1.0 + SOURCE_RISE_MIN_IN + 1e-6,
+            False,
+            "open_meteo_only",
+        ),
+        when=NOW + timedelta(hours=1),
+    )
+    assert ZONE_TURF in over.armed_types
+
+
+def test_one_source_falling_retreats_without_the_blend():
+    seeded = decide_lockouts(
+        StoredRainLockout.from_dict({}),
+        now=NOW,
+        rainfall_in=0.50,
+        blend=RainBlend(0.50, 0.50, 0.50, False, "mean"),
+        daily_eto_in=0.12,
+        max_hours=MILD_HOURS,
+        garden_present=False,
+        active_rain=False,
+        forecast_in=None,
+        forecast_probability_pct=None,
+        seed_only=True,
+    )
+    # Tempest falls 0.012 in. Open-Meteo is flat. The mean falls only 0.006 in,
+    # under the blend floor, but this source still retreats. Nothing arms.
+    retreated = _decide(
+        seeded.state,
+        0.494,
+        RainBlend(0.494, 0.488, 0.50, False, "mean"),
+        when=NOW + timedelta(minutes=30),
+    )
+    assert retreated.armed_types == frozenset()
+    assert retreated.state.baseline_by_source["tempest"] == pytest.approx(0.488)
+    assert retreated.state.baseline_by_source["open_meteo"] == pytest.approx(0.50)
 
 
 def test_rise_that_does_not_move_the_end_clears_released_zones():

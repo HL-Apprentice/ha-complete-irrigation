@@ -169,6 +169,7 @@ class IrrigationCalendar(CalendarEntity):
             created_via="calendar",
         )
         self._coordinator.schedule_store.add(sched)
+        self._coordinator.invalidate_zone_classification()
         await self._coordinator.async_save()
         _LOGGER.info(
             "Created one-off run from calendar: %s @ %s for %d min",

@@ -513,13 +513,25 @@ class ScheduleCoordinator:
         try:
             report = self.zone_lockout_report()
         except Exception:
-            report = {}
+            # A failed classification is not "no birdbath". Leave the memo
+            # empty so the next check tries again.
+            return False
         value = any(
             isinstance(info, dict) and info.get("type") == ZONE_BIRDBATH for info in report.values()
         )
         self._birdbath_memo_tick = self._lockout_tick_id
         self._birdbath_memo_value = value
         return value
+
+    def invalidate_zone_classification(self) -> None:
+        """Drop the per-tick birdbath memo and the classification cache.
+
+        Called when zone config or a schedule changes, so the next read
+        classifies again instead of keeping this tick's answer.
+        """
+        self._birdbath_memo_tick = None
+        self._zone_class_token = None
+        self._zone_class_report = None
 
     def _visible_lockout_untils(self, now: datetime | None) -> list[datetime]:
         """Ends that should light the sensor and the banner.
@@ -571,8 +583,13 @@ class ScheduleCoordinator:
             ),
             "event_rain_in": self._rain_lockout.last_event_rain_in,
             "sources": dict(self._rain_lockout.sources),
-            # Resolved lockout type per zone (override or classified). Diagnostic.
-            "zones": self.zone_lockout_report(),
+            # Resolved lockout type per zone. Reuse the report built earlier
+            # this tick instead of classifying again for the attribute read.
+            "zones": (
+                self._zone_class_report
+                if self._zone_class_report is not None
+                else self.zone_lockout_report()
+            ),
         }
 
     async def async_setup(self) -> None:
@@ -2741,7 +2758,17 @@ class ScheduleCoordinator:
         # extend via the forecast. A failed fetch is not in the blend and
         # does not raise RAIN_SOURCE_DISAGREE.
         use_om = freshness in ("fresh", "cached") and om is not None
-        om_past = om.get("past_72h_in") if use_om else None
+        om_hourly = om.get("past_72h_in") if use_om else None
+        om_daily = om.get("past_daily_in") if use_om else None
+        if isinstance(om_hourly, (int, float)):
+            om_past: float | None = float(om_hourly)
+            om_key = "open_meteo"
+        elif isinstance(om_daily, (int, float)):
+            om_past = float(om_daily)
+            om_key = "open_meteo_daily"
+        else:
+            om_past = None
+            om_key = "open_meteo"
         allow_forecast = freshness == "fresh"
         forecast_eto = om.get("forecast_daily_eto_in") if use_om else None
         current_mm = om.get("current_precip_mm") if freshness == "fresh" and om else None
@@ -2772,7 +2799,7 @@ class ScheduleCoordinator:
         if mode != getattr(self, "_rain_input_mode", None):
             self._rain_input_mode = mode
             _LOGGER.info("Rain lockout rainfall source: %s (%s)", mode, freshness)
-        blend = combine_rain_sources(tempest, om_past)
+        blend = combine_rain_sources(tempest, om_past, open_meteo_key=om_key)
         rainfall_in = blend.inches if arm_from_table else today
         if not self._rain_lockout.baseline_seeded:
             # The first tick only starts the Open-Meteo fetch. Seeding from

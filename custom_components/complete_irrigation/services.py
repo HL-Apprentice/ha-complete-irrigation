@@ -1986,6 +1986,7 @@ async def handle_add_schedule(hass: HomeAssistant, call: ServiceCall) -> None:
         split_profile=data.get("split_profile", ""),
     )
     coord.schedule_store.add(schedule)
+    coord.invalidate_zone_classification()
     await coord.async_save()
     _LOGGER.info("Added schedule %s (%s) mode=%s", schedule.id, schedule.name, schedule.mode)
     # v1.56 — base conflict check on add: notify (or hand to the LLM) if this new
@@ -2058,6 +2059,7 @@ async def handle_update_schedule(hass: HomeAssistant, call: ServiceCall) -> None
         )
     merged = existing.with_changes(**overrides)
     coord.schedule_store.upsert(merged)
+    coord.invalidate_zone_classification()
     await coord.async_save()
     _LOGGER.info("Updated schedule %s", merged.id)
     # v1.56 — re-run the base conflict check after an edit (a moved start / longer
@@ -2148,6 +2150,7 @@ async def handle_split_schedule(hass: HomeAssistant, call: ServiceCall) -> None:
     coord.schedule_store.upsert(pieces[0])
     for piece in pieces[1:]:
         coord.schedule_store.add(piece)
+    coord.invalidate_zone_classification()
     await coord.async_save()
     _LOGGER.info("Split schedule %s into %d parts", existing.id, n)
 
@@ -2175,6 +2178,7 @@ async def handle_delete_schedule(hass: HomeAssistant, call: ServiceCall) -> None
     # chunked-run blocks in flight for them (v1.25).
     sched = coord.schedule_store.get(data["schedule_id"])
     if coord.schedule_store.delete(data["schedule_id"]):
+        coord.invalidate_zone_classification()
         await coord.async_save()
         if sched is not None:
             for step in sched.all_steps():
@@ -2264,6 +2268,7 @@ async def handle_set_schedule_enabled(hass: HomeAssistant, call: ServiceCall) ->
     # new Schedule attributes don't silently get dropped here.
     new = existing.with_changes(enabled=data["enabled"])
     coord.schedule_store.upsert(new)
+    coord.invalidate_zone_classification()
     await coord.async_save()
     _LOGGER.info("Set schedule %s enabled=%s", existing.id, data["enabled"])
 
@@ -3939,6 +3944,7 @@ async def handle_set_zone_moisture(hass: HomeAssistant, call: ServiceCall) -> No
     elif previous.get("lockout_zone_type"):
         new_cfg["lockout_zone_type"] = previous["lockout_zone_type"]
     zones[zone_id] = new_cfg
+    coord.invalidate_zone_classification()
     await coord.async_save_config()
     _LOGGER.info("Zone moisture config updated for %s: %s", zone_id, data)
 
@@ -4074,6 +4080,7 @@ async def handle_start_establishment(hass: HomeAssistant, call: ServiceCall) -> 
             created_via="establishment",
         )
         coord.schedule_store.add(sched)
+    coord.invalidate_zone_classification()
 
     await coord.async_save()
     _LOGGER.info(

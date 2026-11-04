@@ -373,8 +373,8 @@ def test_birdbath_clock_is_hidden_when_no_birdbath_zone_exists():
     assert coord.is_locked_out_now() is False
     assert coord.lockout_public_state()["by_type"]["birdbath"] is None
     coord.schedule_store.add(_daily("bath", "switch.birdbath", hour=6, minute=0))
-    # The birdbath answer is cached for the tick. The next tick sees the zone.
-    coord._lockout_tick_id += 1
+    # Adding a schedule drops the per-tick memo. The same tick then sees it.
+    coord.invalidate_zone_classification()
     coord._recompute_lockout_until()
     assert coord.lockout_until == soon
     assert coord.is_locked_out_now() is True
@@ -401,6 +401,39 @@ def test_birdbath_lookup_is_once_per_tick():
     coord._lockout_tick_id = 2
     assert coord._has_birdbath_zone() is False
     assert calls["n"] == 2
+
+
+def test_birdbath_memo_ignores_a_failed_classification_and_public_state_uses_the_cache():
+    coord = _coord()
+    coord._lockout_tick_id = 1
+
+    def _boom():
+        raise RuntimeError("classify")
+
+    coord.zone_lockout_report = _boom
+    assert coord._has_birdbath_zone() is False
+    assert coord._birdbath_memo_tick is None
+    coord.zone_lockout_report = lambda: {"switch.birdbath": {"type": "birdbath"}}
+    assert coord._has_birdbath_zone() is True
+
+    coord._zone_class_report = {
+        "switch.beds": {"type": "turf", "override": None, "source": "classified"}
+    }
+    coord._zone_class_token = ("cached",)
+    calls = {"n": 0}
+    original = coord._classification_token
+
+    def _counted():
+        calls["n"] += 1
+        return original()
+
+    coord._classification_token = _counted
+    zones = coord.lockout_public_state()["zones"]
+    assert calls["n"] == 0
+    assert zones["switch.beds"]["type"] == "turf"
+    coord.invalidate_zone_classification()
+    assert coord._zone_class_report is None
+    assert coord._birdbath_memo_tick is None
 
 
 def test_classification_cache_tracks_date_steps_and_friendly_name(monkeypatch):
