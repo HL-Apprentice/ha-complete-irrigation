@@ -329,6 +329,9 @@ class ScheduleCoordinator:
         self._entry_id = entry_id
         self._store: ScheduleStore = ScheduleStore()
         self._last_tick: datetime | None = None
+        self._lockout_tick_id = 0
+        self._birdbath_memo_tick: int | None = None
+        self._birdbath_memo_value = False
         self._cancel_tick = None
         # Weather + zone config: {rain_sensor, weather_entity, hot_threshold_f,
         #   boost_percent, zones: {zone_id: {moisture_entities: [...],
@@ -500,14 +503,23 @@ class ScheduleCoordinator:
         return self._any_lockout_active(dt_util.now())
 
     def _has_birdbath_zone(self) -> bool:
-        """True when some known zone resolves to birdbath."""
+        """True when some known zone resolves to birdbath.
+
+        The answer is computed once per tick. Repeating it would rebuild the
+        classification token on every sensor and banner check.
+        """
+        if self._birdbath_memo_tick == self._lockout_tick_id:
+            return self._birdbath_memo_value
         try:
             report = self.zone_lockout_report()
         except Exception:
-            return False
-        return any(
+            report = {}
+        value = any(
             isinstance(info, dict) and info.get("type") == ZONE_BIRDBATH for info in report.values()
         )
+        self._birdbath_memo_tick = self._lockout_tick_id
+        self._birdbath_memo_value = value
+        return value
 
     def _visible_lockout_untils(self, now: datetime | None) -> list[datetime]:
         """Ends that should light the sensor and the banner.
@@ -546,11 +558,13 @@ class ScheduleCoordinator:
 
     def lockout_public_state(self) -> dict[str, Any]:
         """Panel / sensor snapshot. `until` values are ISO strings or None."""
+        skip_birdbath = not self._has_birdbath_zone()
+        by_type: dict[str, str | None] = {}
+        for zone_type, until in self._rain_lockout.until_by_type.items():
+            visible = None if skip_birdbath and zone_type == ZONE_BIRDBATH else until
+            by_type[zone_type] = visible.isoformat() if visible else None
         return {
-            "by_type": {
-                zone_type: (until.isoformat() if until else None)
-                for zone_type, until in self._rain_lockout.until_by_type.items()
-            },
+            "by_type": by_type,
             "rain_source_disagree": self._rain_lockout.rain_source_disagree,
             "rain_source_flag": (
                 "RAIN_SOURCE_DISAGREE" if self._rain_lockout.rain_source_disagree else None
@@ -1268,6 +1282,9 @@ class ScheduleCoordinator:
         if self._last_tick is None:
             self._last_tick = now
             return
+
+        # One classification pass for the birdbath-visibility checks below.
+        self._lockout_tick_id += 1
 
         # Evaluate rain lockout on every tick, then flip the binary sensor
         # if a clock expired between notifications (should_poll is False).

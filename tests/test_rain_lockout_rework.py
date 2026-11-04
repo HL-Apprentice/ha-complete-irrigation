@@ -371,10 +371,36 @@ def test_birdbath_clock_is_hidden_when_no_birdbath_zone_exists():
     coord._recompute_lockout_until()
     assert coord.lockout_until is None
     assert coord.is_locked_out_now() is False
+    assert coord.lockout_public_state()["by_type"]["birdbath"] is None
     coord.schedule_store.add(_daily("bath", "switch.birdbath", hour=6, minute=0))
+    # The birdbath answer is cached for the tick. The next tick sees the zone.
+    coord._lockout_tick_id += 1
     coord._recompute_lockout_until()
     assert coord.lockout_until == soon
     assert coord.is_locked_out_now() is True
+    assert coord.lockout_public_state()["by_type"]["birdbath"] == soon.isoformat()
+
+
+def test_birdbath_lookup_is_once_per_tick():
+    coord = _coord()
+    later = dt_util.now() + timedelta(hours=1)
+    coord._rain_lockout = StoredRainLockout(until_by_type={ZONE_TURF: later, "birdbath": later})
+    calls = {"n": 0}
+    original = coord._classification_token
+
+    def _counted():
+        calls["n"] += 1
+        return original()
+
+    coord._classification_token = _counted
+    coord._lockout_tick_id = 1
+    assert coord._has_birdbath_zone() is False
+    coord._recompute_lockout_until()
+    assert coord.is_locked_out_now() is True
+    assert calls["n"] == 1
+    coord._lockout_tick_id = 2
+    assert coord._has_birdbath_zone() is False
+    assert calls["n"] == 2
 
 
 def test_classification_cache_tracks_date_steps_and_friendly_name(monkeypatch):

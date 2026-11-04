@@ -676,8 +676,11 @@ def decide_lockouts(
 
     Rainfall and a qualifying forecast may set or extend a holding type.
     Once each source has a baseline, a lockout arms only when a source
-    present in both samples rose. A source that disappears keeps its last
-    baseline, so an outage and recovery is not new rain. Soil moisture may
+    present in both samples rose by more than ``SOURCE_RISE_MIN_IN``.
+    That source's baseline moves only on such an arm, or on a fall of the
+    same size. A smaller step leaves the baseline where it is, so the steps
+    add up. A source that disappears keeps its last baseline, so an outage
+    and recovery is not new rain. Soil moisture may
     only clear one zone. Birdbath follows active rain. Germination stays
     clear. The same rainfall total does not push an existing ``until`` later.
 
@@ -771,7 +774,6 @@ def decide_lockouts(
     else:
         observed = _observed_sources(blend)
         previous = dict(next_baselines)
-        next_baselines.update(observed)
         source_dropped = any(key not in observed for key in previous)
         if observed and previous:
             rose = _source_rose(previous, observed)
@@ -782,9 +784,25 @@ def decide_lockouts(
             rose = False
         else:
             rose = rain is not None and (last is None or rain > last + 0.001)
-        fell = rain is not None and last is not None and rain < last - 0.01 and not source_dropped
+        fell = (
+            rain is not None
+            and last is not None
+            and rain < last - SOURCE_RISE_MIN_IN
+            and not source_dropped
+        )
+        # A source we have never stored is recorded, not treated as rain.
+        # A source we already stored moves only when this sample arms on
+        # that rise or retreats on that fall. Smaller steps stay put and
+        # accumulate against the held baseline.
+        for key, value in observed.items():
+            if key not in next_baselines:
+                next_baselines[key] = value
         if rose and rain is not None:
             last = rain
+            for key, value in observed.items():
+                prior = previous.get(key)
+                if prior is not None and value > prior + SOURCE_RISE_MIN_IN:
+                    next_baselines[key] = value
             for zone_type in HOLDING_ZONE_TYPES:
                 days = base_lockout_days(
                     rain, zone_type, garden_present=garden_present, min_inches=min_inches
@@ -804,6 +822,10 @@ def decide_lockouts(
                 armed_now.add(zone_type)
         elif fell and allow_baseline_retreat:
             last = rain
+            for key, value in observed.items():
+                prior = previous.get(key)
+                if prior is not None and value < prior - SOURCE_RISE_MIN_IN:
+                    next_baselines[key] = value
             logs.append(f"rain total fell to {rain:.2f} in - baseline reset, lockout not extended")
 
     # ── forecast may add one day to a lockout that is already active.

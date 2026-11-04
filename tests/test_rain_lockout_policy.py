@@ -620,7 +620,9 @@ def test_tiny_source_revision_does_not_arm():
     )
     assert revised.armed_types == frozenset()
     assert all(until is None for until in revised.state.until_by_type.values())
-    # 0.02 in on the same source is a real addition and arms.
+    # The 0.005 in step does not move the baseline.
+    assert revised.state.baseline_by_source["open_meteo"] == pytest.approx(0.60)
+    # 0.62 is 0.02 in above that held baseline, so it arms.
     real = decide_lockouts(
         revised.state,
         now=NOW + timedelta(minutes=60),
@@ -634,6 +636,96 @@ def test_tiny_source_revision_does_not_arm():
         forecast_probability_pct=None,
     )
     assert ZONE_TURF in real.armed_types
+    assert real.state.baseline_by_source["open_meteo"] == pytest.approx(0.62)
+
+
+def test_small_rises_accumulate_until_they_arm():
+    seeded = decide_lockouts(
+        StoredRainLockout.from_dict({}),
+        now=NOW,
+        rainfall_in=0.50,
+        blend=RainBlend(0.50, 0.40, 0.60, False, "mean"),
+        daily_eto_in=0.12,
+        max_hours=MILD_HOURS,
+        garden_present=False,
+        active_rain=False,
+        forecast_in=None,
+        forecast_probability_pct=None,
+        seed_only=True,
+    )
+    # +0.008 then +0.008. Neither step clears 0.01 in alone.
+    first = decide_lockouts(
+        seeded.state,
+        now=NOW + timedelta(minutes=30),
+        rainfall_in=0.504,
+        blend=RainBlend(0.504, 0.40, 0.608, False, "mean"),
+        daily_eto_in=0.12,
+        max_hours=MILD_HOURS,
+        garden_present=False,
+        active_rain=False,
+        forecast_in=None,
+        forecast_probability_pct=None,
+    )
+    assert first.armed_types == frozenset()
+    assert first.state.baseline_by_source["open_meteo"] == pytest.approx(0.60)
+    second = decide_lockouts(
+        first.state,
+        now=NOW + timedelta(minutes=60),
+        rainfall_in=0.508,
+        blend=RainBlend(0.508, 0.40, 0.616, False, "mean"),
+        daily_eto_in=0.12,
+        max_hours=MILD_HOURS,
+        garden_present=False,
+        active_rain=False,
+        forecast_in=None,
+        forecast_probability_pct=None,
+    )
+    assert ZONE_TURF in second.armed_types
+    assert second.state.baseline_by_source["open_meteo"] == pytest.approx(0.616)
+
+    # A steady +0.01 in per sample is not a strict rise on its own.
+    # The second sample is +0.02 in against the held baseline and arms.
+    held = decide_lockouts(
+        StoredRainLockout.from_dict({}),
+        now=NOW,
+        rainfall_in=0.40,
+        blend=RainBlend(0.40, 0.40, 0.40, False, "mean"),
+        daily_eto_in=0.12,
+        max_hours=MILD_HOURS,
+        garden_present=False,
+        active_rain=False,
+        forecast_in=None,
+        forecast_probability_pct=None,
+        seed_only=True,
+    )
+    step = decide_lockouts(
+        held.state,
+        now=NOW + timedelta(minutes=30),
+        rainfall_in=0.405,
+        blend=RainBlend(0.405, 0.41, 0.40, False, "mean"),
+        daily_eto_in=0.12,
+        max_hours=MILD_HOURS,
+        garden_present=False,
+        active_rain=False,
+        forecast_in=None,
+        forecast_probability_pct=None,
+    )
+    assert step.armed_types == frozenset()
+    assert step.state.baseline_by_source["tempest"] == pytest.approx(0.40)
+    armed = decide_lockouts(
+        step.state,
+        now=NOW + timedelta(hours=1),
+        rainfall_in=0.41,
+        blend=RainBlend(0.41, 0.42, 0.40, False, "mean"),
+        daily_eto_in=0.12,
+        max_hours=MILD_HOURS,
+        garden_present=False,
+        active_rain=False,
+        forecast_in=None,
+        forecast_probability_pct=None,
+    )
+    assert ZONE_TURF in armed.armed_types
+    assert armed.state.baseline_by_source["tempest"] == pytest.approx(0.42)
 
 
 def test_rise_that_does_not_move_the_end_clears_released_zones():

@@ -137,9 +137,9 @@ def test_rain_parser_falls_back_to_daily_sums():
         },
         now=now,
     )
-    # Today + previous 2 days (Nov 2 is 2 days before Nov 4? Nov 4-2=Nov 2).
-    # age 0, 1, 2 -> Nov 4, Nov 3, Nov 2 = 25.4+25.4+2.0 mm. Nov 1 is age 3, excluded.
-    assert parsed["past_72h_in"] == round((25.4 + 25.4 + 2.0) / 25.4, 4)
+    # Previous two complete days only. Today (Nov 4, 25.4 mm) includes
+    # forecast hours, and Nov 1 is three days back. Nov 3 + Nov 2 = 27.4 mm.
+    assert parsed["past_72h_in"] == round((25.4 + 2.0) / 25.4, 4)
     assert parsed["forecast_24h_in"] == 1.0  # today's daily bucket, first in-window
     assert parsed["forecast_24h_probability_pct"] == 70
     # max(today 5.08, tomorrow 7.62) mm -> 0.3 in
