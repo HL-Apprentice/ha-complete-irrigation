@@ -117,8 +117,11 @@ def _as_naive(moment: datetime) -> datetime:
 def parse_open_meteo_rain(payload: Any, *, now: datetime | None = None) -> dict[str, Any]:
     """Pull the lockout's rain figures out of an Open-Meteo forecast payload.
 
-    ``past_72h_in`` sums hourly precipitation whose hour-start falls in
-    ``(now-72h, now]``. ``forecast_24h_in`` sums ``(now, now+24h]``, and
+    ``past_72h_in`` sums completed hours only: hour-start in
+    ``(-72h, -1h]``. The in-progress hour is excluded (Open-Meteo revises it,
+    and it is still falling). The hour that starts exactly 72h ago is outside
+    the window, matching the Tempest statistic window. ``forecast_24h_in``
+    sums ``(now, now+24h]``, and
     ``forecast_24h_probability_pct`` is the max hourly probability in that
     window (Open-Meteo reports percent, 0-100). ``forecast_daily_eto_in`` is
     the hotter of today and tomorrow's FAO ET0, in inches. When hourly data
@@ -162,11 +165,12 @@ def parse_open_meteo_rain(payload: Any, *, now: datetime | None = None) -> dict[
             if not isinstance(millimeters, (int, float)):
                 continue
             delta_h = (_as_naive(stamp) - now_cmp).total_seconds() / 3600.0
-            if -72.0 <= delta_h <= 0.0:
+            if -72.0 < delta_h <= -1.0:
                 past += float(millimeters)
                 past_n += 1
-                if -1.0 <= delta_h <= 0.0:
-                    current_mm = float(millimeters)
+            elif -1.0 < delta_h <= 0.0:
+                # In-progress hour. Used for "raining now", not the 72h total.
+                current_mm = float(millimeters)
             elif 0.0 < delta_h <= 24.0:
                 future += float(millimeters)
                 future_n += 1

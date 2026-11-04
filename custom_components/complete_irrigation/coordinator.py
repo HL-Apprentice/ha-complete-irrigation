@@ -76,6 +76,7 @@ from .plant import PlantStore
 from .rain_lockout import (
     ALL_ZONE_TYPES,
     HOLDING_ZONE_TYPES,
+    ZONE_BIRDBATH,
     ZONE_FLOWERS_GARDEN,
     ZONE_GERMINATION,
     StoredRainLockout,
@@ -141,6 +142,31 @@ _OM_CACHE = timedelta(minutes=30)
 _OM_TIMEOUT_TOTAL_S = 15
 _OM_TIMEOUT_CONNECT_S = 5
 _OM_TIMEOUT_SOCK_READ_S = 10
+_OM_MAX_BODY = 200_000
+
+
+async def _read_body_capped(resp: Any, limit: int = _OM_MAX_BODY) -> bytes | None:
+    """Read a response to EOF, refusing anything over ``limit``.
+
+    ``resp.content.read(n)`` returns at most one buffered chunk, so a body
+    that arrives in several chunks would be parsed truncated. Content-Length
+    is checked first; a missing or lying length still stops at ``limit``.
+    """
+    length = getattr(resp, "content_length", None)
+    if isinstance(length, int) and length > limit:
+        return None
+    content = getattr(resp, "content", None)
+    if content is None or not hasattr(content, "iter_chunked"):
+        return None
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in content.iter_chunked(65536):
+        total += len(chunk)
+        if total > limit:
+            return None
+        chunks.append(chunk)
+    return b"".join(chunks)
+
 
 # v1.19 — auto-soak defaults + give-up cooldown. After soak_max_cycles
 # fail to raise moisture above min_pct, the zone won't re-attempt for
@@ -473,10 +499,37 @@ class ScheduleCoordinator:
 
         return self._any_lockout_active(dt_util.now())
 
-    def _any_lockout_active(self, now: datetime) -> bool:
+    def _has_birdbath_zone(self) -> bool:
+        """True when some known zone resolves to birdbath."""
+        try:
+            report = self.zone_lockout_report()
+        except Exception:
+            return False
         return any(
-            until is not None and now < until for until in self._rain_lockout.until_by_type.values()
+            isinstance(info, dict) and info.get("type") == ZONE_BIRDBATH for info in report.values()
         )
+
+    def _visible_lockout_untils(self, now: datetime | None) -> list[datetime]:
+        """Ends that should light the sensor and the banner.
+
+        A birdbath clock is real for a birdbath zone and invisible when the
+        property has none. Otherwise a 20-minute active-rain hold turns the
+        Rain lockout sensor on for a yard that does not have one.
+        """
+        skip_birdbath = not self._has_birdbath_zone()
+        found: list[datetime] = []
+        for zone_type, until in self._rain_lockout.until_by_type.items():
+            if until is None:
+                continue
+            if skip_birdbath and zone_type == ZONE_BIRDBATH:
+                continue
+            if now is not None and not until > now:
+                continue
+            found.append(until)
+        return found
+
+    def _any_lockout_active(self, now: datetime) -> bool:
+        return bool(self._visible_lockout_untils(now))
 
     def is_zone_locked_out(self, zone_entity_id: str, now: datetime | None = None) -> bool:
         """True when this zone's type is inside its lockout. Germination never is."""
@@ -2114,11 +2167,7 @@ class ScheduleCoordinator:
             now = dt_util.now()
         except Exception:
             now = None
-        active = [
-            until
-            for until in self._rain_lockout.until_by_type.values()
-            if until is not None and (now is None or until > now)
-        ]
+        active = self._visible_lockout_untils(now)
         self.lockout_until = max(active) if active else None
 
     def _touch_lockout_listeners(self) -> None:
@@ -2173,11 +2222,7 @@ class ScheduleCoordinator:
             from homeassistant.util import dt as dt_util
 
             now = dt_util.now()
-            upcoming = [
-                until
-                for until in self._rain_lockout.until_by_type.values()
-                if until is not None and until > now
-            ]
+            upcoming = self._visible_lockout_untils(now)
             if not upcoming:
                 return
             from homeassistant.core import callback
@@ -2251,6 +2296,10 @@ class ScheduleCoordinator:
 
     def _establishment_window(self, sched, today) -> bool:
         if getattr(sched, "created_via", "") != "establishment":
+            return False
+        # A watering hold disables schedules. A paused establishment window
+        # must not keep the zone exempt from the rain lockout.
+        if not getattr(sched, "enabled", False):
             return False
         start = getattr(sched, "start_date", None)
         end = getattr(sched, "end_date", None)
@@ -2580,7 +2629,10 @@ class ScheduleCoordinator:
                 if resp.status != 200:
                     _LOGGER.debug("Open-Meteo rain HTTP %s", resp.status)
                     return None
-                raw = await resp.content.read(200_000)
+                raw = await _read_body_capped(resp)
+                if raw is None:
+                    _LOGGER.debug("Open-Meteo rain body missing or over the size cap")
+                    return None
             return parse_open_meteo_rain(_json.loads(raw), now=now)
         except Exception as err:
             _LOGGER.debug("Open-Meteo rain fetch failed: %s", err)
@@ -3288,7 +3340,10 @@ class ScheduleCoordinator:
                 if resp.status != 200:
                     _LOGGER.warning("auto-ETo (Open-Meteo): HTTP %s", resp.status)
                     return
-                raw = await resp.content.read(200_000)
+                raw = await _read_body_capped(resp)
+                if raw is None:
+                    _LOGGER.warning("auto-ETo (Open-Meteo): body missing or over the size cap")
+                    return
         except Exception as err:
             _LOGGER.warning("auto-ETo (Open-Meteo): fetch failed: %s", err)
             return

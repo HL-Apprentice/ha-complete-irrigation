@@ -95,12 +95,33 @@ def test_rain_parser_sums_72h_and_the_next_24h():
         },
         now=now,
     )
-    # 10:00, 11:00 and 12:00 are inside the trailing 72h: 6 mm.
-    assert parsed["past_72h_in"] == round(6.0 / 25.4, 4)
+    # 10:00 and 11:00 are completed hours. 12:00 is the in-progress hour
+    # and is not part of the 72h total. 3 mm.
+    assert parsed["past_72h_in"] == round(3.0 / 25.4, 4)
     # Only 13:00 is inside the next 24h: 25.4 mm = 1 in, probability 80.
     assert parsed["forecast_24h_in"] == 1.0
     assert parsed["forecast_24h_probability_pct"] == 80
     assert parsed["current_precip_mm"] == 3.0
+
+
+def test_rain_parser_drops_the_current_hour_and_the_73rd_bucket():
+    now = datetime(2026, 11, 4, 12, 0)
+    parsed = parse_open_meteo_rain(
+        {
+            "hourly": {
+                "time": [
+                    "2026-11-01T12:00",  # exactly -72h, the extra bucket
+                    "2026-11-01T13:00",  # -71h, inside
+                    "2026-11-04T11:00",  # last completed hour
+                    "2026-11-04T12:00",  # in progress
+                ],
+                "precipitation": [100.0, 25.4, 25.4, 50.0],
+            }
+        },
+        now=now,
+    )
+    assert parsed["past_72h_in"] == round(50.8 / 25.4, 4)
+    assert parsed["current_precip_mm"] == 50.0
 
 
 def test_rain_parser_falls_back_to_daily_sums():

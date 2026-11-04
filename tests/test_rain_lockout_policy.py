@@ -591,6 +591,51 @@ def test_source_dropout_and_recovery_does_not_arm():
     assert swapped.state.baseline_by_source["open_meteo"] == pytest.approx(0.60)
 
 
+def test_tiny_source_revision_does_not_arm():
+    seeded = decide_lockouts(
+        StoredRainLockout.from_dict({}),
+        now=NOW,
+        rainfall_in=0.50,
+        blend=RainBlend(0.50, 0.40, 0.60, False, "mean"),
+        daily_eto_in=0.12,
+        max_hours=MILD_HOURS,
+        garden_present=False,
+        active_rain=False,
+        forecast_in=None,
+        forecast_probability_pct=None,
+        seed_only=True,
+    )
+    # Open-Meteo ticks up 0.005 in. Under the 0.01 in rise floor.
+    revised = decide_lockouts(
+        seeded.state,
+        now=NOW + timedelta(minutes=30),
+        rainfall_in=0.5025,
+        blend=RainBlend(0.5025, 0.40, 0.605, False, "mean"),
+        daily_eto_in=0.12,
+        max_hours=MILD_HOURS,
+        garden_present=False,
+        active_rain=False,
+        forecast_in=None,
+        forecast_probability_pct=None,
+    )
+    assert revised.armed_types == frozenset()
+    assert all(until is None for until in revised.state.until_by_type.values())
+    # 0.02 in on the same source is a real addition and arms.
+    real = decide_lockouts(
+        revised.state,
+        now=NOW + timedelta(minutes=60),
+        rainfall_in=0.51,
+        blend=RainBlend(0.51, 0.40, 0.62, False, "mean"),
+        daily_eto_in=0.12,
+        max_hours=MILD_HOURS,
+        garden_present=False,
+        active_rain=False,
+        forecast_in=None,
+        forecast_probability_pct=None,
+    )
+    assert ZONE_TURF in real.armed_types
+
+
 def test_rise_that_does_not_move_the_end_clears_released_zones():
     armed = decide_lockouts(
         None,

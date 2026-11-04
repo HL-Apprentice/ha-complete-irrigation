@@ -324,6 +324,59 @@ def test_germination_follows_the_window_and_birdbath_needs_a_clock():
     assert coord._weather_states() == ["rainy"]
 
 
+def test_disabled_establishment_schedule_does_not_exempt_the_zone():
+    coord = _coord()
+    later = dt_util.now() + timedelta(hours=5)
+    coord._rain_lockout = StoredRainLockout(until_by_type={ZONE_TURF: later})
+    today = dt_util.now().date()
+    paused = _daily(
+        "sprouts",
+        "switch.sprouts",
+        hour=6,
+        minute=0,
+        created_via="establishment",
+        start_date=today - timedelta(days=1),
+        end_date=today + timedelta(days=5),
+        enabled=False,
+    )
+    coord.schedule_store.add(paused)
+    assert coord.zone_lockout_type("switch.sprouts") == ZONE_TURF
+    assert coord.is_zone_locked_out("switch.sprouts") is True
+    coord.schedule_store.upsert(
+        _daily(
+            "sprouts",
+            "switch.sprouts",
+            hour=6,
+            minute=0,
+            created_via="establishment",
+            start_date=today - timedelta(days=1),
+            end_date=today + timedelta(days=5),
+            enabled=True,
+        )
+    )
+    assert coord.zone_lockout_type("switch.sprouts") == ZONE_GERMINATION
+    assert coord.is_zone_locked_out("switch.sprouts") is False
+
+
+def test_birdbath_clock_is_hidden_when_no_birdbath_zone_exists():
+    coord = _coord()
+    soon = dt_util.now() + timedelta(minutes=20)
+    later = dt_util.now() + timedelta(hours=2)
+    coord._rain_lockout = StoredRainLockout(until_by_type={"birdbath": soon, ZONE_TURF: later})
+    coord._recompute_lockout_until()
+    # The banner follows turf. The 20-minute birdbath hold does not.
+    assert coord.lockout_until == later
+    assert coord.is_locked_out_now() is True
+    coord._rain_lockout = StoredRainLockout(until_by_type={"birdbath": soon})
+    coord._recompute_lockout_until()
+    assert coord.lockout_until is None
+    assert coord.is_locked_out_now() is False
+    coord.schedule_store.add(_daily("bath", "switch.birdbath", hour=6, minute=0))
+    coord._recompute_lockout_until()
+    assert coord.lockout_until == soon
+    assert coord.is_locked_out_now() is True
+
+
 def test_classification_cache_tracks_date_steps_and_friendly_name(monkeypatch):
     from custom_components.complete_irrigation.schedule import ZoneStep
 
@@ -636,6 +689,73 @@ async def test_open_meteo_request_sets_explicit_timeouts():
     assert timeout.connect == coord_mod._OM_TIMEOUT_CONNECT_S
     assert timeout.sock_read == coord_mod._OM_TIMEOUT_SOCK_READ_S
     assert "past_days=3" in seen["url"]
+
+
+async def test_open_meteo_body_is_read_to_eof_and_capped():
+    import json
+    from datetime import UTC, datetime
+
+    coord = _coord()
+    coord._hass.config.latitude = 33.3
+    coord._hass.config.longitude = -111.8
+    coord._hass.config.time_zone = "America/Phoenix"
+    body = json.dumps(
+        {
+            "hourly": {
+                "time": ["2026-11-04T10:00"],
+                "precipitation": [25.4],
+            }
+        }
+    ).encode()
+
+    class _Content:
+        def __init__(self, chunks):
+            self._chunks = chunks
+
+        async def iter_chunked(self, _size):
+            for chunk in self._chunks:
+                yield chunk
+
+    class _Resp:
+        def __init__(self, chunks, content_length=None, status=200):
+            self.status = status
+            self.content_length = content_length
+            self.content = _Content(chunks)
+
+    class _CM:
+        def __init__(self, resp):
+            self._resp = resp
+
+        async def __aenter__(self):
+            return self._resp
+
+        async def __aexit__(self, *_a):
+            return False
+
+    class _Session:
+        def __init__(self):
+            self.resp = None
+
+        def get(self, url, timeout=None, **_k):
+            return _CM(self.resp)
+
+    session = _Session()
+    # Two chunks. read(n) would have kept only the first and failed JSON.
+    session.resp = _Resp([body[:8], body[8:]])
+
+    import homeassistant.helpers.aiohttp_client as aio_mod
+
+    original = aio_mod.async_get_clientsession
+    aio_mod.async_get_clientsession = lambda _hass: session
+    try:
+        moment = datetime(2026, 11, 4, 12, 0, tzinfo=UTC)
+        parsed = await coord._fetch_open_meteo_rain(moment)
+        assert parsed is not None
+        assert parsed["past_72h_in"] == 1.0
+        session.resp = _Resp([b"x" * 50], content_length=200_001)
+        assert await coord._fetch_open_meteo_rain(dt_util.now()) is None
+    finally:
+        aio_mod.async_get_clientsession = original
 
 
 async def test_cached_open_meteo_is_not_fetched_again_and_does_not_extend():

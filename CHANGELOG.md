@@ -4,23 +4,6 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
-## v1.63.0 — unreleased on origin/main — minor
-
-Not tagged. These commits are already on `main` ahead of tag v1.62.2 and ship
-with the next release:
-
-- **Service handlers are importable.** The 52 handlers that lived inside a
-  2,805-line closure are module-level functions. `get_config` redacts secrets
-  with a fail-closed pattern match instead of a deny-list.
-- **Redaction holes closed.** Nested config, bare `*_key` names, and a blanket
-  `*_set` bypass no longer leak into the panel payload.
-- **Privacy scan.** `scripts/privacy-scan.py` reads the whole tracked tree
-  (not the diff) for private IPs, paths, emails, and coordinate pairs, and CI
-  runs it on every push. The published parcel bbox and LAN example endpoint
-  were replaced in the current tree only. Git history was not rewritten:
-  `git log` still contains both values in commits before `0f28300`, and so do
-  the release tarballs of those tags.
-
 ## v1.64.0 — 2026-11-04 — minor
 
 **Rain lockout follows the storm and the heat, per zone type.**
@@ -33,15 +16,34 @@ still caps every type: about 48 hours when it is mild, 24 hours at 105F, down
 to 18 hours at 115F. A large rain therefore often ends every holding type at
 the same time. Whether the ceiling should be per type instead is an owner
 decision; this release does not change the ceiling. Birdbath zones pause only
-while rain is falling. Only an active establishment schedule is germination
-(never locked out). A finished scheduled run releases that one zone, not the
-whole type. Soil moisture below a zone's minimum can release that zone early,
-not its neighbors, and not on the same tick the lockout armed. Moisture never
-lengthens a lockout. A fresh forecast of at least 0.25 in at 60% or higher
-within 24 hours can add one day to an already-active lockout, still inside the
-heat ceiling. The clocks persist in their own storage file. `extend_rain_lockout`
-adds time on request, skipped runs show up in history, and the rain-lockout
-sensor turns off when the clock expires.
+while rain is falling, and that short clock lights the rain-lockout sensor
+only when a birdbath zone exists. Only an enabled establishment schedule
+inside its dates is germination (never locked out). A finished scheduled run
+releases that one zone, not the whole type. A later rise has to be at least
+0.01 in on a source that was already in the blend; Open-Meteo's in-progress
+hour is not part of the 72h total. Soil moisture below a zone's minimum can
+release that zone early, not its neighbors, and not on the same tick the
+lockout armed. Moisture never lengthens a lockout. A fresh forecast of at
+least 0.25 in at 60% or higher within 24 hours can add one day to an
+already-active lockout, still inside the heat ceiling. The clocks persist in
+their own storage file. `extend_rain_lockout` adds time on request, skipped
+runs show up in history, and the rain-lockout sensor turns off when the clock
+expires.
+
+These were written up as an unreleased 1.63.0. That version will not be
+tagged; they ship in 1.64.0:
+
+- **Service handlers are importable.** The 52 handlers that lived inside a
+  2,805-line closure are module-level functions. `get_config` redacts secrets
+  with a fail-closed pattern match instead of a deny-list.
+- **Redaction holes closed.** Nested config, bare `*_key` names, and a blanket
+  `*_set` bypass no longer leak into the panel payload.
+- **Privacy scan.** `scripts/privacy-scan.py` reads the whole tracked tree
+  (not the diff) for private IPs, paths, emails, and coordinate pairs, and CI
+  runs it on every push. The published parcel bbox and LAN example endpoint
+  were replaced in the current tree only. Git history was not rewritten:
+  `git log` still contains both values in commits before `0f28300`, and so do
+  the release tarballs of those tags.
 
 ## v1.62.2 — 2026-07-28 — patch
 

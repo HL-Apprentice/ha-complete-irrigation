@@ -37,6 +37,11 @@ RAIN_AGREE_ABS_IN = 0.15
 RAIN_AGREE_REL = 0.40
 RAIN_DISAGREE_BLEND = 0.25
 FLAG_RAIN_SOURCE_DISAGREE = "RAIN_SOURCE_DISAGREE"
+# A per-source rise smaller than this does not arm. Open-Meteo revises
+# completed hours by fractions of a millimetre, and 0.01 in (0.25 mm) is the
+# same deadband already used when a total falls. It sits well under the
+# 0.10 in table floor, so a real shower still arms.
+SOURCE_RISE_MIN_IN = 0.01
 
 # scale = clamp(0.12 / daily_ETo, 0.5, 1.5). 0.12 in/day is the 1.0x reference
 # (a mild day). Hotter demand shortens the lockout; cool weather lengthens it,
@@ -479,10 +484,14 @@ def _observed_sources(blend: RainBlend) -> dict[str, float]:
 
 
 def _source_rose(previous: dict[str, float], observed: dict[str, float]) -> bool:
-    """True when a source that was in both samples increased."""
+    """True when a source present in both samples rose by a meaningful amount.
+
+    ``SOURCE_RISE_MIN_IN`` ignores Open-Meteo revisions and the in-progress
+    hour leaking a few hundredths into the 72h total.
+    """
     for key, value in observed.items():
         prior = previous.get(key)
-        if prior is not None and value > prior + 0.001:
+        if prior is not None and value > prior + SOURCE_RISE_MIN_IN:
             return True
     return False
 
