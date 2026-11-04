@@ -2131,30 +2131,35 @@ class ScheduleCoordinator:
         self._notify_lockout_change()
         self._schedule_lockout_expiry()
 
-    def _sync_lockout_sensor(self) -> None:
+    def _sync_lockout_sensor(self) -> bool:
         """Write the binary sensor when a lockout expires without an extend/clear.
 
         The entity uses ``should_poll = False`` and only publishes on the
         listener, so a clock that simply runs out used to leave it stuck ON.
+        Returns True when this call already armed the next expiry timer.
         """
         try:
             from homeassistant.util import dt as dt_util
 
             now = dt_util.now()
         except Exception:
-            return
+            return False
         active = self._any_lockout_active(now)
         if active == self._lockout_sensor_on:
-            return
+            return False
         self._lockout_sensor_on = active
         self._notify_lockout_change()
         self._schedule_lockout_expiry()
+        return True
 
     def _on_lockout_expiry(self, _now: datetime | None = None) -> None:
         """async_track_point_in_time callback - sensor OFF at lockout_until."""
         self._cancel_lockout_expiry = None
-        self._sync_lockout_sensor()
-        self._schedule_lockout_expiry()
+        self._recompute_lockout_until()
+        if not self._sync_lockout_sensor():
+            # Still holding another type: publish the new until and arm one timer.
+            self._notify_lockout_change()
+            self._schedule_lockout_expiry()
 
     def _schedule_lockout_expiry(self) -> None:
         cancel = self._cancel_lockout_expiry
@@ -2311,7 +2316,7 @@ class ScheduleCoordinator:
             sched_bits = tuple(
                 (
                     sched.id,
-                    sched.zone_entity_id,
+                    tuple(step.zone_entity_id for step in sched.all_steps()),
                     sched.created_via,
                     sched.split_profile,
                     sched.start_date,
@@ -2329,7 +2334,18 @@ class ScheduleCoordinator:
             )
         except Exception:
             plant_bits = ()
-        return (tuple(zone_bits), sched_bits, plant_bits)
+        # The date drops germination when end_date passes without a schedule
+        # edit. Friendly names and every step zone are part of classification.
+        try:
+            from homeassistant.util import dt as dt_util
+
+            today = dt_util.now().date()
+        except Exception:
+            today = None
+        names = tuple(
+            (zone_id, self._zone_friendly(zone_id)) for zone_id in self._zone_ids_for_lockout()
+        )
+        return (tuple(zone_bits), sched_bits, plant_bits, names, today)
 
     def zone_lockout_type(self, zone_entity_id: str) -> str:
         """Resolved type. Cached until zone config, schedules, or plants change."""
@@ -2690,6 +2706,12 @@ class ScheduleCoordinator:
         blend = combine_rain_sources(tempest, om_past)
         rainfall_in = blend.inches if arm_from_table else today
         if not self._rain_lockout.baseline_seeded:
+            # The first tick only starts the Open-Meteo fetch. Seeding from
+            # Tempest alone would make the fresh Open-Meteo sample on the
+            # next tick look like a full storm. Wait until that fetch has
+            # stored a payload or failed.
+            if self._open_meteo_rain_at is None:
+                return
             observed = rainfall_in if rainfall_in is not None else today
             if observed is None:
                 return
@@ -2810,7 +2832,8 @@ class ScheduleCoordinator:
         """Add ``days`` to one holding type, or to all three. Starts from now if idle.
 
         A manual extend is not clamped by the heat ceiling - the caller asked
-        for it. Forecast-driven extension still is.
+        for it. Forecast-driven extension still is. Zones released early go
+        back under the clock for every type this extend touches.
         """
         from homeassistant.util import dt as dt_util
 
@@ -2818,13 +2841,22 @@ class ScheduleCoordinator:
         chosen = HOLDING_ZONE_TYPES if zone_type in ("all", "", None) else (zone_type,)
         until = dict(self._rain_lockout.until_by_type)
         delta = timedelta(days=float(days))
+        extended_types: set[str] = set()
         for zone in chosen:
             if zone not in HOLDING_ZONE_TYPES:
                 continue
             current = until.get(zone)
             base = current if current is not None and current > now else now
             until[zone] = base + delta
-        self._rain_lockout = self._rain_lockout.with_updates(until_by_type=until)
+            extended_types.add(zone)
+        released = {
+            zone_id: zone_lock_type
+            for zone_id, zone_lock_type in self._rain_lockout.released_zones.items()
+            if zone_lock_type not in extended_types
+        }
+        self._rain_lockout = self._rain_lockout.with_updates(
+            until_by_type=until, released_zones=released
+        )
         self._recompute_lockout_until()
         self._touch_lockout_listeners()
         _LOGGER.info("Rain lockout extended (%s, %.2f day(s))", zone_type, days)
@@ -2835,12 +2867,16 @@ class ScheduleCoordinator:
     ) -> None:
         """Release one zone after a scheduled run that respected the lockout.
 
-        Manual runs, ``ignore_rain_lockout`` schedules, and restart recovery
-        do not release anything. The type clock stays; only this zone is exempt
-        until the next real rainfall rise.
+        Manual runs, ``ignore_rain_lockout`` schedules, restart recovery, and
+        the Run missed / Run remainder actions do not release anything. The
+        type clock stays. The exemption lasts until that type is armed again
+        or extended by hand, including an arm whose end time does not move.
         """
         info = session or {}
         if info.get("resumed_after_restart"):
+            return
+        triggers = info.get("triggers") if isinstance(info.get("triggers"), dict) else {}
+        if "recovered_from" in triggers or triggers.get("recovery_kind"):
             return
         if info.get("source") != "scheduled":
             return

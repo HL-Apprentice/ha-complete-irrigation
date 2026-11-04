@@ -1228,6 +1228,9 @@ def _record_active_session(
     }
     if (meta or {}).get("resumed_after_restart"):
         session["resumed_after_restart"] = True
+    triggers = (meta or {}).get("triggers")
+    if isinstance(triggers, dict) and triggers:
+        session["triggers"] = dict(triggers)
     if blocks and len(blocks) > 1 and block_gap_seconds:
         session["blocks"] = [int(b) for b in blocks]
         session["block_gap_seconds"] = int(block_gap_seconds)

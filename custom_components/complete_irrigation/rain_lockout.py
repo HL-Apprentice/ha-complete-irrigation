@@ -429,6 +429,64 @@ def _parse_dt(value: Any) -> datetime | None:
         return None
 
 
+def _parse_stat_start(value: Any, now: datetime) -> datetime | None:
+    """Recorder ``start`` as a local datetime.
+
+    Home Assistant 2023.3 and later (this tree is tested on 2025.1) stores
+    ``statistics_during_period`` row ``start`` as a POSIX timestamp. Older
+    callers and tests may still pass a datetime or an ISO string. The day
+    bucket uses the local date, matching ``now``.
+    """
+    moment: datetime | None = None
+    if isinstance(value, datetime):
+        moment = value
+    elif isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            stamp = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(stamp):
+            return None
+        if now.tzinfo is not None:
+            moment = datetime.fromtimestamp(stamp, tz=now.tzinfo)
+        else:
+            moment = datetime.fromtimestamp(stamp)
+    elif isinstance(value, str) and value:
+        try:
+            moment = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    if moment is None:
+        return None
+    if now.tzinfo is not None:
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=now.tzinfo)
+        else:
+            moment = moment.astimezone(now.tzinfo)
+    elif moment.tzinfo is not None:
+        moment = moment.replace(tzinfo=None)
+    return moment
+
+
+def _observed_sources(blend: RainBlend) -> dict[str, float]:
+    """Sources present in this sample. Absent sources are omitted, not zero."""
+    observed: dict[str, float] = {}
+    if blend.tempest_in is not None:
+        observed["tempest"] = float(blend.tempest_in)
+    if blend.open_meteo_in is not None:
+        observed["open_meteo"] = float(blend.open_meteo_in)
+    return observed
+
+
+def _source_rose(previous: dict[str, float], observed: dict[str, float]) -> bool:
+    """True when a source that was in both samples increased."""
+    for key, value in observed.items():
+        prior = previous.get(key)
+        if prior is not None and value > prior + 0.001:
+            return True
+    return False
+
+
 @dataclass
 class StoredRainLockout:
     """The lockout document persisted in its own Store key."""
@@ -445,6 +503,10 @@ class StoredRainLockout:
     # (upgrade / empty file). In-memory objects default to already seeded so
     # tests and a running process arm on a real rise.
     baseline_seeded: bool = True
+    # Last inches seen from each source. A source that drops out keeps its
+    # previous value so the recovery sample is compared with that value,
+    # not treated as new rain.
+    baseline_by_source: dict[str, float] = field(default_factory=dict)
 
     def with_updates(self, **kwargs: Any) -> StoredRainLockout:
         payload: dict[str, Any] = {
@@ -456,6 +518,7 @@ class StoredRainLockout:
             "previous_today_in": self.previous_today_in,
             "released_zones": dict(self.released_zones),
             "baseline_seeded": self.baseline_seeded,
+            "baseline_by_source": dict(self.baseline_by_source),
         }
         payload.update(kwargs)
         return StoredRainLockout(**payload)
@@ -470,6 +533,14 @@ class StoredRainLockout:
             if isinstance(zone_id, str) and zone_type in HOLDING_ZONE_TYPES:
                 cleaned[zone_id] = zone_type
         self.released_zones = cleaned
+        baselines: dict[str, float] = {}
+        for key, value in (self.baseline_by_source or {}).items():
+            if key not in ("tempest", "open_meteo"):
+                continue
+            inches = _clean_inches(value)
+            if inches is not None:
+                baselines[str(key)] = inches
+        self.baseline_by_source = baselines
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -488,6 +559,7 @@ class StoredRainLockout:
             "previous_today_in": self.previous_today_in,
             "released_zones": dict(self.released_zones),
             "baseline_seeded": bool(self.baseline_seeded),
+            "baseline_by_source": dict(self.baseline_by_source),
         }
 
     @classmethod
@@ -521,6 +593,8 @@ class StoredRainLockout:
         else:
             # A stored total is already a baseline. Missing both means upgrade.
             seeded = data.get("last_event_rain_in") is not None
+        raw_baselines = data.get("baseline_by_source")
+        baselines = raw_baselines if isinstance(raw_baselines, dict) else {}
         return cls(
             until_by_type=until,
             last_event_rain_in=last,
@@ -530,6 +604,7 @@ class StoredRainLockout:
             previous_today_in=_clean_inches(data.get("previous_today_in")),
             released_zones=released,
             baseline_seeded=seeded,
+            baseline_by_source=dict(baselines),
         )
 
 
@@ -590,16 +665,23 @@ def decide_lockouts(
 ) -> LockoutUpdate:
     """Next lockout state.
 
-    Rainfall (rising 72h total) and a qualifying forecast may set or extend a
-    holding type. Soil moisture may only clear one. Birdbath follows active
-    rain. Germination stays clear. The same rainfall total does not push an
-    existing ``until`` later - that was the stuck-timer bug.
+    Rainfall and a qualifying forecast may set or extend a holding type.
+    Once each source has a baseline, a lockout arms only when a source
+    present in both samples rose. A source that disappears keeps its last
+    baseline, so an outage and recovery is not new rain. Soil moisture may
+    only clear one zone. Birdbath follows active rain. Germination stays
+    clear. The same rainfall total does not push an existing ``until`` later.
+
+    A qualifying rise is an arm even when the heat ceiling already holds the
+    end time. That arm, like a manual extend, clears ``released_zones`` for
+    the type. A rise that does not qualify leaves those exemptions in place.
     """
     state = prev if prev is not None else _blank_state()
     until = {zone_type: state.until_by_type.get(zone_type) for zone_type in ALL_ZONE_TYPES}
     extended = set(state.forecast_extended)
     last = state.last_event_rain_in
     released = dict(state.released_zones)
+    next_baselines = dict(state.baseline_by_source)
     logs: list[str] = []
     armed_now: set[str] = set()
     rain = _clean_inches(rainfall_in) if rainfall_in is not None else None
@@ -610,6 +692,8 @@ def decide_lockouts(
         if rain is None:
             return LockoutUpdate(state=state, changed=False, logs=())
         seeded_last = last if last is not None else rain
+        seeded_baselines = dict(next_baselines)
+        seeded_baselines.update(_observed_sources(blend))
         sources = {
             "tempest_in": blend.tempest_in,
             "open_meteo_in": blend.open_meteo_in,
@@ -623,10 +707,15 @@ def decide_lockouts(
             rain_source_disagree=False,
             sources=sources,
             previous_today_in=today_in if today_in is not None else state.previous_today_in,
+            baseline_by_source=seeded_baselines,
         )
         return LockoutUpdate(
             state=updated,
-            changed=seeded_last != last or not state.baseline_seeded,
+            changed=(
+                seeded_last != last
+                or not state.baseline_seeded
+                or seeded_baselines != state.baseline_by_source
+            ),
             logs=("seeded rainfall baseline without arming",) if seeded_last != last else (),
         )
 
@@ -659,7 +748,9 @@ def decide_lockouts(
                         if current is None or proposed > current:
                             until[zone_type] = proposed
                             extended.discard(zone_type)
-                            armed_now.add(zone_type)
+                        # The ceiling may already hold the end. It is still an
+                        # arm, so a released zone of this type goes back on.
+                        armed_now.add(zone_type)
                     logs.append(
                         f"legacy rain lockout {float(legacy_hours):.1f}h from today's {rain:.2f} in"
                     )
@@ -668,10 +759,22 @@ def decide_lockouts(
                 logs.append(
                     f"rain total fell to {rain:.2f} in - baseline reset, lockout not extended"
                 )
-    elif rain is not None:
-        rose = last is None or rain > last + 0.001
-        dropped = last is not None and rain < last - 0.01
-        if rose:
+    else:
+        observed = _observed_sources(blend)
+        previous = dict(next_baselines)
+        next_baselines.update(observed)
+        source_dropped = any(key not in observed for key in previous)
+        if observed and previous:
+            rose = _source_rose(previous, observed)
+        elif observed and state.baseline_seeded and last is not None:
+            # An older document has a blended baseline but no per-source
+            # memory. Record the sources. Do not treat the first split
+            # sample as new rain.
+            rose = False
+        else:
+            rose = rain is not None and (last is None or rain > last + 0.001)
+        fell = rain is not None and last is not None and rain < last - 0.01 and not source_dropped
+        if rose and rain is not None:
             last = rain
             for zone_type in HOLDING_ZONE_TYPES:
                 days = base_lockout_days(
@@ -685,12 +788,12 @@ def decide_lockouts(
                 if current is None or proposed > current:
                     until[zone_type] = proposed
                     extended.discard(zone_type)
-                    armed_now.add(zone_type)
                     logs.append(
                         f"{zone_type} lockout {hours:.1f}h from {rain:.2f} in "
                         f"({days}d x ETo scale, heat ceiling {max_hours}h)"
                     )
-        elif dropped and allow_baseline_retreat:
+                armed_now.add(zone_type)
+        elif fell and allow_baseline_retreat:
             last = rain
             logs.append(f"rain total fell to {rain:.2f} in - baseline reset, lockout not extended")
 
@@ -714,7 +817,8 @@ def decide_lockouts(
                     f"{zone_type} forecast extension held at the heat ceiling ({max_hours}h)"
                 )
 
-    # A new arm of a type puts every zone of that type back under the clock.
+    # A new arm of a type puts every zone of that type back under the clock,
+    # including an arm whose end time did not move.
     if armed_now:
         released = {
             zone_id: zone_type
@@ -749,6 +853,7 @@ def decide_lockouts(
         previous_today_in=today_in if today_in is not None else state.previous_today_in,
         released_zones=released,
         baseline_seeded=True,
+        baseline_by_source=next_baselines,
     )
     changed = (
         not _untils_equal(state.until_by_type, updated.until_by_type)
@@ -756,6 +861,7 @@ def decide_lockouts(
         or state.rain_source_disagree != updated.rain_source_disagree
         or state.forecast_extended != updated.forecast_extended
         or state.released_zones != updated.released_zones
+        or state.baseline_by_source != updated.baseline_by_source
     )
     return LockoutUpdate(
         state=updated, changed=changed, logs=tuple(logs), armed_types=frozenset(armed_now)
@@ -779,26 +885,28 @@ def aggregate_tempest_72h(
     """72h inches from recorder rows.
 
     ``total_increasing`` sensors have no usable ``max`` (it is absent). Their
-    ``sum`` is the running total, so the window is last sum minus first sum,
-    plus any live reading ahead of the last sum (long-term stats lag ~1h).
+    ``sum`` is the running total, so the window is last sum minus first sum.
+    The live sensor is today's reading, not that cumulative sum. The lag
+    (long-term stats trail by about an hour) is live minus the same local
+    day's last ``state``. A day with no row yet adds the live reading whole.
 
     A resetting daily total (rain today) uses each local day's peak. The first
     day is partial when the window opens after midnight: only the increase seen
     inside the window is counted, not that day's full peak. Today is
     ``max(statistic peak, live sensor)`` so the lagging statistic cannot hide
     rain that has already fallen.
+
+    Hourly rows are ``-72h < start <= now``. The bucket that starts exactly
+    72 hours ago is the 73rd hour and is left out.
     """
     window_start = now - timedelta(hours=72)
     parsed: list[tuple[datetime, Any]] = []
     for row in rows or []:
-        start = _parse_dt(_stat_get(row, "start"))
+        start = _parse_stat_start(_stat_get(row, "start"), now)
         if start is None:
             continue
-        if start.tzinfo is None and now.tzinfo is not None:
-            start = start.replace(tzinfo=now.tzinfo)
-        elif start.tzinfo is not None and now.tzinfo is None:
-            start = start.replace(tzinfo=None)
-        if start < window_start or start > now:
+        delta_h = (start - now).total_seconds() / 3600.0
+        if not -72.0 < delta_h <= 0.0:
             continue
         parsed.append((start, row))
     parsed.sort(key=lambda item: item[0])
@@ -817,8 +925,15 @@ def aggregate_tempest_72h(
         if not sums:
             return live_today_in
         growth = max(0.0, sums[-1] - sums[0])
-        if live_today_in is not None and live_today_in > sums[-1]:
-            growth += live_today_in - sums[-1]
+        if live_today_in is not None:
+            last_start = parsed[-1][0] if parsed else None
+            if last_start is not None and last_start.date() == now.date():
+                raw_state = _stat_get(parsed[-1][1], "state")
+                last_state = rain_to_inches(raw_state, unit) if raw_state is not None else None
+                if last_state is not None and live_today_in > last_state:
+                    growth += live_today_in - last_state
+            else:
+                growth += live_today_in
         return growth
 
     by_day: dict[Any, list[Any]] = {}

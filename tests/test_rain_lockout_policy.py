@@ -463,27 +463,163 @@ def test_persistence_round_trip():
     assert empty.baseline_seeded is False
 
 
-def test_tempest_statistics_total_increasing_and_partial_day():
+def test_tempest_statistics_accept_float_timestamps_and_a_72h_window():
+    from zoneinfo import ZoneInfo
+
     now = NOW
+    # HA 2023.3+ (verified on 2025.1) returns start as a POSIX timestamp.
+    # The bucket that starts exactly 72h ago is the 73rd hour and is excluded.
     rows = [
-        {"start": (now - timedelta(hours=70)).isoformat(), "sum": 10.0},
-        {"start": (now - timedelta(hours=2)).isoformat(), "sum": 10.5},
+        {"start": (now - timedelta(hours=72)).timestamp(), "sum": 9.0, "state": 0.0},
+        {"start": (now - timedelta(hours=70)).timestamp(), "sum": 10.0, "state": 0.0},
+        {"start": (now - timedelta(hours=2)).timestamp(), "sum": 10.5, "state": 0.10},
     ]
-    # 0.5 in of growth. The live reading is below the running sum, so it is
-    # not added. total_increasing does not need a max column.
+    # Growth is 0.5. Live 0.25 is today's reading, ahead of the last row's
+    # state (0.10), not ahead of the cumulative sum, so 0.15 is added.
     assert aggregate_tempest_72h(
-        rows, now=now, state_class="total_increasing", live_today_in=0.2, unit="in"
+        rows, now=now, state_class="total_increasing", live_today_in=0.25, unit="in"
+    ) == pytest.approx(0.65)
+    # Live below that same-day state adds nothing, even though it is far
+    # below the cumulative sum.
+    assert aggregate_tempest_72h(
+        rows, now=now, state_class="total_increasing", live_today_in=0.05, unit="in"
     ) == pytest.approx(0.5)
+    # ISO and datetime inputs still parse.
+    iso_rows = [
+        {"start": (now - timedelta(hours=70)), "sum": 10.0, "state": 0.0},
+        {"start": (now - timedelta(hours=2)).isoformat(), "sum": 10.5, "state": 0.10},
+    ]
+    assert aggregate_tempest_72h(
+        iso_rows, now=now, state_class="total_increasing", live_today_in=0.25, unit="in"
+    ) == pytest.approx(0.65)
 
     window_start = now - timedelta(hours=72)
     partial = [
-        {"start": (window_start + timedelta(hours=2)).isoformat(), "max": 0.4},
-        {"start": (window_start + timedelta(hours=6)).isoformat(), "max": 0.9},
-        {"start": (now - timedelta(hours=3)).isoformat(), "max": 0.2},
-        {"start": (now - timedelta(hours=1)).isoformat(), "max": 0.35},
+        {"start": window_start.timestamp(), "max": 5.0},
+        {"start": (window_start + timedelta(hours=2)).timestamp(), "max": 0.4},
+        {"start": (window_start + timedelta(hours=6)).timestamp(), "max": 0.9},
+        {"start": (now - timedelta(hours=3)).timestamp(), "max": 0.2},
+        {"start": (now - timedelta(hours=1)).timestamp(), "max": 0.35},
     ]
-    # Partial first day contributes 0.9 - 0.4 = 0.5, not the 0.9 peak.
-    # Today is max(0.35, live 0.5) = 0.5. Total 1.0.
+    # The exact -72h row (peak 5.0) is outside the window. Partial first day
+    # contributes 0.9 - 0.4 = 0.5. Today is max(0.35, live 0.5) = 0.5.
     assert aggregate_tempest_72h(
         partial, now=now, state_class=None, live_today_in=0.5, unit="in"
     ) == pytest.approx(1.0)
+
+    # Day buckets follow local time, not the UTC date of the timestamp.
+    local = datetime(2026, 7, 15, 2, 0, tzinfo=ZoneInfo("America/Los_Angeles"))
+    yesterday_utc = datetime(2026, 7, 15, 6, 0, tzinfo=UTC)  # 23:00 the previous local day
+    today_utc = datetime(2026, 7, 15, 8, 0, tzinfo=UTC)  # 01:00 local
+    local_rows = [
+        {"start": yesterday_utc.timestamp(), "max": 0.8},
+        {"start": today_utc.timestamp(), "max": 0.1},
+    ]
+    assert aggregate_tempest_72h(
+        local_rows, now=local, state_class=None, live_today_in=0.4, unit="in"
+    ) == pytest.approx(1.2)
+
+
+def test_source_dropout_and_recovery_does_not_arm():
+    blend = RainBlend(0.45, 0.30, 0.60, True, "conservative")
+    seeded = decide_lockouts(
+        StoredRainLockout.from_dict({}),
+        now=NOW,
+        rainfall_in=0.45,
+        blend=blend,
+        daily_eto_in=0.12,
+        max_hours=MILD_HOURS,
+        garden_present=False,
+        active_rain=False,
+        forecast_in=None,
+        forecast_probability_pct=None,
+        seed_only=True,
+    )
+    assert seeded.state.baseline_seeded is True
+    assert seeded.state.baseline_by_source["tempest"] == pytest.approx(0.30)
+    assert seeded.state.baseline_by_source["open_meteo"] == pytest.approx(0.60)
+    assert all(until is None for until in seeded.state.until_by_type.values())
+
+    # Tempest drops out. Open-Meteo alone is 0.60, which is not a rise of a
+    # source that was in both samples.
+    dropped = decide_lockouts(
+        seeded.state,
+        now=NOW + timedelta(minutes=1),
+        rainfall_in=0.60,
+        blend=RainBlend(0.60, None, 0.60, False, "open_meteo_only"),
+        daily_eto_in=0.12,
+        max_hours=MILD_HOURS,
+        garden_present=False,
+        active_rain=False,
+        forecast_in=None,
+        forecast_probability_pct=None,
+    )
+    assert all(until is None for until in dropped.state.until_by_type.values())
+    assert dropped.state.baseline_by_source["tempest"] == pytest.approx(0.30)
+    assert dropped.armed_types == frozenset()
+
+    recovered = decide_lockouts(
+        dropped.state,
+        now=NOW + timedelta(minutes=2),
+        rainfall_in=0.45,
+        blend=blend,
+        daily_eto_in=0.12,
+        max_hours=MILD_HOURS,
+        garden_present=False,
+        active_rain=False,
+        forecast_in=None,
+        forecast_probability_pct=None,
+    )
+    assert all(until is None for until in recovered.state.until_by_type.values())
+
+    # An older store has a blended baseline and no per-source memory.
+    # Switching to Open-Meteo-only 0.60 must not arm.
+    legacy_doc = StoredRainLockout(last_event_rain_in=0.30, baseline_seeded=True)
+    swapped = decide_lockouts(
+        legacy_doc,
+        now=NOW,
+        rainfall_in=0.60,
+        blend=RainBlend(0.60, None, 0.60, False, "open_meteo_only"),
+        daily_eto_in=0.12,
+        max_hours=MILD_HOURS,
+        garden_present=False,
+        active_rain=False,
+        forecast_in=None,
+        forecast_probability_pct=None,
+    )
+    assert all(until is None for until in swapped.state.until_by_type.values())
+    assert swapped.state.baseline_by_source["open_meteo"] == pytest.approx(0.60)
+
+
+def test_rise_that_does_not_move_the_end_clears_released_zones():
+    armed = decide_lockouts(
+        None,
+        now=NOW,
+        rainfall_in=0.30,
+        blend=_blend(0.30),
+        daily_eto_in=0.12,
+        max_hours=MILD_HOURS,
+        garden_present=False,
+        active_rain=False,
+        forecast_in=None,
+        forecast_probability_pct=None,
+    )
+    # 0.30 in at a 48h ceiling: turf is already at the ceiling (2 days).
+    held = armed.state.with_updates(released_zones={"switch.front_lawn": ZONE_TURF})
+    turf_until = held.until_by_type[ZONE_TURF]
+    assert turf_until == NOW + timedelta(hours=48)
+    again = decide_lockouts(
+        held,
+        now=NOW,
+        rainfall_in=0.60,
+        blend=_blend(0.60),
+        daily_eto_in=0.12,
+        max_hours=MILD_HOURS,
+        garden_present=False,
+        active_rain=False,
+        forecast_in=None,
+        forecast_probability_pct=None,
+    )
+    assert again.state.until_by_type[ZONE_TURF] == turf_until
+    assert ZONE_TURF in again.armed_types
+    assert "switch.front_lawn" not in again.state.released_zones
