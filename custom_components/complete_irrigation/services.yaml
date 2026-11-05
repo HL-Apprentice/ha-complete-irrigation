@@ -710,6 +710,28 @@ set_zone_moisture:
       required: false
       selector:
         text:
+    lockout_zone_type:
+      name: Rain lockout zone type
+      description: >
+        Optional override for which rain-lockout clock this zone uses.
+        Leave unset to classify from the zone's category, plants, and name
+        (unclassified zones stay turf). "auto" clears an override.
+      required: false
+      selector:
+        select:
+          options:
+            - label: Automatic
+              value: auto
+            - label: Deep drip
+              value: deep_drip
+            - label: Flowers and garden
+              value: flowers_garden
+            - label: Turf
+              value: turf
+            - label: Birdbath
+              value: birdbath
+            - label: Germination
+              value: germination
     temperature_entities:
       name: Temperature sensors (optional)
       description: One or more temperature sensors for this zone (display-only; averaged when multiple).
@@ -802,6 +824,40 @@ set_zone_moisture:
 clear_rain_lockout:
   name: Clear rain lockout
   description: Manually end the current rain lockout (schedules resume immediately).
+
+extend_rain_lockout:
+  name: Extend rain lockout
+  description: >
+    Add days to a rain lockout. Applies to one zone type or to all three
+    holding types (deep drip, flowers and garden, turf). Birdbath and
+    germination zones are not extended. If that type is not currently locked,
+    the extension starts from now.
+  fields:
+    zone_type:
+      name: Zone type
+      description: >
+        Which lockout to extend. "all" extends deep drip, flowers and garden,
+        and turf.
+      required: false
+      default: all
+      selector:
+        select:
+          options:
+            - all
+            - deep_drip
+            - flowers_garden
+            - turf
+    days:
+      name: Days
+      description: How many days to add. Default 1.
+      required: false
+      default: 1
+      selector:
+        number:
+          min: 0.25
+          max: 14
+          step: 0.25
+          mode: box
 
 set_general_config:
   name: Set general integration config

@@ -1,6 +1,6 @@
 # Dev/test requirements only — runtime is HA core + standard library.
 pytest>=8.0
-pytest-asyncio>=0.23
+pytest-asyncio>=0.24
 ruff>=0.5
 # llm_client.call_chat builds an aiohttp.ClientTimeout, so the (fake-session)
 # tests for provider fallback + auth headers need aiohttp importable. It ships

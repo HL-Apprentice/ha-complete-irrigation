@@ -98,6 +98,7 @@ SERVICE_SET_SCHEDULE_ENABLED = "set_schedule_enabled"
 SERVICE_SET_WEATHER_CONFIG = "set_weather_config"
 SERVICE_SET_ZONE_MOISTURE = "set_zone_moisture"
 SERVICE_CLEAR_RAIN_LOCKOUT = "clear_rain_lockout"
+SERVICE_EXTEND_RAIN_LOCKOUT = "extend_rain_lockout"
 SERVICE_SET_NOTIFICATION_CONFIG = "set_notification_config"
 SERVICE_TEST_NOTIFICATION = "test_notification"
 SERVICE_START_ESTABLISHMENT = "start_establishment"
@@ -406,6 +407,12 @@ _SET_ZONE_MOISTURE_SCHEMA = vol.Schema(
         vol.Optional("temperature_entities"): vol.All(cv.ensure_list, [cv.entity_id]),
         vol.Optional("humidity_entities"): vol.All(cv.ensure_list, [cv.entity_id]),
         vol.Optional("category"): cv.string,
+        # Optional per-zone rain-lockout type. Omitted (the default) keeps
+        # automatic classification. "auto" clears an override. Stored on
+        # the zone config dict, which v1.62.2 loads as an untyped blob.
+        vol.Optional("lockout_zone_type"): vol.In(
+            ("auto", "deep_drip", "flowers_garden", "turf", "birdbath", "germination")
+        ),
         # v1.18 — fail-closed: skip a scheduled run when NO moisture
         # reading is available for this zone (all sensors offline /
         # unavailable). Default off = legacy fail-open (water anyway).
@@ -434,6 +441,15 @@ _SET_ZONE_MOISTURE_SCHEMA = vol.Schema(
 )
 
 _CLEAR_RAIN_LOCKOUT_SCHEMA = vol.Schema({})
+
+_EXTEND_RAIN_LOCKOUT_SCHEMA = vol.Schema(
+    {
+        vol.Optional("zone_type", default="all"): vol.In(
+            ("all", "deep_drip", "flowers_garden", "turf")
+        ),
+        vol.Optional("days", default=1): vol.All(vol.Coerce(float), vol.Range(min=0.25, max=14)),
+    }
+)
 
 _SET_NOTIFICATION_CONFIG_SCHEMA = vol.Schema(
     {
@@ -1210,6 +1226,11 @@ def _record_active_session(
         "schedule_name": (meta or {}).get("schedule_name", ""),
         "source": source,
     }
+    if (meta or {}).get("resumed_after_restart"):
+        session["resumed_after_restart"] = True
+    triggers = (meta or {}).get("triggers")
+    if isinstance(triggers, dict) and triggers:
+        session["triggers"] = dict(triggers)
     if blocks and len(blocks) > 1 and block_gap_seconds:
         session["blocks"] = [int(b) for b in blocks]
         session["block_gap_seconds"] = int(block_gap_seconds)
@@ -1695,6 +1716,9 @@ async def handle_run_zone(hass: HomeAssistant, call: ServiceCall) -> None:
         if coord is not None:
             coord.run_history.complete_run(entity_id, ended_at=dt_util.utcnow())
             await coord.async_save_run_history()
+            if is_final_activation:
+                session = (coord.config.get("active_run_sessions") or {}).get(entity_id) or {}
+                await coord.note_zone_run_completed(entity_id, session)
         # v1.30 — clear the restart-resume session only when the WHOLE run is
         # done (a single run, or the final block of a chunked run); an
         # intermediate block keeps the session so a restart still resumes.
@@ -1962,6 +1986,7 @@ async def handle_add_schedule(hass: HomeAssistant, call: ServiceCall) -> None:
         split_profile=data.get("split_profile", ""),
     )
     coord.schedule_store.add(schedule)
+    coord.invalidate_zone_classification()
     await coord.async_save()
     _LOGGER.info("Added schedule %s (%s) mode=%s", schedule.id, schedule.name, schedule.mode)
     # v1.56 — base conflict check on add: notify (or hand to the LLM) if this new
@@ -2034,6 +2059,7 @@ async def handle_update_schedule(hass: HomeAssistant, call: ServiceCall) -> None
         )
     merged = existing.with_changes(**overrides)
     coord.schedule_store.upsert(merged)
+    coord.invalidate_zone_classification()
     await coord.async_save()
     _LOGGER.info("Updated schedule %s", merged.id)
     # v1.56 — re-run the base conflict check after an edit (a moved start / longer
@@ -2124,6 +2150,7 @@ async def handle_split_schedule(hass: HomeAssistant, call: ServiceCall) -> None:
     coord.schedule_store.upsert(pieces[0])
     for piece in pieces[1:]:
         coord.schedule_store.add(piece)
+    coord.invalidate_zone_classification()
     await coord.async_save()
     _LOGGER.info("Split schedule %s into %d parts", existing.id, n)
 
@@ -2151,6 +2178,7 @@ async def handle_delete_schedule(hass: HomeAssistant, call: ServiceCall) -> None
     # chunked-run blocks in flight for them (v1.25).
     sched = coord.schedule_store.get(data["schedule_id"])
     if coord.schedule_store.delete(data["schedule_id"]):
+        coord.invalidate_zone_classification()
         await coord.async_save()
         if sched is not None:
             for step in sched.all_steps():
@@ -2240,6 +2268,7 @@ async def handle_set_schedule_enabled(hass: HomeAssistant, call: ServiceCall) ->
     # new Schedule attributes don't silently get dropped here.
     new = existing.with_changes(enabled=data["enabled"])
     coord.schedule_store.upsert(new)
+    coord.invalidate_zone_classification()
     await coord.async_save()
     _LOGGER.info("Set schedule %s enabled=%s", existing.id, data["enabled"])
 
@@ -2262,6 +2291,7 @@ async def handle_add_plant(hass: HomeAssistant, call: ServiceCall) -> None:
         species=data.get("species", ""),
     )
     coord.plants.add(plant)
+    coord.invalidate_zone_classification()
     await coord.async_save_plants()
     _LOGGER.info("Added plant %s (%s) on %s", plant.id, plant.name, plant.zone_entity_id)
 
@@ -2343,6 +2373,7 @@ async def handle_update_plant(hass: HomeAssistant, call: ServiceCall) -> None:
     # replace() re-runs PlantRecord validation on the merged record.
     merged = replace(existing, **overrides)
     coord.plants.upsert(merged)
+    coord.invalidate_zone_classification()
     await coord.async_save_plants()
     _LOGGER.info("Updated plant %s", merged.id)
 
@@ -2590,6 +2621,7 @@ async def handle_delete_plant(hass: HomeAssistant, call: ServiceCall) -> None:
         return
     if coord.plants.delete(data["plant_id"]):
         coord.cancel_light_survey(data["plant_id"])  # v1.35 — drop any live survey
+        coord.invalidate_zone_classification()
         await coord.async_save_plants()
         # v1.35 — cascade: a care task for a deleted plant would stay
         # permanently "due" and can't be retargeted; remove them too.
@@ -3901,7 +3933,21 @@ async def handle_set_zone_moisture(hass: HomeAssistant, call: ServiceCall) -> No
     if coord is None:
         return
     zone_id = data.pop("zone_entity_id")
-    coord.config.setdefault("zones", {})[zone_id] = {k: v for k, v in data.items() if v is not None}
+    zones = coord.config.setdefault("zones", {})
+    previous = zones.get(zone_id)
+    previous = previous if isinstance(previous, dict) else {}
+    new_cfg = {k: v for k, v in data.items() if v is not None and k != "lockout_zone_type"}
+    # The service replaces the zone dict. Preserve a lockout-type override
+    # the caller did not mention so an older client cannot wipe it, and so
+    # the default (no override, classify as before) stays unchanged.
+    if "lockout_zone_type" in data:
+        chosen = data.get("lockout_zone_type") or ""
+        if chosen and chosen != "auto":
+            new_cfg["lockout_zone_type"] = chosen
+    elif previous.get("lockout_zone_type"):
+        new_cfg["lockout_zone_type"] = previous["lockout_zone_type"]
+    zones[zone_id] = new_cfg
+    coord.invalidate_zone_classification()
     await coord.async_save_config()
     _LOGGER.info("Zone moisture config updated for %s: %s", zone_id, data)
 
@@ -3913,7 +3959,23 @@ async def handle_clear_rain_lockout(hass: HomeAssistant, call: ServiceCall) -> N
     if coord is None:
         return
     coord.clear_lockout()
+    await coord.async_save_rain_lockout()
     _LOGGER.info("Rain lockout cleared by service call")
+
+
+async def handle_extend_rain_lockout(hass: HomeAssistant, call: ServiceCall) -> None:
+    if not await _require_admin_if_configured(hass, call):
+        return
+    data = _EXTEND_RAIN_LOCKOUT_SCHEMA(dict(call.data))
+    coord = _find_coordinator(hass)
+    if coord is None:
+        return
+    await coord.extend_lockout(data.get("zone_type", "all"), data.get("days", 1))
+    _LOGGER.info(
+        "Rain lockout extended by service call (%s, %s day(s))",
+        data.get("zone_type", "all"),
+        data.get("days", 1),
+    )
 
 
 async def handle_set_notification_config(hass: HomeAssistant, call: ServiceCall) -> None:
@@ -4021,6 +4083,7 @@ async def handle_start_establishment(hass: HomeAssistant, call: ServiceCall) -> 
             created_via="establishment",
         )
         coord.schedule_store.add(sched)
+    coord.invalidate_zone_classification()
 
     await coord.async_save()
     _LOGGER.info(
@@ -4152,6 +4215,7 @@ _SERVICES: list[tuple[str, Any, Any, Any]] = [
     (SERVICE_SET_WEATHER_CONFIG, handle_set_weather_config, _SET_WEATHER_CONFIG_SCHEMA, None),
     (SERVICE_SET_ZONE_MOISTURE, handle_set_zone_moisture, _SET_ZONE_MOISTURE_SCHEMA, None),
     (SERVICE_CLEAR_RAIN_LOCKOUT, handle_clear_rain_lockout, _CLEAR_RAIN_LOCKOUT_SCHEMA, None),
+    (SERVICE_EXTEND_RAIN_LOCKOUT, handle_extend_rain_lockout, _EXTEND_RAIN_LOCKOUT_SCHEMA, None),
     (
         SERVICE_SET_NOTIFICATION_CONFIG,
         handle_set_notification_config,
@@ -4194,6 +4258,7 @@ def _async_unregister_services(hass: HomeAssistant) -> None:
         SERVICE_SET_WEATHER_CONFIG,
         SERVICE_SET_ZONE_MOISTURE,
         SERVICE_CLEAR_RAIN_LOCKOUT,
+        SERVICE_EXTEND_RAIN_LOCKOUT,
         SERVICE_SET_NOTIFICATION_CONFIG,
         SERVICE_TEST_NOTIFICATION,
         SERVICE_START_ESTABLISHMENT,

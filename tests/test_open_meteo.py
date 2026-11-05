@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
-from custom_components.complete_irrigation.open_meteo import open_meteo_url, parse_open_meteo
+from datetime import datetime
+
+from custom_components.complete_irrigation.open_meteo import (
+    open_meteo_rain_url,
+    open_meteo_url,
+    parse_open_meteo,
+    parse_open_meteo_rain,
+)
 
 # Real shape (verified against api.open-meteo.com 2026-07-16 for Gilbert AZ).
 REAL = {
@@ -57,6 +64,88 @@ def test_partial_and_null_values_are_tolerated():
     assert r["eto_week_in"] == round(10.0 / 25.4, 3)
     assert r["days"] == 2
     assert r["forecast_high_f"] is None
+
+
+def test_rain_url_asks_for_three_past_days_and_no_key():
+    url = open_meteo_rain_url(33.31, -111.81, "America/Phoenix")
+    assert url.startswith("https://api.open-meteo.com/v1/forecast")
+    assert "past_days=3" in url
+    assert "hourly=precipitation,precipitation_probability" in url
+    assert "precipitation_sum" in url
+    assert "et0_fao_evapotranspiration" in url
+    assert "timezone=America" in url
+    assert "key" not in url.lower()
+
+
+def test_rain_parser_sums_72h_and_the_next_24h():
+    now = datetime(2026, 11, 4, 12, 0)
+    parsed = parse_open_meteo_rain(
+        {
+            "hourly": {
+                "time": [
+                    "2026-11-04T10:00",
+                    "2026-11-04T11:00",
+                    "2026-11-04T12:00",
+                    "2026-11-04T13:00",
+                    "2026-11-05T13:00",  # 25h ahead - outside the 24h window
+                ],
+                "precipitation": [1.0, 2.0, 3.0, 25.4, 50.0],
+                "precipitation_probability": [10, 20, 30, 80, 90],
+            }
+        },
+        now=now,
+    )
+    # 10:00 and 11:00 are completed hours. 12:00 is the in-progress hour
+    # and is not part of the 72h total. 3 mm.
+    assert parsed["past_72h_in"] == round(3.0 / 25.4, 4)
+    # Only 13:00 is inside the next 24h: 25.4 mm = 1 in, probability 80.
+    assert parsed["forecast_24h_in"] == 1.0
+    assert parsed["forecast_24h_probability_pct"] == 80
+    assert parsed["current_precip_mm"] == 3.0
+
+
+def test_rain_parser_drops_the_current_hour_and_the_73rd_bucket():
+    now = datetime(2026, 11, 4, 12, 0)
+    parsed = parse_open_meteo_rain(
+        {
+            "hourly": {
+                "time": [
+                    "2026-11-01T12:00",  # exactly -72h, the extra bucket
+                    "2026-11-01T13:00",  # -71h, inside
+                    "2026-11-04T11:00",  # last completed hour
+                    "2026-11-04T12:00",  # in progress
+                ],
+                "precipitation": [100.0, 25.4, 25.4, 50.0],
+            }
+        },
+        now=now,
+    )
+    assert parsed["past_72h_in"] == round(50.8 / 25.4, 4)
+    assert parsed["current_precip_mm"] == 50.0
+
+
+def test_rain_parser_falls_back_to_daily_sums():
+    now = datetime(2026, 11, 4, 18, 0)
+    parsed = parse_open_meteo_rain(
+        {
+            "daily": {
+                "time": ["2026-11-01", "2026-11-02", "2026-11-03", "2026-11-04", "2026-11-05"],
+                "precipitation_sum": [1.0, 2.0, 25.4, 25.4, 0.0],
+                "precipitation_probability_max": [0, 10, 20, 70, 5],
+                "et0_fao_evapotranspiration": [1.0, 2.0, 3.0, 5.08, 7.62],
+            }
+        },
+        now=now,
+    )
+    # Previous two complete days only, on their own key. Today (Nov 4,
+    # 25.4 mm) includes forecast hours, and Nov 1 is three days back.
+    # Nov 3 + Nov 2 = 27.4 mm. The hourly total stays empty.
+    assert parsed["past_72h_in"] is None
+    assert parsed["past_daily_in"] == round((25.4 + 2.0) / 25.4, 4)
+    assert parsed["forecast_24h_in"] == 1.0  # today's daily bucket, first in-window
+    assert parsed["forecast_24h_probability_pct"] == 70
+    # max(today 5.08, tomorrow 7.62) mm -> 0.3 in
+    assert parsed["forecast_daily_eto_in"] == round(7.62 / 25.4, 4)
 
 
 def test_garbage_is_safe():

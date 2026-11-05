@@ -104,7 +104,8 @@ def _lockout_coord(rain_value, unit, *, floor=None, eto_week=2.1, heat_f=105.0):
 
 
 async def test_lockout_reads_mm_not_as_inches():
-    # 6.35mm = 0.25in. Summer daily ETo 0.30, effective 0.15 -> 12h (NOT an over-read).
+    # 6.35mm = 0.25in, not 6.35in. No Tempest history and no Open-Meteo, so
+    # the v1.62 formula applies: effective 0.15 / daily ETo 0.30 * 24 = 12h.
     coord = _lockout_coord("6.35", "mm")
     now = dt_util.now()
     await coord._evaluate_lockout(now)

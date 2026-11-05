@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "complete_irrigation"
-version = "1.63.0"
+version = "1.64.0"
 description = "Home Assistant custom integration for complete irrigation control"
 readme = "README.md"
 license = { text = "MIT" }
@@ -19,9 +19,17 @@ addopts = [
     "--strict-config",
 ]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 filterwarnings = [
     "error",
     "ignore::DeprecationWarning:homeassistant.*",
+    # cryptography deprecates pyOpenSSL helpers that acme/hass_nabucasa still
+    # touch. Importing an entity platform pulls that chain in. The warnings are
+    # emitted with stacklevel=2, so they are attributed to the caller (acme).
+    "ignore::DeprecationWarning:acme.*",
+    "ignore::DeprecationWarning:josepy.*",
+    "ignore::DeprecationWarning:hass_nabucasa.*",
+    "ignore::DeprecationWarning:cryptography.*",
 ]
 
 [tool.ruff]
