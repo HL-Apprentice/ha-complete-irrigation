@@ -795,7 +795,7 @@ def decide_lockouts(
         # legacy_hours is the old ET-scaled duration. None means the old
         # formula declined to lock - record the baseline, do not extend.
         if rain is not None:
-            rose = last is None or rain > last + 0.001
+            rose = last is None or _clears_rise(rain, last)
             dropped = last is not None and rain < last - 0.01
             if rose:
                 last = rain
@@ -833,7 +833,7 @@ def decide_lockouts(
             # sample as new rain.
             rose = False
         else:
-            rose = rain is not None and (last is None or rain > last + 0.001)
+            rose = rain is not None and (last is None or _clears_rise(rain, last))
         # A source we have never stored is recorded, not treated as rain.
         # A source we already stored moves only when this sample arms on
         # that rise or retreats on that fall. Smaller steps stay put and

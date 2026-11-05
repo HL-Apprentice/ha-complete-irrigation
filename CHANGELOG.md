@@ -21,7 +21,10 @@ only when a birdbath zone exists. Only an enabled establishment schedule
 inside its dates is germination (never locked out). A finished scheduled run
 releases that one zone, not the whole type. A later rise has to be at least
 0.01 in on a source that was already in the blend; Open-Meteo's in-progress
-hour is not part of the 72h total. Soil moisture below a zone's minimum can
+hour is not part of the 72h total. The same 0.01 in floor, with a
+1e-9 margin so an exact step does not count, applies when today's rain is
+the only input and on the first sample that has no per-source baseline.
+Soil moisture below a zone's minimum can
 release that zone early, not its neighbors, and not on the same tick the
 lockout armed. Moisture never lengthens a lockout. A fresh forecast of at
 least 0.25 in at 60% or higher within 24 hours can add one day to an

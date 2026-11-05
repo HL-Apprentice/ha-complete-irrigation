@@ -2291,6 +2291,7 @@ async def handle_add_plant(hass: HomeAssistant, call: ServiceCall) -> None:
         species=data.get("species", ""),
     )
     coord.plants.add(plant)
+    coord.invalidate_zone_classification()
     await coord.async_save_plants()
     _LOGGER.info("Added plant %s (%s) on %s", plant.id, plant.name, plant.zone_entity_id)
 
@@ -2372,6 +2373,7 @@ async def handle_update_plant(hass: HomeAssistant, call: ServiceCall) -> None:
     # replace() re-runs PlantRecord validation on the merged record.
     merged = replace(existing, **overrides)
     coord.plants.upsert(merged)
+    coord.invalidate_zone_classification()
     await coord.async_save_plants()
     _LOGGER.info("Updated plant %s", merged.id)
 
@@ -2619,6 +2621,7 @@ async def handle_delete_plant(hass: HomeAssistant, call: ServiceCall) -> None:
         return
     if coord.plants.delete(data["plant_id"]):
         coord.cancel_light_survey(data["plant_id"])  # v1.35 — drop any live survey
+        coord.invalidate_zone_classification()
         await coord.async_save_plants()
         # v1.35 — cascade: a care task for a deleted plant would stay
         # permanently "due" and can't be retargeted; remove them too.

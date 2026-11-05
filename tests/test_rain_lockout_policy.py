@@ -771,6 +771,56 @@ def test_hourly_daily_hourly_does_not_arm():
     assert back.state.baseline_by_source["open_meteo"] == pytest.approx(0.60)
 
 
+def test_legacy_and_unbaselined_rises_use_the_same_floor():
+    """Today's-rain fallback and a first sample with no per-source baseline."""
+    none = RainBlend(None, None, None, False, "none")
+    held = StoredRainLockout(last_event_rain_in=0.20, baseline_seeded=True)
+    exact = 0.20 + SOURCE_RISE_MIN_IN
+    over = exact + 1e-6
+
+    def _legacy(rain, hours):
+        return decide_lockouts(
+            held,
+            now=NOW,
+            rainfall_in=rain,
+            blend=none,
+            daily_eto_in=0.12,
+            max_hours=96,
+            garden_present=False,
+            active_rain=False,
+            forecast_in=None,
+            forecast_probability_pct=None,
+            legacy_hours=hours,
+            arm_from_table=False,
+        )
+
+    tiny = _legacy(0.205, 12)
+    assert tiny.armed_types == frozenset()
+    assert _legacy(exact, 12).armed_types == frozenset()
+    armed = _legacy(over, 12)
+    assert ZONE_TURF in armed.armed_types
+
+    bare = StoredRainLockout(last_event_rain_in=0.20, baseline_seeded=False)
+
+    def _bare(rain):
+        return decide_lockouts(
+            bare,
+            now=NOW,
+            rainfall_in=rain,
+            blend=none,
+            daily_eto_in=0.12,
+            max_hours=96,
+            garden_present=False,
+            active_rain=False,
+            forecast_in=None,
+            forecast_probability_pct=None,
+        )
+
+    assert _bare(0.205).armed_types == frozenset()
+    assert _bare(exact).armed_types == frozenset()
+    assert ZONE_TURF in _bare(over).armed_types
+
+
 def test_exact_rise_floor_does_not_arm():
     seeded = decide_lockouts(
         StoredRainLockout.from_dict({}),

@@ -413,7 +413,12 @@ def test_birdbath_memo_ignores_a_failed_classification_and_public_state_uses_the
     coord.zone_lockout_report = _boom
     assert coord._has_birdbath_zone() is False
     assert coord._birdbath_memo_tick is None
+    coord._birdbath_memo_tick = 0
+    coord._birdbath_memo_value = True
+    assert coord._has_birdbath_zone() is True
+    assert coord._birdbath_memo_tick == 0
     coord.zone_lockout_report = lambda: {"switch.birdbath": {"type": "birdbath"}}
+    coord._lockout_tick_id = 2
     assert coord._has_birdbath_zone() is True
 
     coord._zone_class_report = {
@@ -421,16 +426,24 @@ def test_birdbath_memo_ignores_a_failed_classification_and_public_state_uses_the
     }
     coord._zone_class_token = ("cached",)
     calls = {"n": 0}
-    original = coord._classification_token
 
-    def _counted():
+    def _same_token():
         calls["n"] += 1
-        return original()
+        return ("cached",)
 
-    coord._classification_token = _counted
+    coord._classification_token = _same_token
     zones = coord.lockout_public_state()["zones"]
-    assert calls["n"] == 0
+    assert calls["n"] == 1
     assert zones["switch.beds"]["type"] == "turf"
+
+    def _new_token():
+        calls["n"] += 1
+        return ("plants-changed",)
+
+    coord._classification_token = _new_token
+    rebuilt = coord.lockout_public_state()["zones"]
+    assert calls["n"] > 1
+    assert "switch.beds" not in rebuilt or rebuilt is not zones
     coord.invalidate_zone_classification()
     assert coord._zone_class_report is None
     assert coord._birdbath_memo_tick is None

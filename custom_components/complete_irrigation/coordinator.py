@@ -513,8 +513,11 @@ class ScheduleCoordinator:
         try:
             report = self.zone_lockout_report()
         except Exception:
-            # A failed classification is not "no birdbath". Leave the memo
-            # empty so the next check tries again.
+            # Do not store the failure. A previous successful answer still
+            # stands; with no answer yet, do not treat the yard as having a
+            # birdbath.
+            if self._birdbath_memo_tick is not None:
+                return self._birdbath_memo_value
             return False
         value = any(
             isinstance(info, dict) and info.get("type") == ZONE_BIRDBATH for info in report.values()
@@ -568,6 +571,18 @@ class ScheduleCoordinator:
         until = self._rain_lockout.until_by_type.get(zone_type)
         return until is not None and moment < until
 
+    def _public_zone_report(self) -> dict[str, dict[str, str | None]]:
+        """Classification for the sensor attribute. In memory only."""
+        report = self._zone_class_report
+        if report is not None:
+            try:
+                token = self._classification_token()
+            except Exception:
+                token = None
+            if token is not None and token == self._zone_class_token:
+                return report
+        return self.zone_lockout_report()
+
     def lockout_public_state(self) -> dict[str, Any]:
         """Panel / sensor snapshot. `until` values are ISO strings or None."""
         skip_birdbath = not self._has_birdbath_zone()
@@ -583,13 +598,10 @@ class ScheduleCoordinator:
             ),
             "event_rain_in": self._rain_lockout.last_event_rain_in,
             "sources": dict(self._rain_lockout.sources),
-            # Resolved lockout type per zone. Reuse the report built earlier
-            # this tick instead of classifying again for the attribute read.
-            "zones": (
-                self._zone_class_report
-                if self._zone_class_report is not None
-                else self.zone_lockout_report()
-            ),
+            # Resolved lockout type per zone. Reuse this tick's report only
+            # while its token still matches; a plant or schedule edit changes
+            # the token and the report is built again. Nothing is written.
+            "zones": self._public_zone_report(),
         }
 
     async def async_setup(self) -> None:
