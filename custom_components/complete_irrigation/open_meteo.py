@@ -16,7 +16,7 @@ No API key. Non-commercial use is free (this is a non-commercial hobbyist tool).
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import quote
 
@@ -94,7 +94,7 @@ def open_meteo_rain_url(lat: float, lon: float, tz: str | None = None) -> str:
     return (
         f"{_FORECAST}?latitude={float(lat):.5f}&longitude={float(lon):.5f}"
         "&daily=precipitation_sum,precipitation_probability_max,"
-        "et0_fao_evapotranspiration,temperature_2m_max"
+        "et0_fao_evapotranspiration"
         "&hourly=precipitation,precipitation_probability"
         f"&past_days=3&forecast_days=2&timezone={timezone}"
     )
@@ -118,9 +118,10 @@ def parse_open_meteo_rain(payload: Any, *, now: datetime | None = None) -> dict[
     """Pull the lockout's rain figures out of an Open-Meteo forecast payload.
 
     ``past_72h_in`` sums completed hours only: hour-start in
-    ``(-72h, -1h]``. The in-progress hour is excluded (Open-Meteo revises it,
-    and it is still falling). The hour that starts exactly 72h ago is outside
-    the window, matching the Tempest statistic window. ``forecast_24h_in``
+    ``[-72h, -1h]``. The in-progress hour is excluded (Open-Meteo revises it,
+    and it is still falling). The hour that starts exactly 72h ago is the
+    first hour of the window. Times are read in the payload's
+    ``utc_offset_seconds`` when that field is present. ``forecast_24h_in``
     sums ``(now, now+24h]``, and
     ``forecast_24h_probability_pct`` is the max hourly probability in that
     window (Open-Meteo reports percent, 0-100). ``forecast_daily_eto_in`` is
@@ -142,7 +143,11 @@ def parse_open_meteo_rain(payload: Any, *, now: datetime | None = None) -> dict[
     }
     if not isinstance(payload, dict):
         return out
-    now_cmp = _as_naive(now) if isinstance(now, datetime) else None
+    now_cmp = now if isinstance(now, datetime) else None
+    offset = payload.get("utc_offset_seconds")
+    zone = None
+    if isinstance(offset, (int, float)) and not isinstance(offset, bool):
+        zone = timezone(timedelta(seconds=int(offset)))
 
     hourly = payload.get("hourly") if isinstance(payload.get("hourly"), dict) else {}
     times = hourly.get("time") if isinstance(hourly.get("time"), list) else []
@@ -163,11 +168,16 @@ def parse_open_meteo_rain(payload: Any, *, now: datetime | None = None) -> dict[
             stamp = _iso_dt(raw_time)
             if stamp is None or index >= len(precip):
                 continue
+            if stamp.tzinfo is None and zone is not None:
+                stamp = stamp.replace(tzinfo=zone)
             millimeters = precip[index]
             if not isinstance(millimeters, (int, float)):
                 continue
-            delta_h = (_as_naive(stamp) - now_cmp).total_seconds() / 3600.0
-            if -72.0 < delta_h <= -1.0:
+            if now_cmp.tzinfo is not None and stamp.tzinfo is not None:
+                delta_h = (stamp - now_cmp).total_seconds() / 3600.0
+            else:
+                delta_h = (_as_naive(stamp) - _as_naive(now_cmp)).total_seconds() / 3600.0
+            if -72.0 <= delta_h <= -1.0:
                 past += float(millimeters)
                 past_n += 1
             elif -1.0 < delta_h <= 0.0:

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from .category_match import suggest_category
@@ -69,6 +69,9 @@ TABLE_MIN_INCHES = 0.10
 # as soon as rain stops. Not a multi-day lockout.
 ACTIVE_RAIN_HOLD = timedelta(minutes=20)
 ACTIVE_RAIN_REFRESH_WITHIN = timedelta(minutes=10)
+# One dry tick must not cancel the birdbath hold. Two in a row, or the
+# hold reaching its end, does.
+BIRDBATH_CLEAR_TICKS = 2
 
 # Hourly precip above this counts as "raining now" (Open-Meteo current hour).
 ACTIVE_RAIN_HOUR_MM = 0.1
@@ -436,6 +439,25 @@ def classify_zone(
     return ZONE_TURF
 
 
+def armed_before_run(armed_at: datetime | None, started_at: Any) -> bool:
+    """True when the lockout armed strictly before the run started.
+
+    Naive timestamps are treated as UTC so a stored aware arm time can be
+    compared with the session's ``started_at``.
+    """
+    started = started_at if isinstance(started_at, datetime) else _parse_dt(started_at)
+    if armed_at is None or started is None:
+        return False
+    left, right = armed_at, started
+    if left.tzinfo is None and right.tzinfo is not None:
+        left = left.replace(tzinfo=UTC)
+    elif right.tzinfo is None and left.tzinfo is not None:
+        right = right.replace(tzinfo=UTC)
+    elif left.tzinfo is not None and right.tzinfo is not None:
+        right = right.astimezone(left.tzinfo)
+    return left < right
+
+
 def _parse_dt(value: Any) -> datetime | None:
     if isinstance(value, datetime):
         return value
@@ -547,6 +569,13 @@ class StoredRainLockout:
     # Keys present in the sample that wrote this state. An empty tuple means
     # an older document: every stored baseline counts as present.
     last_sample_sources: tuple[str, ...] = ()
+    # When each holding type last armed. A run releases its zone only if
+    # this is earlier than the run's start (the lockout was already on).
+    armed_at_by_type: dict[str, datetime] = field(default_factory=dict)
+    # Consecutive ticks with no active rain while a birdbath hold is up.
+    birdbath_dry_ticks: int = 0
+    # Calendar date of previous_today_in. A restart on a new day reseeds it.
+    previous_today_on: date | None = None
 
     def with_updates(self, **kwargs: Any) -> StoredRainLockout:
         payload: dict[str, Any] = {
@@ -560,6 +589,9 @@ class StoredRainLockout:
             "baseline_seeded": self.baseline_seeded,
             "baseline_by_source": dict(self.baseline_by_source),
             "last_sample_sources": tuple(self.last_sample_sources),
+            "armed_at_by_type": dict(self.armed_at_by_type),
+            "birdbath_dry_ticks": int(self.birdbath_dry_ticks),
+            "previous_today_on": self.previous_today_on,
         }
         payload.update(kwargs)
         return StoredRainLockout(**payload)
@@ -587,6 +619,27 @@ class StoredRainLockout:
             if key in _SOURCE_KEYS and key not in seen:
                 seen.append(str(key))
         self.last_sample_sources = tuple(seen)
+        armed: dict[str, datetime] = {}
+        for key, value in (self.armed_at_by_type or {}).items():
+            if key not in HOLDING_ZONE_TYPES:
+                continue
+            moment = value if isinstance(value, datetime) else _parse_dt(value)
+            if moment is not None:
+                armed[str(key)] = moment
+        self.armed_at_by_type = armed
+        try:
+            self.birdbath_dry_ticks = max(0, int(self.birdbath_dry_ticks or 0))
+        except (TypeError, ValueError):
+            self.birdbath_dry_ticks = 0
+        if isinstance(self.previous_today_on, datetime):
+            self.previous_today_on = self.previous_today_on.date()
+        elif isinstance(self.previous_today_on, str):
+            try:
+                self.previous_today_on = date.fromisoformat(self.previous_today_on[:10])
+            except ValueError:
+                self.previous_today_on = None
+        elif not isinstance(self.previous_today_on, date):
+            self.previous_today_on = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -607,6 +660,14 @@ class StoredRainLockout:
             "baseline_seeded": bool(self.baseline_seeded),
             "baseline_by_source": dict(self.baseline_by_source),
             "last_sample_sources": list(self.last_sample_sources),
+            "armed_at_by_type": {
+                zone_type: moment.isoformat()
+                for zone_type, moment in self.armed_at_by_type.items()
+            },
+            "birdbath_dry_ticks": int(self.birdbath_dry_ticks),
+            "previous_today_on": (
+                self.previous_today_on.isoformat() if self.previous_today_on else None
+            ),
         }
 
     @classmethod
@@ -644,6 +705,9 @@ class StoredRainLockout:
         baselines = raw_baselines if isinstance(raw_baselines, dict) else {}
         raw_seen = data.get("last_sample_sources")
         seen = tuple(str(item) for item in raw_seen) if isinstance(raw_seen, list) else ()
+        raw_armed = data.get("armed_at_by_type")
+        armed = raw_armed if isinstance(raw_armed, dict) else {}
+        raw_on = data.get("previous_today_on")
         return cls(
             until_by_type=until,
             last_event_rain_in=last,
@@ -655,7 +719,24 @@ class StoredRainLockout:
             baseline_seeded=seeded,
             baseline_by_source=dict(baselines),
             last_sample_sources=seen,
+            armed_at_by_type=dict(armed),
+            birdbath_dry_ticks=data.get("birdbath_dry_ticks") or 0,
+            previous_today_on=raw_on if isinstance(raw_on, str) else None,
         )
+
+
+def reseed_previous_today(state: StoredRainLockout, today: date) -> StoredRainLockout:
+    """Drop yesterday's rain-today reading after a restart or a new day.
+
+    The same calendar day keeps the stored value, so a restart at noon
+    still sees rain that fell this morning. A different day must not look
+    like a rising edge.
+    """
+    if state.previous_today_on == today:
+        return state
+    if state.previous_today_in is None and state.previous_today_on is None:
+        return state
+    return state.with_updates(previous_today_in=None, previous_today_on=None)
 
 
 def _blank_state() -> StoredRainLockout:
@@ -738,6 +819,8 @@ def decide_lockouts(
     released = dict(state.released_zones)
     next_baselines = dict(state.baseline_by_source)
     next_sample = tuple(state.last_sample_sources)
+    armed_at = dict(state.armed_at_by_type)
+    dry_ticks = int(state.birdbath_dry_ticks)
     logs: list[str] = []
     armed_now: set[str] = set()
     rain = _clean_inches(rainfall_in) if rainfall_in is not None else None
@@ -778,15 +861,31 @@ def decide_lockouts(
         )
 
     # ── birdbath: only while rain is falling ──────────────────────
+    # A single dry tick does not clear. The dry signal has to last two
+    # ticks, or the 20-minute hold has to run out.
     if active_rain:
+        dry_ticks = 0
         horizon = now + ACTIVE_RAIN_HOLD
         current = until.get(ZONE_BIRDBATH)
         if current is None or current < now + ACTIVE_RAIN_REFRESH_WITHIN:
             until[ZONE_BIRDBATH] = horizon
             logs.append("birdbath lockout while rain is falling")
     elif until.get(ZONE_BIRDBATH) is not None:
-        until[ZONE_BIRDBATH] = None
-        logs.append("birdbath lockout cleared - rain stopped")
+        current = until.get(ZONE_BIRDBATH)
+        if current is not None and now >= current:
+            until[ZONE_BIRDBATH] = None
+            dry_ticks = 0
+            logs.append("birdbath lockout cleared - hold elapsed")
+        else:
+            dry_ticks += 1
+            if dry_ticks >= BIRDBATH_CLEAR_TICKS:
+                until[ZONE_BIRDBATH] = None
+                dry_ticks = 0
+                logs.append("birdbath lockout cleared - rain stopped")
+            else:
+                logs.append("birdbath hold kept - dry signal has not persisted")
+    else:
+        dry_ticks = 0
     until[ZONE_GERMINATION] = None
 
     # ── event rain arms / extends holding types on a rising total ─
@@ -906,6 +1005,8 @@ def decide_lockouts(
     # A new arm of a type puts every zone of that type back under the clock,
     # including an arm whose end time did not move.
     if armed_now:
+        for zone_type in armed_now:
+            armed_at[zone_type] = now
         released = {
             zone_id: zone_type
             for zone_id, zone_type in released.items()
@@ -937,10 +1038,13 @@ def decide_lockouts(
         forecast_extended=extended,
         sources=sources,
         previous_today_in=today_in if today_in is not None else state.previous_today_in,
+        previous_today_on=now.date() if today_in is not None else state.previous_today_on,
         released_zones=released,
         baseline_seeded=True,
         baseline_by_source=next_baselines,
         last_sample_sources=next_sample,
+        armed_at_by_type=armed_at,
+        birdbath_dry_ticks=dry_ticks,
     )
     changed = (
         not _untils_equal(state.until_by_type, updated.until_by_type)
@@ -950,6 +1054,9 @@ def decide_lockouts(
         or state.released_zones != updated.released_zones
         or state.baseline_by_source != updated.baseline_by_source
         or state.last_sample_sources != updated.last_sample_sources
+        or state.armed_at_by_type != updated.armed_at_by_type
+        or state.birdbath_dry_ticks != updated.birdbath_dry_ticks
+        or state.previous_today_on != updated.previous_today_on
     )
     return LockoutUpdate(
         state=updated, changed=changed, logs=tuple(logs), armed_types=frozenset(armed_now)
@@ -984,8 +1091,13 @@ def aggregate_tempest_72h(
     ``max(statistic peak, live sensor)`` so the lagging statistic cannot hide
     rain that has already fallen.
 
-    Hourly rows are ``-72h < start <= now``. The bucket that starts exactly
-    72 hours ago is the 73rd hour and is left out.
+    Hourly rows are ``-72h <= start <= now``. The bucket that starts exactly
+    72 hours ago is the first hour of the window and is included. A row
+    before that is not.
+
+    The comparison uses ``total_seconds``, so the window is 72 elapsed
+    hours, not 72 wall-clock hours. That is the same length in Arizona
+    (no daylight-saving time) and across a DST change.
     """
     window_start = now - timedelta(hours=72)
     parsed: list[tuple[datetime, Any]] = []
@@ -994,7 +1106,7 @@ def aggregate_tempest_72h(
         if start is None:
             continue
         delta_h = (start - now).total_seconds() / 3600.0
-        if not -72.0 < delta_h <= 0.0:
+        if not -72.0 <= delta_h <= 0.0:
             continue
         parsed.append((start, row))
     parsed.sort(key=lambda item: item[0])
@@ -1010,9 +1122,21 @@ def aggregate_tempest_72h(
             inches = rain_to_inches(raw, unit) if raw is not None else None
             if inches is not None:
                 sums.append(inches)
-        if not sums:
-            return live_today_in
-        growth = max(0.0, sums[-1] - sums[0])
+        if len(sums) < 2:
+            # One lifetime reading is a baseline, not a storm. A negative
+            # step is a counter reset and is not subtracted.
+            growth = 0.0
+        else:
+            growth = 0.0
+            previous = sums[0]
+            for value in sums[1:]:
+                delta = value - previous
+                if delta < 0:
+                    if value > 0:
+                        growth += value
+                else:
+                    growth += delta
+                previous = value
         if live_today_in is not None:
             last_start = parsed[-1][0] if parsed else None
             if last_start is not None and last_start.date() == now.date():
@@ -1049,7 +1173,7 @@ def aggregate_tempest_72h(
             total += used
             counted = True
             continue
-        if day == first_day and first_start > window_start:
+        if day == first_day and first_start >= window_start:
             total += max(0.0, peak - first_val)
             counted = True
             continue

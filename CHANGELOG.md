@@ -4,6 +4,26 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.64.1 — 2026-11-05 — patch
+
+**Rain lockout follow-ups. The heat ceiling stays global.**
+
+A finished run releases its zone only when that zone's lockout armed
+before the run started, so a storm that arrives mid-run does not open
+the next cycle. The birdbath hold survives a single dry reading. Tempest
+history is cached for five minutes and drops the cache when the live
+sensor changes. A lifetime rain counter's first sample and its resets
+are not a storm. The 72-hour window includes the hour that starts exactly
+72 hours ago, measured in elapsed time (Arizona has no daylight-saving
+time; a DST change elsewhere is still 72 real hours). Open-Meteo hourly
+times use the response's UTC offset, and the rain request no longer asks
+for an unused daily high. Runs the lockout hides from the conflict
+resolver are logged and listed on the sensor. `previous_today_in` from
+another day is cleared on startup.
+
+The heat ceiling is unchanged and remains one global cap for every zone
+type. That is the owner's decision.
+
 ## v1.64.0 — 2026-11-04 — minor
 
 **Rain lockout follows the storm and the heat, per zone type.**

@@ -131,20 +131,23 @@ async def test_completed_run_releases_only_that_zone_type():
     }
     later = dt_util.now() + timedelta(days=2)
     deep = dt_util.now() + timedelta(days=4)
+    armed = dt_util.now() - timedelta(hours=3)
+    started = (armed + timedelta(hours=1)).isoformat()
     coord._rain_lockout = StoredRainLockout(
         until_by_type={ZONE_TURF: later, ZONE_DEEP_DRIP: deep},
+        armed_at_by_type={ZONE_TURF: armed, ZONE_DEEP_DRIP: armed},
         last_event_rain_in=0.4,
     )
     await coord.note_zone_run_completed(
         "switch.front_lawn",
-        {"source": "scheduled", "schedule_id": "sched-lawn"},
+        {"source": "scheduled", "schedule_id": "sched-lawn", "started_at": started},
     )
     # No schedule with that id, so a missing schedule does not release.
     assert "switch.front_lawn" not in coord._rain_lockout.released_zones
     coord.schedule_store.add(_daily("sched-lawn", "switch.front_lawn", hour=6, minute=0))
     await coord.note_zone_run_completed(
         "switch.front_lawn",
-        {"source": "scheduled", "schedule_id": "sched-lawn"},
+        {"source": "scheduled", "schedule_id": "sched-lawn", "started_at": started},
     )
     assert coord._rain_lockout.released_zones["switch.front_lawn"] == ZONE_TURF
     # The type clock stays up for every other turf zone.
@@ -185,6 +188,25 @@ async def test_completed_run_releases_only_that_zone_type():
         },
     )
     assert "switch.trees" not in coord._rain_lockout.released_zones
+
+
+async def test_run_that_started_before_the_lockout_does_not_release():
+    coord = _coord()
+    coord._config["zones"] = {"switch.front_lawn": {"category": "lawn"}}
+    later = dt_util.now() + timedelta(days=2)
+    armed = dt_util.now() - timedelta(minutes=10)
+    started = (armed - timedelta(minutes=30)).isoformat()
+    coord.schedule_store.add(_daily("sched-lawn", "switch.front_lawn", hour=6, minute=0))
+    coord._rain_lockout = StoredRainLockout(
+        until_by_type={ZONE_TURF: later},
+        armed_at_by_type={ZONE_TURF: armed},
+    )
+    await coord.note_zone_run_completed(
+        "switch.front_lawn",
+        {"source": "scheduled", "schedule_id": "sched-lawn", "started_at": started},
+    )
+    assert "switch.front_lawn" not in coord._rain_lockout.released_zones
+    assert coord.is_zone_locked_out("switch.front_lawn") is True
 
 
 async def test_moisture_releases_a_dry_zone_and_does_not_extend_a_wet_one():
@@ -1216,9 +1238,9 @@ async def test_tempest_statistics_are_cached(monkeypatch):
     first = await coord._tempest_history_inches("sensor.rain", now)
     second = await coord._tempest_history_inches("sensor.rain", now + timedelta(minutes=1))
     assert calls["n"] == 1
-    # 0.4 of sum growth, plus live 0.2 minus the same day's last state 0.05.
-    # The exact -72h row is not the start of that sum.
-    assert first == pytest.approx(0.55)
+    # The -72h row is the baseline. Later steps add 1.0 and 0.4, and the
+    # live 0.2 is 0.15 ahead of the last row's state.
+    assert first == pytest.approx(1.55)
     assert second == first
 
 
@@ -1323,3 +1345,59 @@ async def test_lockout_paths_do_not_save_schedules_or_flip_enabled(monkeypatch):
     assert saved == []
     assert coord.schedule_store.get("hold").enabled is False
     assert coord.schedule_store.get("live").enabled is True
+
+
+def test_locked_runs_are_recorded_and_withheld_from_scheduling():
+    coord = _coord()
+    now = dt_util.now()
+    coord._config["zones"] = {
+        "switch.front_lawn": {"category": "lawn"},
+        "switch.trees": {"category": "trees"},
+    }
+    coord._rain_lockout = StoredRainLockout(until_by_type={ZONE_TURF: now + timedelta(hours=2)})
+    locked = SimpleNamespace(
+        zone_entity_id="switch.front_lawn", schedule_id="lawn", start_at=now
+    )
+    free = SimpleNamespace(zone_entity_id="switch.trees", schedule_id="trees", start_at=now)
+    kept = coord._without_lockout_blocked([locked, free], now)
+    assert kept == [free]
+    assert coord._lockout_blocked_runs[0]["zone_entity_id"] == "switch.front_lawn"
+    assert coord.lockout_public_state()["blocked_runs"][0]["schedule_id"] == "lawn"
+
+
+async def test_tempest_cache_invalidates_when_the_sensor_changes(monkeypatch):
+    from custom_components.complete_irrigation.coordinator import _TEMPEST_CACHE
+
+    coord = _coord(rain_sensor="sensor.rain")
+    now = dt_util.now()
+    reading = {"value": "0.2"}
+
+    def _get(eid):
+        if eid == "sensor.rain":
+            return _state(reading["value"], unit_of_measurement="in", state_class="total")
+        return None
+
+    coord._hass.states.get.side_effect = _get
+    calls = {"n": 0}
+
+    class _Instance:
+        async def async_add_executor_job(self, fn, *args):
+            calls["n"] += 1
+            return {
+                "sensor.rain": [
+                    {"start": (now - timedelta(hours=2)).timestamp(), "max": 0.2},
+                    {"start": (now - timedelta(hours=1)).timestamp(), "max": 0.2},
+                ]
+            }
+
+    monkeypatch.setattr(
+        "homeassistant.components.recorder.get_instance",
+        lambda _hass: _Instance(),
+    )
+    await coord._tempest_history_inches("sensor.rain", now)
+    await coord._tempest_history_inches("sensor.rain", now + timedelta(minutes=1))
+    assert calls["n"] == 1
+    reading["value"] = "0.5"
+    await coord._tempest_history_inches("sensor.rain", now + timedelta(minutes=2))
+    assert calls["n"] == 2
+    assert timedelta(minutes=5) == _TEMPEST_CACHE

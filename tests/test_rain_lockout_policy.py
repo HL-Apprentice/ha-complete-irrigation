@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
@@ -27,6 +27,7 @@ from custom_components.complete_irrigation.rain_lockout import (
     moisture_releases_early,
     reference_daily_eto,
     release_zone_type,
+    reseed_previous_today,
     scaled_lockout_hours,
     table_days,
     zone_is_garden,
@@ -270,10 +271,25 @@ def test_birdbath_locks_only_while_rain_is_falling_and_germination_never():
         forecast_in=None,
         forecast_probability_pct=None,
     )
-    assert stopped.state.until_by_type[ZONE_BIRDBATH] is None
-    assert stopped.state.until_by_type[ZONE_GERMINATION] is None
+    # One dry tick keeps the 20-minute hold.
+    assert stopped.state.until_by_type[ZONE_BIRDBATH] == NOW + timedelta(minutes=20)
+    assert stopped.state.birdbath_dry_ticks == 1
+    cleared = decide_lockouts(
+        stopped.state,
+        now=NOW + timedelta(minutes=6),
+        rainfall_in=1.0,
+        blend=_blend(1.0),
+        daily_eto_in=0.12,
+        max_hours=MILD_HOURS,
+        garden_present=False,
+        active_rain=False,
+        forecast_in=None,
+        forecast_probability_pct=None,
+    )
+    assert cleared.state.until_by_type[ZONE_BIRDBATH] is None
+    assert cleared.state.until_by_type[ZONE_GERMINATION] is None
     # The holding clocks from the same storm are still there.
-    assert stopped.state.until_by_type[ZONE_TURF] == raining.state.until_by_type[ZONE_TURF]
+    assert cleared.state.until_by_type[ZONE_TURF] == raining.state.until_by_type[ZONE_TURF]
 
 
 def test_completed_run_releases_one_type_and_the_same_rain_does_not_rearm():
@@ -469,22 +485,22 @@ def test_tempest_statistics_accept_float_timestamps_and_a_72h_window():
 
     now = NOW
     # HA 2023.3+ (verified on 2025.1) returns start as a POSIX timestamp.
-    # The bucket that starts exactly 72h ago is the 73rd hour and is excluded.
+    # The bucket that starts exactly 72h ago is the first hour and counts.
+    # The first sample (sum 9) is only a baseline.
     rows = [
+        {"start": (now - timedelta(hours=73)).timestamp(), "sum": 1.0, "state": 0.0},
         {"start": (now - timedelta(hours=72)).timestamp(), "sum": 9.0, "state": 0.0},
         {"start": (now - timedelta(hours=70)).timestamp(), "sum": 10.0, "state": 0.0},
         {"start": (now - timedelta(hours=2)).timestamp(), "sum": 10.5, "state": 0.10},
     ]
-    # Growth is 0.5. Live 0.25 is today's reading, ahead of the last row's
-    # state (0.10), not ahead of the cumulative sum, so 0.15 is added.
+    # Deltas after the baseline: 1.0 + 0.5. Live 0.25 is ahead of the last
+    # row's state (0.10), so 0.15 is added. The row at -73h is outside.
     assert aggregate_tempest_72h(
         rows, now=now, state_class="total_increasing", live_today_in=0.25, unit="in"
-    ) == pytest.approx(0.65)
-    # Live below that same-day state adds nothing, even though it is far
-    # below the cumulative sum.
+    ) == pytest.approx(1.65)
     assert aggregate_tempest_72h(
         rows, now=now, state_class="total_increasing", live_today_in=0.05, unit="in"
-    ) == pytest.approx(0.5)
+    ) == pytest.approx(1.5)
     # ISO and datetime inputs still parse.
     iso_rows = [
         {"start": (now - timedelta(hours=70)), "sum": 10.0, "state": 0.0},
@@ -496,14 +512,16 @@ def test_tempest_statistics_accept_float_timestamps_and_a_72h_window():
 
     window_start = now - timedelta(hours=72)
     partial = [
-        {"start": window_start.timestamp(), "max": 5.0},
+        {"start": (window_start - timedelta(hours=1)).timestamp(), "max": 5.0},
+        {"start": window_start.timestamp(), "max": 0.4},
         {"start": (window_start + timedelta(hours=2)).timestamp(), "max": 0.4},
         {"start": (window_start + timedelta(hours=6)).timestamp(), "max": 0.9},
         {"start": (now - timedelta(hours=3)).timestamp(), "max": 0.2},
         {"start": (now - timedelta(hours=1)).timestamp(), "max": 0.35},
     ]
-    # The exact -72h row (peak 5.0) is outside the window. Partial first day
-    # contributes 0.9 - 0.4 = 0.5. Today is max(0.35, live 0.5) = 0.5.
+    # The hour before the window (peak 5.0) is outside. The first included
+    # hour is the baseline of a partial day: 0.9 - 0.4 = 0.5. Today is
+    # max(0.35, live 0.5) = 0.5.
     assert aggregate_tempest_72h(
         partial, now=now, state_class=None, live_today_in=0.5, unit="in"
     ) == pytest.approx(1.0)
@@ -920,3 +938,55 @@ def test_rise_that_does_not_move_the_end_clears_released_zones():
     assert again.state.until_by_type[ZONE_TURF] == turf_until
     assert ZONE_TURF in again.armed_types
     assert "switch.front_lawn" not in again.state.released_zones
+
+
+def test_total_increasing_skips_the_first_sample_and_a_reset():
+    now = NOW
+    only = [{"start": (now - timedelta(hours=1)).timestamp(), "sum": 40.0, "state": 40.0}]
+    assert (
+        aggregate_tempest_72h(
+            only, now=now, state_class="total_increasing", live_today_in=40.0, unit="in"
+        )
+        == 0.0
+    )
+    reset = [
+        {"start": (now - timedelta(hours=5)).timestamp(), "sum": 10.0, "state": 10.0},
+        {"start": (now - timedelta(hours=4)).timestamp(), "sum": 10.2, "state": 10.2},
+        {"start": (now - timedelta(hours=3)).timestamp(), "sum": 0.1, "state": 0.1},
+        {"start": (now - timedelta(hours=2)).timestamp(), "sum": 0.4, "state": 0.4},
+    ]
+    # First sample is the baseline. +0.2, then a reset counts 0.1, then +0.3.
+    assert aggregate_tempest_72h(
+        reset, now=now, state_class="total_increasing", live_today_in=0.4, unit="in"
+    ) == pytest.approx(0.6)
+
+
+def test_seventy_two_elapsed_hours_across_dst_and_arizona():
+    from zoneinfo import ZoneInfo
+
+    phoenix = ZoneInfo("America/Phoenix")
+    now_phx = datetime(2026, 7, 15, 6, 0, tzinfo=phoenix)
+    assert (now_phx - (now_phx - timedelta(hours=72))).total_seconds() == 72 * 3600
+    # US DST starts 2026-03-08. The window still spans 72 elapsed hours.
+    la = ZoneInfo("America/Los_Angeles")
+    now_la = datetime(2026, 3, 8, 6, 0, tzinfo=la)
+    start = now_la - timedelta(hours=72)
+    assert (now_la - start).total_seconds() == 72 * 3600
+    row = [{"start": start.timestamp(), "sum": 1.0}, {"start": now_la.timestamp(), "sum": 1.2}]
+    assert aggregate_tempest_72h(
+        row, now=now_la, state_class="total_increasing", live_today_in=None, unit="in"
+    ) == pytest.approx(0.2)
+
+
+def test_previous_today_from_another_day_is_reseeded():
+    stale = StoredRainLockout(
+        previous_today_in=0.40,
+        previous_today_on=date(2026, 7, 14),
+    )
+    fresh = reseed_previous_today(stale, date(2026, 7, 15))
+    assert fresh.previous_today_in is None
+    kept = reseed_previous_today(
+        StoredRainLockout(previous_today_in=0.20, previous_today_on=date(2026, 7, 15)),
+        date(2026, 7, 15),
+    )
+    assert kept.previous_today_in == pytest.approx(0.20)

@@ -73,6 +73,7 @@ def test_rain_url_asks_for_three_past_days_and_no_key():
     assert "hourly=precipitation,precipitation_probability" in url
     assert "precipitation_sum" in url
     assert "et0_fao_evapotranspiration" in url
+    assert "temperature_2m_max" not in url
     assert "timezone=America" in url
     assert "key" not in url.lower()
 
@@ -110,18 +111,41 @@ def test_rain_parser_drops_the_current_hour_and_the_73rd_bucket():
         {
             "hourly": {
                 "time": [
-                    "2026-11-01T12:00",  # exactly -72h, the extra bucket
+                    "2026-11-01T11:00",  # -73h, outside
+                    "2026-11-01T12:00",  # exactly -72h, the first hour
                     "2026-11-01T13:00",  # -71h, inside
                     "2026-11-04T11:00",  # last completed hour
                     "2026-11-04T12:00",  # in progress
                 ],
-                "precipitation": [100.0, 25.4, 25.4, 50.0],
+                "precipitation": [9.0, 100.0, 25.4, 25.4, 50.0],
             }
         },
         now=now,
     )
-    assert parsed["past_72h_in"] == round(50.8 / 25.4, 4)
+    assert parsed["past_72h_in"] == round(150.8 / 25.4, 4)
     assert parsed["current_precip_mm"] == 50.0
+
+
+def test_rain_parser_uses_the_payload_utc_offset():
+    from datetime import UTC, datetime, timedelta, timezone
+
+    # 19:00 UTC is 12:00 in Arizona (UTC-7, no DST). Local 11:00 is one
+    # completed hour earlier, not eight hours earlier.
+    now = datetime(2026, 11, 4, 19, 0, tzinfo=UTC)
+    parsed = parse_open_meteo_rain(
+        {
+            "utc_offset_seconds": -7 * 3600,
+            "timezone": "America/Phoenix",
+            "hourly": {
+                "time": ["2026-11-04T11:00", "2026-11-04T12:00"],
+                "precipitation": [25.4, 2.0],
+            },
+        },
+        now=now,
+    )
+    assert parsed["past_72h_in"] == round(25.4 / 25.4, 4)
+    assert parsed["current_precip_mm"] == 2.0
+    assert timezone(timedelta(seconds=-7 * 3600)).utcoffset(None) is not None
 
 
 def test_rain_parser_falls_back_to_daily_sums():

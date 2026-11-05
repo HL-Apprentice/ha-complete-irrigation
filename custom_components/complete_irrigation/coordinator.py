@@ -81,12 +81,14 @@ from .rain_lockout import (
     ZONE_GERMINATION,
     StoredRainLockout,
     aggregate_tempest_72h,
+    armed_before_run,
     classify_zone,
     combine_rain_sources,
     decide_lockouts,
     detect_active_rain,
     moisture_releases_early,
     reference_daily_eto,
+    reseed_previous_today,
     zone_is_garden,
 )
 from .run_history import (
@@ -139,6 +141,9 @@ _RESUME_MAX_ATTEMPTS = 5
 # connect / sock_read / total are all set so a hung TLS handshake cannot sit
 # on the tick. A cached or failed response must not extend a lockout.
 _OM_CACHE = timedelta(minutes=30)
+# Tempest history is local and moves when rain is falling. Five minutes,
+# and any change in the live sensor, is as stale as this cache gets.
+_TEMPEST_CACHE = timedelta(minutes=5)
 _OM_TIMEOUT_TOTAL_S = 15
 _OM_TIMEOUT_CONNECT_S = 5
 _OM_TIMEOUT_SOCK_READ_S = 10
@@ -351,6 +356,8 @@ class ScheduleCoordinator:
         self._om_unconsumed_fresh = False
         self._tempest_cache_at: datetime | None = None
         self._tempest_cache_value: float | None = None
+        self._tempest_cache_live: float | None = None
+        self._lockout_blocked_runs: list[dict[str, Any]] = []
         self._zone_class_token: tuple | None = None
         self._zone_class_report: dict[str, dict[str, str | None]] | None = None
         self._rain_issue_applied: bool | None = None
@@ -602,6 +609,9 @@ class ScheduleCoordinator:
             # while its token still matches; a plant or schedule edit changes
             # the token and the report is built again. Nothing is written.
             "zones": self._public_zone_report(),
+            # Runs the lockout removed before conflict resolution. They are
+            # not scheduled; this is only so the panel can see them.
+            "blocked_runs": list(self._lockout_blocked_runs),
         }
 
     async def async_setup(self) -> None:
@@ -1292,6 +1302,8 @@ class ScheduleCoordinator:
             until_by_type={},
             forecast_extended=set(),
             released_zones={},
+            armed_at_by_type={},
+            birdbath_dry_ticks=0,
         )
         self._recompute_lockout_until()
         self._touch_lockout_listeners()
@@ -1384,7 +1396,7 @@ class ScheduleCoordinator:
         )
         # A multi-zone schedule can mix a locked type with an unlocked one.
         # Drop only the locked steps so they neither fire nor block the resolver.
-        upcoming = [run for run in upcoming if not self._run_blocked_by_lockout(run, now)]
+        upcoming = self._without_lockout_blocked(upcoming, now)
         # Honor a user-selected global conflict policy (Settings tab).
         # Unknown / missing → keep safe default of POLICY_DEFER_NEW.
         configured = self._config.get("conflict_policy", POLICY_DEFER_NEW)
@@ -2291,7 +2303,18 @@ class ScheduleCoordinator:
         """Read the lockout document. Does not write any store, including schedules."""
         try:
             data = await _async_load_rain_lockout(self._hass, self._entry_id)
-            self._rain_lockout = StoredRainLockout.from_dict(data)
+            loaded = StoredRainLockout.from_dict(data)
+            # A previous_today_in from another calendar day is not a rising
+            # edge. Same-day restarts keep the stored reading.
+            try:
+                from homeassistant.util import dt as dt_util
+
+                today = dt_util.now().date()
+            except Exception:
+                today = None
+            if today is not None:
+                loaded = reseed_previous_today(loaded, today)
+            self._rain_lockout = loaded
         except Exception:
             _LOGGER.exception("rain lockout load failed; starting unlocked")
             self._rain_lockout = StoredRainLockout()
@@ -2600,16 +2623,18 @@ class ScheduleCoordinator:
         ``max(statistic, live sensor)``. A ``total_increasing`` sensor has no
         ``max`` statistic.
         """
+        live = self._read_today_rain_inches()
         cached_at = self._tempest_cache_at
-        if cached_at is not None:
+        if cached_at is not None and live == self._tempest_cache_live:
             try:
-                if now - cached_at < _OM_CACHE:
+                if now - cached_at < _TEMPEST_CACHE:
                     return self._tempest_cache_value
             except TypeError:
                 pass
         value = await self._query_tempest_history(entity, now)
         self._tempest_cache_at = now
         self._tempest_cache_value = value
+        self._tempest_cache_live = live
         return value
 
     async def _query_tempest_history(self, entity: str, now: datetime) -> float | None:
@@ -2997,6 +3022,12 @@ class ScheduleCoordinator:
             return
         if self._rain_lockout.released_zones.get(zone_entity_id) == zone_type:
             return
+        # A run that started before this lockout armed did not water under
+        # it. Releasing it would let the next run of this zone water while
+        # the lockout is still on.
+        armed_at = self._rain_lockout.armed_at_by_type.get(zone_type)
+        if not armed_before_run(armed_at, info.get("started_at")):
+            return
         released = dict(self._rain_lockout.released_zones)
         released[zone_entity_id] = zone_type
         self._rain_lockout = self._rain_lockout.with_updates(released_zones=released)
@@ -3014,6 +3045,31 @@ class ScheduleCoordinator:
         return any(
             not self.is_zone_locked_out(step.zone_entity_id, now) for step in sched.all_steps()
         )
+
+    def _without_lockout_blocked(self, upcoming: list, now: datetime) -> list:
+        """Drop locked runs from scheduling and remember them for the sensor.
+
+        The conflict resolver still does not see them, so their absence does
+        not change who else runs. The list is only a record.
+        """
+        blocked = [run for run in upcoming if self._run_blocked_by_lockout(run, now)]
+        self._lockout_blocked_runs = [
+            {
+                "zone_entity_id": run.zone_entity_id,
+                "schedule_id": run.schedule_id,
+                "start": run.start_at.isoformat() if getattr(run, "start_at", None) else None,
+            }
+            for run in blocked
+        ]
+        if blocked:
+            zones = ", ".join(item["zone_entity_id"] for item in self._lockout_blocked_runs)
+            _LOGGER.info(
+                "Rain lockout hid %d run(s) from the conflict resolver: %s",
+                len(blocked),
+                zones,
+            )
+        blocked_ids = {id(run) for run in blocked}
+        return [run for run in upcoming if id(run) not in blocked_ids]
 
     def _run_blocked_by_lockout(self, run, now: datetime) -> bool:
         sched = self._store.get(run.schedule_id)
