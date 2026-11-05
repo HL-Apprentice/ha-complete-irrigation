@@ -875,10 +875,12 @@ def test_one_source_falling_retreats_without_the_blend():
     )
     # Tempest falls 0.012 in. Open-Meteo is flat. The mean falls only 0.006 in,
     # under the blend floor, but this source still retreats. Nothing arms.
+    blend_in = 0.494
+    tempest_in = 0.488
     retreated = _decide(
         seeded.state,
-        0.494,
-        RainBlend(0.494, 0.488, 0.50, False, "mean"),
+        blend_in,
+        RainBlend(blend_in, tempest_in, 0.50, False, "mean"),
         when=NOW + timedelta(minutes=30),
     )
     assert retreated.armed_types == frozenset()
