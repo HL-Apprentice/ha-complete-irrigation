@@ -16,7 +16,7 @@ No API key. Non-commercial use is free (this is a non-commercial hobbyist tool).
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import quote
 
@@ -87,8 +87,9 @@ def open_meteo_rain_url(lat: float, lon: float, tz: str | None = None) -> str:
     Separate from ``open_meteo_url`` so the ETo fetch stays a 7-day forecast.
     ``past_days=3`` is what Open-Meteo needs to cover the trailing 72 hours.
     Hourly precipitation is the 72h sum and the next-24h total; daily ET0 is
-    the forecast evaporative demand used to scale the lockout. Metric units
-    (mm, °C) - the parser converts.
+    the forecast evaporative demand used to scale the lockout. The daily
+    high is today's and tomorrow's heat for the lockout ceiling, including
+    when auto-ETo is off. Metric units (mm, °C) - the parser converts.
     """
     timezone = quote(tz) if tz else "auto"
     return (
@@ -118,16 +119,20 @@ def parse_open_meteo_rain(payload: Any, *, now: datetime | None = None) -> dict[
     """Pull the lockout's rain figures out of an Open-Meteo forecast payload.
 
     ``past_72h_in`` sums completed hours only: hour-start in
-    ``(-72h, -1h]``. The in-progress hour is excluded (Open-Meteo revises it,
-    and it is still falling). The hour that starts exactly 72h ago is outside
-    the window, matching the Tempest statistic window. ``forecast_24h_in``
+    ``[-72h, -1h]``. The in-progress hour is excluded (Open-Meteo revises it,
+    and it is still falling). The hour that starts exactly 72h ago is the
+    first hour of the window. Times are read in the payload's
+    ``utc_offset_seconds`` when that field is present. ``forecast_24h_in``
     sums ``(now, now+24h]``, and
     ``forecast_24h_probability_pct`` is the max hourly probability in that
     window (Open-Meteo reports percent, 0-100). ``forecast_daily_eto_in`` is
-    the hotter of today and tomorrow's FAO ET0, in inches. When hourly data
-    is missing, ``past_daily_in`` is the daily sums for the previous two
-    complete days. Today's daily sum is left out: it includes forecast
-    hours. That fallback is not written into ``past_72h_in``.
+    the hotter of today and tomorrow's FAO ET0, in inches.
+    ``forecast_high_f`` is the hotter of today's and tomorrow's daily
+    high, in °F. Days before today are history, not the lockout horizon,
+    so they are left out. When hourly data is missing, ``past_daily_in``
+    is the daily sums for the previous two complete days. Today's daily
+    sum is left out: it includes forecast hours. That fallback is not
+    written into ``past_72h_in``.
 
     All rain totals are inches. Missing sections stay None - the caller falls
     back to the other source.
@@ -138,11 +143,16 @@ def parse_open_meteo_rain(payload: Any, *, now: datetime | None = None) -> dict[
         "forecast_24h_in": None,
         "forecast_24h_probability_pct": None,
         "forecast_daily_eto_in": None,
+        "forecast_high_f": None,
         "current_precip_mm": None,
     }
     if not isinstance(payload, dict):
         return out
-    now_cmp = _as_naive(now) if isinstance(now, datetime) else None
+    now_cmp = now if isinstance(now, datetime) else None
+    offset = payload.get("utc_offset_seconds")
+    zone = None
+    if isinstance(offset, (int, float)) and not isinstance(offset, bool):
+        zone = timezone(timedelta(seconds=int(offset)))
 
     hourly = payload.get("hourly") if isinstance(payload.get("hourly"), dict) else {}
     times = hourly.get("time") if isinstance(hourly.get("time"), list) else []
@@ -163,11 +173,20 @@ def parse_open_meteo_rain(payload: Any, *, now: datetime | None = None) -> dict[
             stamp = _iso_dt(raw_time)
             if stamp is None or index >= len(precip):
                 continue
+            if stamp.tzinfo is None and zone is not None:
+                stamp = stamp.replace(tzinfo=zone)
             millimeters = precip[index]
             if not isinstance(millimeters, (int, float)):
                 continue
-            delta_h = (_as_naive(stamp) - now_cmp).total_seconds() / 3600.0
-            if -72.0 < delta_h <= -1.0:
+            # now=None never reaches here (the loop requires now_cmp), and a
+            # missing clock must not touch tzinfo.
+            if now_cmp is None:
+                continue
+            if now_cmp.tzinfo is not None and stamp.tzinfo is not None:
+                delta_h = (stamp - now_cmp).total_seconds() / 3600.0
+            else:
+                delta_h = (_as_naive(stamp) - _as_naive(now_cmp)).total_seconds() / 3600.0
+            if -72.0 <= delta_h <= -1.0:
                 past += float(millimeters)
                 past_n += 1
             elif -1.0 < delta_h <= 0.0:
@@ -238,6 +257,37 @@ def parse_open_meteo_rain(payload: Any, *, now: datetime | None = None) -> dict[
         ]
     if eto_vals:
         out["forecast_daily_eto_in"] = round(max(eto_vals), 4)
+
+    raw_highs = daily.get("temperature_2m_max")
+    highs = raw_highs if isinstance(raw_highs, list) else []
+    high_vals: list[float] = []
+    if now_cmp is not None and highs and day_times:
+        today = now_cmp.date()
+        for index, raw_day in enumerate(day_times):
+            if index >= len(highs) or isinstance(highs[index], bool):
+                continue
+            if not isinstance(highs[index], (int, float)):
+                continue
+            if not isinstance(raw_day, str):
+                continue
+            try:
+                day = date.fromisoformat(raw_day[:10])
+            except ValueError:
+                continue
+            # Today and tomorrow only. past_days=3 puts hotter history first.
+            if 0 <= (day - today).days <= 1:
+                high_vals.append(float(highs[index]))
+    elif highs:
+        # No clock: Open-Meteo orders oldest first, so the forecast days
+        # are the trailing pair (forecast_days=2).
+        tail = [
+            float(value)
+            for value in highs
+            if isinstance(value, (int, float)) and not isinstance(value, bool)
+        ]
+        high_vals = tail[-2:]
+    if high_vals:
+        out["forecast_high_f"] = round(_c_to_f(max(high_vals)), 1)
 
     if out["forecast_24h_in"] is None and day_sums:
         # Coarse stand-in: the first daily bucket at or after today.

@@ -176,6 +176,8 @@ Same Configure modal has an optional **Climate sensors** section. Bind one or mo
 ### Weather + rain lockout (Weather tab)
 Multi-pick rainfall sensors (first checked = primary for the lockout calc; all bound sensors show on the Today banner). Pick a temperature sensor; set hot-weather threshold and boost %. The Today banner gets a customizable ⚙️ gear to show/hide and reorder cells.
 
+The rain lockout (v1.64) is per zone type, then one **global heat ceiling** caps every type to the same end time: about 48 hours when it is mild, 36 hours at 95°F, 24 hours at 105°F, down to 18 hours at 115°F. The ceiling uses the hotter of the current temperature and the forecast daily high (today and tomorrow). That forecast comes from the Open-Meteo rain fetch about every 30 minutes, whether or not automatic ETo is on. When the forecast is missing or older than 36 hours, the rain-lockout sensor shows `forecast_fresh: false` and the ceiling uses the current temperature only; a warning is logged at most every six hours, not on every check. The ceiling stays global on purpose. A per-type ceiling would let deep drip run longer than turf on a hot day; the owner chose one shared cap instead. Arizona has no daylight-saving time, and the 72-hour rain window is 72 elapsed hours either way, including across a DST change elsewhere.
+
 ### Notifications (Notifications tab)
 Set notify target, master enable, quiet hours window, and toggle the daily low-moisture summary. **Send test** button verifies routing.
 

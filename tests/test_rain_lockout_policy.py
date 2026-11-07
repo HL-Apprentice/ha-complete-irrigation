@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
@@ -17,16 +17,19 @@ from custom_components.complete_irrigation.rain_lockout import (
     RainBlend,
     StoredRainLockout,
     aggregate_tempest_72h,
+    armed_before_run,
     base_lockout_days,
     classify_zone,
     combine_rain_sources,
     decide_lockouts,
+    detect_active_rain,
     eto_scale_factor,
     extended_until,
     forecast_extends_lockout,
     moisture_releases_early,
     reference_daily_eto,
     release_zone_type,
+    reseed_previous_today,
     scaled_lockout_hours,
     table_days,
     zone_is_garden,
@@ -270,10 +273,25 @@ def test_birdbath_locks_only_while_rain_is_falling_and_germination_never():
         forecast_in=None,
         forecast_probability_pct=None,
     )
-    assert stopped.state.until_by_type[ZONE_BIRDBATH] is None
-    assert stopped.state.until_by_type[ZONE_GERMINATION] is None
+    # One dry tick keeps the 20-minute hold.
+    assert stopped.state.until_by_type[ZONE_BIRDBATH] == NOW + timedelta(minutes=20)
+    assert stopped.state.birdbath_dry_ticks == 1
+    cleared = decide_lockouts(
+        stopped.state,
+        now=NOW + timedelta(minutes=6),
+        rainfall_in=1.0,
+        blend=_blend(1.0),
+        daily_eto_in=0.12,
+        max_hours=MILD_HOURS,
+        garden_present=False,
+        active_rain=False,
+        forecast_in=None,
+        forecast_probability_pct=None,
+    )
+    assert cleared.state.until_by_type[ZONE_BIRDBATH] is None
+    assert cleared.state.until_by_type[ZONE_GERMINATION] is None
     # The holding clocks from the same storm are still there.
-    assert stopped.state.until_by_type[ZONE_TURF] == raining.state.until_by_type[ZONE_TURF]
+    assert cleared.state.until_by_type[ZONE_TURF] == raining.state.until_by_type[ZONE_TURF]
 
 
 def test_completed_run_releases_one_type_and_the_same_rain_does_not_rearm():
@@ -469,22 +487,22 @@ def test_tempest_statistics_accept_float_timestamps_and_a_72h_window():
 
     now = NOW
     # HA 2023.3+ (verified on 2025.1) returns start as a POSIX timestamp.
-    # The bucket that starts exactly 72h ago is the 73rd hour and is excluded.
+    # The row at exactly -72h is the baseline (sum 9), not rain by itself.
+    # The row at -73h is outside the window.
     rows = [
+        {"start": (now - timedelta(hours=73)).timestamp(), "sum": 1.0, "state": 0.0},
         {"start": (now - timedelta(hours=72)).timestamp(), "sum": 9.0, "state": 0.0},
         {"start": (now - timedelta(hours=70)).timestamp(), "sum": 10.0, "state": 0.0},
         {"start": (now - timedelta(hours=2)).timestamp(), "sum": 10.5, "state": 0.10},
     ]
-    # Growth is 0.5. Live 0.25 is today's reading, ahead of the last row's
-    # state (0.10), not ahead of the cumulative sum, so 0.15 is added.
+    # Deltas after the baseline: 1.0 + 0.5. Live 0.25 is ahead of the last
+    # row's state (0.10), so 0.15 is added. The row at -73h is outside.
     assert aggregate_tempest_72h(
         rows, now=now, state_class="total_increasing", live_today_in=0.25, unit="in"
-    ) == pytest.approx(0.65)
-    # Live below that same-day state adds nothing, even though it is far
-    # below the cumulative sum.
+    ) == pytest.approx(1.65)
     assert aggregate_tempest_72h(
         rows, now=now, state_class="total_increasing", live_today_in=0.05, unit="in"
-    ) == pytest.approx(0.5)
+    ) == pytest.approx(1.5)
     # ISO and datetime inputs still parse.
     iso_rows = [
         {"start": (now - timedelta(hours=70)), "sum": 10.0, "state": 0.0},
@@ -496,14 +514,16 @@ def test_tempest_statistics_accept_float_timestamps_and_a_72h_window():
 
     window_start = now - timedelta(hours=72)
     partial = [
-        {"start": window_start.timestamp(), "max": 5.0},
+        {"start": (window_start - timedelta(hours=1)).timestamp(), "max": 5.0},
+        {"start": window_start.timestamp(), "max": 0.4},
         {"start": (window_start + timedelta(hours=2)).timestamp(), "max": 0.4},
         {"start": (window_start + timedelta(hours=6)).timestamp(), "max": 0.9},
         {"start": (now - timedelta(hours=3)).timestamp(), "max": 0.2},
         {"start": (now - timedelta(hours=1)).timestamp(), "max": 0.35},
     ]
-    # The exact -72h row (peak 5.0) is outside the window. Partial first day
-    # contributes 0.9 - 0.4 = 0.5. Today is max(0.35, live 0.5) = 0.5.
+    # The hour before the window (peak 5.0) is outside. The first included
+    # hour is the baseline of a partial day: 0.9 - 0.4 = 0.5. Today is
+    # max(0.35, live 0.5) = 0.5.
     assert aggregate_tempest_72h(
         partial, now=now, state_class=None, live_today_in=0.5, unit="in"
     ) == pytest.approx(1.0)
@@ -920,3 +940,287 @@ def test_rise_that_does_not_move_the_end_clears_released_zones():
     assert again.state.until_by_type[ZONE_TURF] == turf_until
     assert ZONE_TURF in again.armed_types
     assert "switch.front_lawn" not in again.state.released_zones
+
+
+def test_total_increasing_skips_the_first_sample_and_a_reset():
+    now = NOW
+    only = [{"start": (now - timedelta(hours=1)).timestamp(), "sum": 40.0, "state": 40.0}]
+    assert (
+        aggregate_tempest_72h(
+            only, now=now, state_class="total_increasing", live_today_in=40.0, unit="in"
+        )
+        == 0.0
+    )
+    reset = [
+        {"start": (now - timedelta(hours=5)).timestamp(), "sum": 10.0, "state": 10.0},
+        {"start": (now - timedelta(hours=4)).timestamp(), "sum": 10.2, "state": 10.2},
+        {"start": (now - timedelta(hours=3)).timestamp(), "sum": 0.1, "state": 0.1},
+        {"start": (now - timedelta(hours=2)).timestamp(), "sum": 0.4, "state": 0.4},
+    ]
+    # First sample is the baseline. +0.2, then the drop to 0.1 is not rain,
+    # then +0.3 from the new baseline. The reset value itself is not added.
+    assert aggregate_tempest_72h(
+        reset, now=now, state_class="total_increasing", live_today_in=0.4, unit="in"
+    ) == pytest.approx(0.5)
+
+
+def test_seventy_two_elapsed_hours_across_dst_and_arizona():
+    from zoneinfo import ZoneInfo
+
+    # US DST starts 2026-03-08 02:00 in Los Angeles. 72 elapsed hours before
+    # 06:00 that morning is not the same instant as "three wall-clock days."
+    la = ZoneInfo("America/Los_Angeles")
+    now_la = datetime(2026, 3, 8, 6, 0, tzinfo=la)
+    start = now_la - timedelta(hours=72)
+    outside = start - timedelta(hours=1)
+    rows = [
+        {"start": outside.timestamp(), "sum": 0.5},
+        {"start": start.timestamp(), "sum": 1.0},
+        {"start": now_la.timestamp(), "sum": 1.2},
+    ]
+    # The -73h elapsed row is outside. The -72h row is the baseline.
+    # Only the 0.2 after it counts, including across the spring-forward.
+    assert aggregate_tempest_72h(
+        rows, now=now_la, state_class="total_increasing", live_today_in=None, unit="in"
+    ) == pytest.approx(0.2)
+    # Phoenix does not observe DST. The same elapsed window still counts
+    # the increase after the -72h baseline and ignores the hour before it.
+    phoenix = ZoneInfo("America/Phoenix")
+    now_phx = datetime(2026, 7, 15, 6, 0, tzinfo=phoenix)
+    phx_start = now_phx - timedelta(hours=72)
+    phx_rows = [
+        {"start": (phx_start - timedelta(hours=1)).timestamp(), "sum": 0.5},
+        {"start": phx_start.timestamp(), "sum": 1.0},
+        {"start": now_phx.timestamp(), "sum": 1.2},
+    ]
+    assert aggregate_tempest_72h(
+        phx_rows, now=now_phx, state_class="total_increasing", live_today_in=None, unit="in"
+    ) == pytest.approx(0.2)
+
+
+def test_previous_today_from_another_day_is_reseeded():
+    stale = StoredRainLockout(
+        previous_today_in=0.40,
+        previous_today_on=date(2026, 7, 14),
+    )
+    fresh = reseed_previous_today(stale, date(2026, 7, 15))
+    assert fresh.previous_today_in is None
+    kept = reseed_previous_today(
+        StoredRainLockout(previous_today_in=0.20, previous_today_on=date(2026, 7, 15)),
+        date(2026, 7, 15),
+    )
+    assert kept.previous_today_in == pytest.approx(0.20)
+
+
+def test_total_increasing_dip_and_recovery_is_not_new_rain():
+    now = NOW
+    rows = [
+        {"start": (now - timedelta(hours=3)).timestamp(), "sum": 10.0, "state": 10.0},
+        {"start": (now - timedelta(hours=2)).timestamp(), "sum": 0.05, "state": 0.05},
+        {"start": (now - timedelta(hours=1)).timestamp(), "sum": 10.2, "state": 10.2},
+    ]
+    total = aggregate_tempest_72h(
+        rows, now=now, state_class="total_increasing", live_today_in=10.2, unit="in"
+    )
+    # Net new rain is the 0.2 above the pre-dip reading. The dip is not rain,
+    # and the climb from 0.05 back through 10.0 is not a second storm.
+    assert total == pytest.approx(0.2)
+    assert base_lockout_days(total, ZONE_TURF) == 1
+    # The false ~10.2 in reading would have been the long table row.
+    assert base_lockout_days(10.2, ZONE_TURF) == 5
+    # The recovery can also arrive as the live sensor while the last
+    # statistic row is still the dipped sample.
+    dipped = rows[:2]
+    recovered = aggregate_tempest_72h(
+        dipped, now=now, state_class="total_increasing", live_today_in=10.2, unit="in"
+    )
+    assert recovered == pytest.approx(0.2)
+
+
+def test_missing_active_rain_does_not_count_as_a_dry_tick():
+    assert detect_active_rain() is None
+    assert detect_active_rain(weather_states=("sunny",)) is False
+    raining = decide_lockouts(
+        None,
+        now=NOW,
+        rainfall_in=0.30,
+        blend=_blend(0.30),
+        daily_eto_in=0.12,
+        max_hours=MILD_HOURS,
+        garden_present=False,
+        active_rain=True,
+        forecast_in=None,
+        forecast_probability_pct=None,
+    )
+    held = decide_lockouts(
+        raining.state,
+        now=NOW + timedelta(minutes=5),
+        rainfall_in=0.30,
+        blend=_blend(0.30),
+        daily_eto_in=0.12,
+        max_hours=MILD_HOURS,
+        garden_present=False,
+        active_rain=False,
+        forecast_in=None,
+        forecast_probability_pct=None,
+    )
+    assert held.state.birdbath_dry_ticks == 1
+    bird_until = held.state.until_by_type[ZONE_BIRDBATH]
+    missing = decide_lockouts(
+        held.state,
+        now=NOW + timedelta(minutes=6),
+        rainfall_in=0.30,
+        blend=_blend(0.30),
+        daily_eto_in=0.12,
+        max_hours=MILD_HOURS,
+        garden_present=False,
+        active_rain=None,
+        forecast_in=None,
+        forecast_probability_pct=None,
+    )
+    assert missing.state.birdbath_dry_ticks == 1
+    assert missing.state.until_by_type[ZONE_BIRDBATH] == bird_until
+    cleared = decide_lockouts(
+        missing.state,
+        now=NOW + timedelta(minutes=7),
+        rainfall_in=0.30,
+        blend=_blend(0.30),
+        daily_eto_in=0.12,
+        max_hours=MILD_HOURS,
+        garden_present=False,
+        active_rain=False,
+        forecast_in=None,
+        forecast_probability_pct=None,
+    )
+    assert cleared.state.birdbath_dry_ticks == 0
+    assert cleared.state.until_by_type[ZONE_BIRDBATH] is None
+
+
+def test_upgrade_without_previous_today_on_keeps_today_baseline():
+    # 1.64.0 stored the inches and not the date. A noon restart must not
+    # wipe 0.3 in already recorded today, and must not arm or add it again.
+    upgraded = StoredRainLockout.from_dict(
+        {
+            "previous_today_in": 0.30,
+            "last_event_rain_in": 0.30,
+            "baseline_seeded": True,
+            "baseline_by_source": {"tempest": 0.30, "open_meteo": 0.30},
+            "last_sample_sources": ["tempest", "open_meteo"],
+            "lockout_until": {"turf": (NOW + timedelta(hours=12)).isoformat()},
+        }
+    )
+    assert upgraded.previous_today_on is None
+    kept = reseed_previous_today(upgraded, NOW.date())
+    assert kept.previous_today_in == pytest.approx(0.30)
+    assert kept.previous_today_on == NOW.date()
+    update = decide_lockouts(
+        kept,
+        now=NOW,
+        rainfall_in=0.30,
+        blend=_blend(0.30),
+        daily_eto_in=0.12,
+        max_hours=MILD_HOURS,
+        garden_present=False,
+        active_rain=False,
+        forecast_in=None,
+        forecast_probability_pct=None,
+        today_in=0.30,
+    )
+    assert update.armed_types == frozenset()
+    assert update.state.until_by_type[ZONE_TURF] == NOW + timedelta(hours=12)
+    assert update.state.previous_today_in == pytest.approx(0.30)
+    assert update.state.last_event_rain_in == pytest.approx(0.30)
+    # None previous_today_in is a baseline too: record 0.3, do not add it
+    # onto the event total and do not arm.
+    bare = StoredRainLockout(
+        last_event_rain_in=0.30,
+        baseline_seeded=True,
+        baseline_by_source={"tempest": 0.30, "open_meteo": 0.30},
+        last_sample_sources=("tempest", "open_meteo"),
+        previous_today_in=None,
+        until_by_type={ZONE_TURF: NOW + timedelta(hours=12)},
+    )
+    seeded = decide_lockouts(
+        bare,
+        now=NOW,
+        rainfall_in=0.30,
+        blend=_blend(0.30),
+        daily_eto_in=0.12,
+        max_hours=MILD_HOURS,
+        garden_present=False,
+        active_rain=False,
+        forecast_in=None,
+        forecast_probability_pct=None,
+        today_in=0.30,
+    )
+    assert seeded.armed_types == frozenset()
+    assert seeded.state.previous_today_in == pytest.approx(0.30)
+    assert seeded.state.last_event_rain_in == pytest.approx(0.30)
+    assert seeded.state.until_by_type[ZONE_TURF] == NOW + timedelta(hours=12)
+
+
+def test_armed_before_run_equal_naive_aware_and_missing_started_at():
+    from zoneinfo import ZoneInfo
+
+    armed = datetime(2026, 7, 15, 6, 0, tzinfo=UTC)
+    assert armed_before_run(armed, armed) is False
+    assert armed_before_run(armed, armed.isoformat()) is False
+    # Naive timestamps are UTC, so they compare with an aware UTC arm.
+    naive = datetime(2026, 7, 15, 6, 0)
+    assert armed_before_run(armed, naive) is False
+    assert armed_before_run(naive, armed) is False
+    assert armed_before_run(armed, naive + timedelta(hours=1)) is True
+    assert armed_before_run(naive, armed + timedelta(hours=1)) is True
+    # 23:00 in Phoenix (UTC-7) is 06:00 UTC. Equal, so not strictly before.
+    local = datetime(2026, 7, 14, 23, 0, tzinfo=ZoneInfo("America/Phoenix"))
+    assert armed_before_run(local, armed) is False
+    assert armed_before_run(armed, local + timedelta(minutes=1)) is True
+    assert armed_before_run(armed, None) is False
+    assert armed_before_run(None, armed) is False
+    assert armed_before_run(armed, "not-a-date") is False
+    # A 1.64.0 document has no arm time, so a finished run does not release.
+    legacy = StoredRainLockout.from_dict(
+        {"lockout_until": {"turf": (NOW + timedelta(hours=12)).isoformat()}}
+    )
+    assert legacy.armed_at_by_type == {}
+    assert armed_before_run(legacy.armed_at_by_type.get(ZONE_TURF), armed) is False
+
+
+def test_turf_release_leaves_garden_and_birdbath_clocks():
+    armed = decide_lockouts(
+        None,
+        now=NOW,
+        rainfall_in=0.30,
+        blend=_blend(0.30),
+        daily_eto_in=0.12,
+        max_hours=96,
+        garden_present=False,
+        active_rain=True,
+        forecast_in=None,
+        forecast_probability_pct=None,
+    ).state
+    garden_until = armed.until_by_type[ZONE_FLOWERS_GARDEN]
+    bird_until = armed.until_by_type[ZONE_BIRDBATH]
+    assert garden_until == NOW + timedelta(days=1)
+    assert bird_until == NOW + timedelta(minutes=20)
+    released = release_zone_type(armed, ZONE_TURF)
+    assert released.until_by_type[ZONE_TURF] is None
+    assert released.until_by_type[ZONE_FLOWERS_GARDEN] == garden_until
+    assert released.until_by_type[ZONE_BIRDBATH] == bird_until
+    # The same rain does not re-arm turf, and does not move the other clocks.
+    again = decide_lockouts(
+        released,
+        now=NOW + timedelta(minutes=5),
+        rainfall_in=0.30,
+        blend=_blend(0.30),
+        daily_eto_in=0.12,
+        max_hours=96,
+        garden_present=False,
+        active_rain=None,
+        forecast_in=None,
+        forecast_probability_pct=None,
+    )
+    assert again.armed_types == frozenset()
+    assert again.state.until_by_type[ZONE_TURF] is None
+    assert again.state.until_by_type[ZONE_FLOWERS_GARDEN] == garden_until
+    assert again.state.until_by_type[ZONE_BIRDBATH] == bird_until

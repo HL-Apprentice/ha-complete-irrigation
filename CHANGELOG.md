@@ -4,6 +4,47 @@ All notable changes to this integration. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## v1.64.1 — 2026-11-05 — patch
+
+**Rain lockout follow-ups. The heat ceiling stays global.**
+
+A finished run releases its zone only when that zone's lockout armed
+before the run started, so a storm that arrives mid-run does not open
+the next cycle. The run-completion caller passes the zone's session,
+and that session carries `started_at`. Lockouts already armed under
+1.64.0 have no `armed_at_by_type`. Until that type is armed again, a
+finished run does not release them: there is no arm time to compare,
+and releasing them would water through a lockout this version cannot
+prove was already on.
+
+The birdbath hold survives a single dry reading, and a tick with no
+active-rain observation is not a dry tick. Tempest history is cached
+for five minutes and drops the cache when the live sensor changes. A
+lifetime rain counter's first sample is not a storm. A dip in that
+counter is a reset or a glitch, not new rain, and the climb back to
+the previous reading is not a second storm. The window is 72 elapsed
+hours (Arizona has no daylight-saving time; a DST change elsewhere is
+still 72 real hours). Open-Meteo's hourly sum includes the precipitation
+in the hour that starts exactly 72 hours ago. On the Tempest
+lifetime-counter and partial-day paths, that same row is only the
+baseline: counted rain is the increase after it. Open-Meteo hourly
+times use the response's UTC offset. The 30-minute rain request asks
+for the daily high again. Today's and tomorrow's highs refresh the
+forecast-high cache on every successful fetch, including when auto-ETo
+is off. The heat ceiling uses the hotter of the current temperature
+and that forecast. When the forecast is missing or older than 36
+hours, the rain-lockout sensor shows `forecast_fresh: false` and the
+last `forecast_high_f` if it has one. The ceiling then uses the current
+temperature only, and a warning is logged at most every six hours.
+Runs the lockout
+hides from the conflict resolver are logged and listed on the sensor.
+`previous_today_in` from another day is cleared on startup. A 1.64.0
+document stored the inches and no date; that reading is kept as today's
+baseline, so a mid-day upgrade does not arm on it or count it twice.
+
+The heat ceiling is unchanged and remains one global cap for every zone
+type. That is the owner's decision.
+
 ## v1.64.0 — 2026-11-04 — minor
 
 **Rain lockout follows the storm and the heat, per zone type.**
