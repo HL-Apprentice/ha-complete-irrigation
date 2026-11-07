@@ -370,6 +370,19 @@ plant's drip set. Config via env: `WA_HEALTH_URL`, `WA_HA_URL`, `WA_TOKEN_FILE`,
 `WA_LLM_URL` (the LLM host's local endpoint), `WA_LLM_MODEL`. Proposals appear
 in the panel's 🤖 advisor card — each item applies only when you tap it.
 
+## Plant reference sources
+
+[Outdoor Dream Builder](https://www.outdoordreambuilder.com/plants) plant pages,
+fetched 2026-11-07, are kept as a separate reference file:
+`custom_components/complete_irrigation/reference/outdoordreambuilder_plants.json`
+(207 plants). `reference_plants.lookup_reference` returns a copy of one record.
+Water class, sun, size, bloom, hardiness, and the watering sentence are the
+words on the page. Where a page prints two hardiness ranges, both are kept.
+
+This file is reference-only. It is not used for care presets, `lookup_care`,
+schedules, zones, or the rain lockout, and its water classes are not treated as
+WUCOLS categories. Watering decisions still come from the curated care table.
+
 ## All services
 
 Most users won't need these — the panel covers everything. Available for advanced
@@ -441,7 +454,9 @@ Two layers:
   - *Water math*: `hydraulics` (WUCOLS + emitter sizing), `et_calc` (FAO-56),
     `plant_design`, `daily_planner`, `watering_diagnosis`
   - *Plants*: `plant`, `plant_care_db` (curated species care), `species_id`
-    (validation rail), `care_tasks`, `light_survey`, `vision_health`
+    (validation rail), `reference_plants` (Outdoor Dream Builder pages,
+    reference-only — not used for watering), `care_tasks`, `light_survey`,
+    `vision_health`
   - *Map & media*: `yard_map` (georeferencing + marker re-projection),
     `image_type` (magic-byte detection)
   - *AI*: `llm_client` (provider resolution + fallback), `watering_advisor`
