@@ -8,6 +8,11 @@ low-desert landscape species we ship curated, accurate care so identification on
 needs to get the NAME right. The species-ID rail consults this FIRST and only
 falls back to the model for species we don't cover.
 
+Outdoor Dream Builder pages are merged on top of that table (odb_care). A
+species key from those pages wins over a shorter genus key. An existing species
+row is never given a longer gap between waterings. Schedules, zones, and the
+rain lockout do not read this module's merge.
+
 Pure data + a tolerant matcher (HA-free). WUCOLS categories are the low-desert
 (Region 3, "arid/desert") values. Cadences are Arizona-friendly starting points
 the user can edit. Every value is bounded again by species_id.validate_suggestion
@@ -17,6 +22,8 @@ before it reaches a plant record, so a typo here can't poison the store.
 from __future__ import annotations
 
 from typing import Any
+
+from .odb_care import merge_odb_care, odb_name_aliases
 
 # scientific-name key (lowercased) -> care record. `common` is a friendly name;
 # `sun`/`wucols`/`preset` use the same enums species_id.validate_suggestion accepts.
@@ -1011,7 +1018,8 @@ _C = (
     ),
 )
 
-CURATED_CARE: dict[str, dict[str, Any]] = {
+# The 82 hand-written rows, before Outdoor Dream Builder species are merged.
+BASE_CARE: dict[str, dict[str, Any]] = {
     key: {
         "common": common,
         "wucols": wucols,
@@ -1026,17 +1034,51 @@ CURATED_CARE: dict[str, dict[str, Any]] = {
     for (key, common, wucols, sun, tlo, thi, preset, water, fert, note) in _C
 }
 
+CURATED_CARE, ODB_MERGE_REPORT = merge_odb_care(BASE_CARE)
+
+
+def _exact_names(care: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Botanical keys, plus a common name when it belongs to only one record."""
+    exact = dict(care)
+    by_common: dict[str, dict[str, Any]] = {}
+    ambiguous: set[str] = set()
+    for rec in care.values():
+        name = str(rec.get("common") or "").strip().casefold()
+        if not name:
+            continue
+        prior = by_common.get(name)
+        if prior is None:
+            by_common[name] = rec
+        elif prior is not rec:
+            ambiguous.add(name)
+    for name, rec in by_common.items():
+        if name in ambiguous or name in exact:
+            continue
+        exact[name] = rec
+    return exact
+
+
 # keys longest-first so "citrus limon" wins over the generic "citrus" fallback.
 _KEYS_BY_LEN = sorted(CURATED_CARE, key=len, reverse=True)
+_EXACT = _exact_names(CURATED_CARE)
+_EXACT.update(odb_name_aliases(CURATED_CARE))
 
 
 def lookup_care(name: str | None) -> dict[str, Any] | None:
-    """Return curated care for a species NAME (matches the scientific name found
-    anywhere in the string, e.g. 'Lemon (Citrus limon)'), or None if uncovered.
-    Longest key wins, so a specific species beats a genus fallback."""
+    """Return curated care for a species NAME.
+
+    An exact botanical key or a unique common name wins. Otherwise the
+    scientific name is matched anywhere in the string (e.g. 'Lemon (Citrus
+    limon)'). Longest key wins, so a specific species beats a genus fallback.
+    """
     if not name or not isinstance(name, str):
         return None
-    n = name.lower()
+    n = name.strip().lower()
+    if not n:
+        return None
+    hit = _EXACT.get(n)
+    if hit is not None:
+        return dict(hit)
     for key in _KEYS_BY_LEN:
         if key in n:
             return dict(CURATED_CARE[key])

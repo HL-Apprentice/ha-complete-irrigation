@@ -275,12 +275,14 @@ server-side validation rail (bounded enums + ranges) and applies only when **you
 tap Apply.
 
 ### Curated care comes first
-For ~37 common Southwest / low-desert species, care is **not** guessed by a model —
-it's a curated table (water-use, sun, frost/heat range, water + fertilize cadence).
-A small vision model is decent at *naming* a plant but reliably bad at
-*differentiating* water-use (it labels almost everything "moderate", which is the
-one value that drives the irrigation math). So the model only has to get the **name**
-right; the table supplies the care. Uncovered species fall back to the model.
+Care is **not** guessed by a model. A curated table supplies water-use, sun,
+frost/heat range, and water and fertilize cadence. It started as Southwest
+species and now also includes the Outdoor Dream Builder pages described under
+Plant reference sources. A small vision model is decent at *naming* a plant but
+reliably bad at *differentiating* water-use (it labels almost everything
+"moderate", which is the one value that drives the irrigation math). So the
+model only has to get the **name** right; the table supplies the care.
+Uncovered species fall back to the model.
 
 ### Choose your identify engine — Settings → Plant identification
 First pick an **engine**:
@@ -370,6 +372,35 @@ plant's drip set. Config via env: `WA_HEALTH_URL`, `WA_HA_URL`, `WA_TOKEN_FILE`,
 `WA_LLM_URL` (the LLM host's local endpoint), `WA_LLM_MODEL`. Proposals appear
 in the panel's 🤖 advisor card — each item applies only when you tap it.
 
+## Plant reference sources
+
+[Outdoor Dream Builder](https://www.outdoordreambuilder.com/plants) plant pages,
+fetched 2026-11-07, are stored as printed in
+`custom_components/complete_irrigation/reference/outdoordreambuilder_plants.json`
+(207 plants). `reference_plants.lookup_reference` returns one page record.
+
+**USDA Quick Stats wins.** `usda_zone` is that Quick Stats range. If the
+narrative prints a different range, it is kept in `hardiness_alt` with a note,
+and it is not the range used for care. Cold tolerance in the care table is the
+USDA zone minimum for the lowest zone in that Quick Stats range (zone 9 is
+20 F, from the USDA Plant Hardiness Zone Map).
+
+**Those pages now feed curated care.** `lookup_care` merges them into the
+hand-written table. A longer species key beats a genus key, and the genus row
+stays for other species. Outdoor Dream Builder water classes map onto the same
+labels the irrigation math already uses (`Very Low (Xeric)`, `Low`, `Moderate`,
+`High`). That is the site's own class, not the UC WUCOLS dataset. A stated
+hot-season interval uses the shorter end (`every 2-3 weeks` is 14 days). When
+the hot season is not given as a number, the cadence falls back to the most
+common interval already used for that plant type and the row is flagged. Heat
+uses a ceiling stated on the page when there is one; otherwise the lowest heat
+figure already used for that plant type, also flagged.
+
+An existing species row changes only toward more frequent watering and toward
+that USDA cold limit. A merge that would water an existing row less often is
+not applied. Schedules, zones, and the rain lockout are unchanged. Identifying
+a plant, or correcting its name, can now fill a different cadence than before.
+
 ## All services
 
 Most users won't need these — the panel covers everything. Available for advanced
@@ -441,7 +472,9 @@ Two layers:
   - *Water math*: `hydraulics` (WUCOLS + emitter sizing), `et_calc` (FAO-56),
     `plant_design`, `daily_planner`, `watering_diagnosis`
   - *Plants*: `plant`, `plant_care_db` (curated species care), `species_id`
-    (validation rail), `care_tasks`, `light_survey`, `vision_health`
+    (validation rail), `reference_plants` and `odb_care` (Outdoor Dream Builder
+    pages merged into curated care), `care_tasks`, `light_survey`,
+    `vision_health`
   - *Map & media*: `yard_map` (georeferencing + marker re-projection),
     `image_type` (magic-byte detection)
   - *AI*: `llm_client` (provider resolution + fallback), `watering_advisor`
