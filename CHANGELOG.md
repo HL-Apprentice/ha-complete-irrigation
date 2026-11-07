@@ -10,16 +10,32 @@ project uses [Semantic Versioning](https://semver.org/).
 
 A finished run releases its zone only when that zone's lockout armed
 before the run started, so a storm that arrives mid-run does not open
-the next cycle. The birdbath hold survives a single dry reading. Tempest
-history is cached for five minutes and drops the cache when the live
-sensor changes. A lifetime rain counter's first sample and its resets
-are not a storm. The 72-hour window includes the hour that starts exactly
-72 hours ago, measured in elapsed time (Arizona has no daylight-saving
-time; a DST change elsewhere is still 72 real hours). Open-Meteo hourly
-times use the response's UTC offset, and the rain request no longer asks
-for an unused daily high. Runs the lockout hides from the conflict
-resolver are logged and listed on the sensor. `previous_today_in` from
-another day is cleared on startup.
+the next cycle. The run-completion caller passes the zone's session,
+and that session carries `started_at`. Lockouts already armed under
+1.64.0 have no `armed_at_by_type`. Until that type is armed again, a
+finished run does not release them: there is no arm time to compare,
+and releasing them would water through a lockout this version cannot
+prove was already on.
+
+The birdbath hold survives a single dry reading, and a tick with no
+active-rain observation is not a dry tick. Tempest history is cached
+for five minutes and drops the cache when the live sensor changes. A
+lifetime rain counter's first sample is not a storm. A dip in that
+counter is a reset or a glitch, not new rain, and the climb back to
+the previous reading is not a second storm. The window is 72 elapsed
+hours (Arizona has no daylight-saving time; a DST change elsewhere is
+still 72 real hours). Open-Meteo's hourly sum includes the precipitation
+in the hour that starts exactly 72 hours ago. On the Tempest
+lifetime-counter and partial-day paths, that same row is only the
+baseline: counted rain is the increase after it. Open-Meteo hourly
+times use the response's UTC offset. The rain request does not ask for
+a daily high; that field was not an input. The heat ceiling still uses
+the hotter of the current temperature and the cached forecast high
+(today and tomorrow, from the ETo / weather refresh). Runs the lockout
+hides from the conflict resolver are logged and listed on the sensor.
+`previous_today_in` from another day is cleared on startup. A 1.64.0
+document stored the inches and no date; that reading is kept as today's
+baseline, so a mid-day upgrade does not arm on it or count it twice.
 
 The heat ceiling is unchanged and remains one global cap for every zone
 type. That is the owner's decision.

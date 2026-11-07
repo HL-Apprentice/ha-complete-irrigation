@@ -173,6 +173,10 @@ def parse_open_meteo_rain(payload: Any, *, now: datetime | None = None) -> dict[
             millimeters = precip[index]
             if not isinstance(millimeters, (int, float)):
                 continue
+            # now=None never reaches here (the loop requires now_cmp), and a
+            # missing clock must not touch tzinfo.
+            if now_cmp is None:
+                continue
             if now_cmp.tzinfo is not None and stamp.tzinfo is not None:
                 delta_h = (stamp - now_cmp).total_seconds() / 3600.0
             else:

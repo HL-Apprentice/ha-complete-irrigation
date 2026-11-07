@@ -325,8 +325,11 @@ def detect_active_rain(
     today_in: float | None = None,
     previous_today_in: float | None = None,
     current_precip_mm: float | None = None,
-) -> bool:
-    """True only while rain is falling, not because a daily total is merely elevated.
+) -> bool | None:
+    """True while rain is falling, False when the inputs say it is not.
+
+    None means there was nothing to judge. A missing observation is not a
+    dry spell: the birdbath hold must not age out on an empty tick.
 
     A rising edge on today's accumulation counts (the total grew since the last
     read). The first sample has no previous value and does not count - a sensor
@@ -340,7 +343,12 @@ def detect_active_rain(
         and today_in > previous_today_in + 0.001
     ):
         return True
-    return current_precip_mm is not None and current_precip_mm > ACTIVE_RAIN_HOUR_MM
+    if current_precip_mm is not None:
+        return current_precip_mm > ACTIVE_RAIN_HOUR_MM
+    saw_weather = any(str(state or "").strip() for state in weather_states)
+    if saw_weather or today_in is not None:
+        return False
+    return None
 
 
 def _majority(values: list[str]) -> str | None:
@@ -661,8 +669,7 @@ class StoredRainLockout:
             "baseline_by_source": dict(self.baseline_by_source),
             "last_sample_sources": list(self.last_sample_sources),
             "armed_at_by_type": {
-                zone_type: moment.isoformat()
-                for zone_type, moment in self.armed_at_by_type.items()
+                zone_type: moment.isoformat() for zone_type, moment in self.armed_at_by_type.items()
             },
             "birdbath_dry_ticks": int(self.birdbath_dry_ticks),
             "previous_today_on": (
@@ -731,11 +738,17 @@ def reseed_previous_today(state: StoredRainLockout, today: date) -> StoredRainLo
     The same calendar day keeps the stored value, so a restart at noon
     still sees rain that fell this morning. A different day must not look
     like a rising edge.
+
+    1.64.0 stored the inches and not the date. That reading is a baseline,
+    not proof it belongs to yesterday. Wiping it made a mid-day upgrade
+    treat rain already on the gauge as new.
     """
     if state.previous_today_on == today:
         return state
-    if state.previous_today_in is None and state.previous_today_on is None:
-        return state
+    if state.previous_today_on is None:
+        if state.previous_today_in is None:
+            return state
+        return state.with_updates(previous_today_on=today)
     return state.with_updates(previous_today_in=None, previous_today_on=None)
 
 
@@ -782,7 +795,7 @@ def decide_lockouts(
     daily_eto_in: float | None,
     max_hours: float | None,
     garden_present: bool,
-    active_rain: bool,
+    active_rain: bool | None,
     forecast_in: float | None,
     forecast_probability_pct: float | None,
     min_inches: float = TABLE_MIN_INCHES,
@@ -862,8 +875,12 @@ def decide_lockouts(
 
     # ── birdbath: only while rain is falling ──────────────────────
     # A single dry tick does not clear. The dry signal has to last two
-    # ticks, or the 20-minute hold has to run out.
-    if active_rain:
+    # ticks, or the 20-minute hold has to run out. None is not a dry
+    # tick: a missing observation leaves the hold and the count alone.
+    if active_rain is None:
+        # No observation. Leave the hold and dry_ticks unchanged.
+        pass
+    elif active_rain:
         dry_ticks = 0
         horizon = now + ACTIVE_RAIN_HOLD
         current = until.get(ZONE_BIRDBATH)
@@ -1069,6 +1086,44 @@ def _stat_get(row: Any, key: str) -> Any:
     return getattr(row, key, None)
 
 
+def _total_increasing_growth(values: list[float]) -> float:
+    """Inches of new rain in a ``total_increasing`` series.
+
+    The first reading is a baseline. A decrease is a reset or a glitch and
+    adds nothing. Rain after a reset that stays below the previous high
+    counts. If the series climbs back to that high, the dip was a glitch:
+    drop the provisional rain and keep only the amount above the high, so
+    the recovery is not a second storm.
+    """
+    if len(values) < 2:
+        return 0.0
+    growth = 0.0
+    previous = values[0]
+    high = values[0]
+    provisional = 0.0
+    for value in values[1:]:
+        if value < previous:
+            previous = value
+            continue
+        if value > high:
+            if provisional:
+                growth -= provisional
+                provisional = 0.0
+            growth += value - high
+            high = value
+        else:
+            step = value - previous
+            if step > 0 and previous < high:
+                growth += step
+                provisional += step
+                # Landing back on the old high means the climb was recovery.
+                if value >= high:
+                    growth -= provisional
+                    provisional = 0.0
+        previous = value
+    return growth
+
+
 def aggregate_tempest_72h(
     rows: list[Any] | None,
     *,
@@ -1080,10 +1135,14 @@ def aggregate_tempest_72h(
     """72h inches from recorder rows.
 
     ``total_increasing`` sensors have no usable ``max`` (it is absent). Their
-    ``sum`` is the running total, so the window is last sum minus first sum.
-    The live sensor is today's reading, not that cumulative sum. The lag
-    (long-term stats trail by about an hour) is live minus the same local
-    day's last ``state``. A day with no row yet adds the live reading whole.
+    ``sum`` is the running total. The first sample is a baseline. Later
+    increases count. A decrease is a reset or a glitch and is not rain. If
+    the counter climbs back to its previous high, that climb is the glitch
+    recovering and is not counted again. Only the amount above the previous
+    high is new rain. The live sensor is today's reading, not that cumulative
+    sum. The lag (long-term stats trail by about an hour) adds only the live
+    reading above the highest ``state`` already seen, not the whole gap up
+    from a dipped sample. A day with no row yet adds the live reading whole.
 
     A resetting daily total (rain today) uses each local day's peak. The first
     day is partial when the window opens after midnight: only the increase seen
@@ -1091,9 +1150,13 @@ def aggregate_tempest_72h(
     ``max(statistic peak, live sensor)`` so the lagging statistic cannot hide
     rain that has already fallen.
 
-    Hourly rows are ``-72h <= start <= now``. The bucket that starts exactly
-    72 hours ago is the first hour of the window and is included. A row
-    before that is not.
+    Hourly rows kept here are ``-72h <= start <= now``, measured in elapsed
+    time. On this Tempest path the row that starts exactly 72 hours ago is
+    the baseline, not an hour of rain by itself: a lifetime counter counts
+    the increase after that reading, and a partial first day counts its peak
+    minus that row. A row before ``-72h`` is outside the window. Open-Meteo's
+    hourly sum is the other rule: it adds the precipitation that fell during
+    the hour starting at ``-72h``.
 
     The comparison uses ``total_seconds``, so the window is 72 elapsed
     hours, not 72 wall-clock hours. That is the same length in Arizona
@@ -1115,6 +1178,7 @@ def aggregate_tempest_72h(
 
     if state_class == "total_increasing":
         sums: list[float] = []
+        state_high: float | None = None
         for _start, row in parsed:
             raw = _stat_get(row, "sum")
             if raw is None:
@@ -1122,28 +1186,22 @@ def aggregate_tempest_72h(
             inches = rain_to_inches(raw, unit) if raw is not None else None
             if inches is not None:
                 sums.append(inches)
-        if len(sums) < 2:
-            # One lifetime reading is a baseline, not a storm. A negative
-            # step is a counter reset and is not subtracted.
-            growth = 0.0
-        else:
-            growth = 0.0
-            previous = sums[0]
-            for value in sums[1:]:
-                delta = value - previous
-                if delta < 0:
-                    if value > 0:
-                        growth += value
-                else:
-                    growth += delta
-                previous = value
+            raw_state = _stat_get(row, "state")
+            state_in = rain_to_inches(raw_state, unit) if raw_state is not None else None
+            if state_in is not None:
+                state_high = state_in if state_high is None else max(state_high, state_in)
+        growth = _total_increasing_growth(sums)
         if live_today_in is not None:
             last_start = parsed[-1][0] if parsed else None
             if last_start is not None and last_start.date() == now.date():
                 raw_state = _stat_get(parsed[-1][1], "state")
                 last_state = rain_to_inches(raw_state, unit) if raw_state is not None else None
+                # Ahead of the lagging statistic. The climb back to a reading
+                # already seen is the counter recovering, not new rain.
                 if last_state is not None and live_today_in > last_state:
-                    growth += live_today_in - last_state
+                    ceiling = state_high if state_high is not None else last_state
+                    if live_today_in > ceiling:
+                        growth += live_today_in - ceiling
             else:
                 growth += live_today_in
         return growth

@@ -85,6 +85,45 @@ def test_heat_signal_none_when_no_sources():
     assert coord._read_heat_signal_f() is None
 
 
+async def test_lockout_ceiling_uses_forecast_high_when_current_is_mild():
+    """A hot forecast shortens the ceiling while the thermometer is mild.
+
+    The rain request does not carry temperature_2m_max. The ceiling reads
+    the cached forecast high (today and tomorrow) and takes the hotter of
+    that and the current temperature.
+    """
+
+    def _build(*, forecast_f: float | None):
+        coord = _coord(rain_sensor="sensor.rain", temperature_sensor="sensor.outdoor")
+        coord._hass = _hass_with_states(
+            {
+                "sensor.rain": _state("2.0", unit_of_measurement="in"),
+                "sensor.outdoor": _state("70", unit_of_measurement="°F"),
+            },
+            weather_ids=[],
+        )
+        coord.eto_status = lambda: {"eto_in_week": 2.1}
+        coord._notify_lockout_change = lambda: None
+        coord.notifier = None
+        coord.lockout_until = None
+        if forecast_f is not None:
+            coord._forecast_high_f = forecast_f
+            coord._forecast_high_at = dt_util.now()
+        return coord
+
+    now = dt_util.now()
+    hot = _build(forecast_f=115.0)
+    await hot._evaluate_lockout(now)
+    assert hot.lockout_until is not None
+    # 2.0 in wants a long lockout. 115F ceiling is 18h, not the 48h mild cap.
+    assert round((hot.lockout_until - now).total_seconds() / 3600) == 18
+
+    mild = _build(forecast_f=None)
+    await mild._evaluate_lockout(now)
+    assert mild.lockout_until is not None
+    assert round((mild.lockout_until - now).total_seconds() / 3600) == 48
+
+
 # ── _evaluate_lockout: unit-safe reading + floor + rising edge ───────
 
 

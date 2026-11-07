@@ -126,26 +126,52 @@ def test_rain_parser_drops_the_current_hour_and_the_73rd_bucket():
     assert parsed["current_precip_mm"] == 50.0
 
 
-def test_rain_parser_uses_the_payload_utc_offset():
-    from datetime import UTC, datetime, timedelta, timezone
+def test_rain_parser_applies_the_payload_utc_offset_to_hour_buckets():
+    from datetime import UTC
 
     # 19:00 UTC is 12:00 in Arizona (UTC-7, no DST). Local 11:00 is one
     # completed hour earlier, not eight hours earlier.
     now = datetime(2026, 11, 4, 19, 0, tzinfo=UTC)
+    hours = {
+        "time": ["2026-11-04T11:00", "2026-11-04T12:00"],
+        "precipitation": [25.4, 2.0],
+    }
     parsed = parse_open_meteo_rain(
-        {
-            "utc_offset_seconds": -7 * 3600,
-            "timezone": "America/Phoenix",
-            "hourly": {
-                "time": ["2026-11-04T11:00", "2026-11-04T12:00"],
-                "precipitation": [25.4, 2.0],
-            },
-        },
+        {"utc_offset_seconds": -7 * 3600, "timezone": "America/Phoenix", "hourly": hours},
         now=now,
     )
     assert parsed["past_72h_in"] == round(25.4 / 25.4, 4)
     assert parsed["current_precip_mm"] == 2.0
-    assert timezone(timedelta(seconds=-7 * 3600)).utcoffset(None) is not None
+    # The same local strings with no offset are eight hours earlier than
+    # 19:00 UTC, so both hours are completed history and neither is current.
+    unshifted = parse_open_meteo_rain({"hourly": hours}, now=now)
+    assert unshifted["past_72h_in"] == round(27.4 / 25.4, 4)
+    assert unshifted["current_precip_mm"] is None
+
+
+def test_rain_parser_missing_now_uses_the_daily_fallback():
+    parsed = parse_open_meteo_rain(
+        {
+            "hourly": {
+                "time": ["2026-11-04T11:00", "2026-11-04T12:00"],
+                "precipitation": [25.4, 2.0],
+            },
+            "daily": {
+                "time": ["2026-11-04", "2026-11-05"],
+                "precipitation_sum": [25.4, 12.7],
+                "precipitation_probability_max": [80, 10],
+                "et0_fao_evapotranspiration": [5.08, 2.54],
+            },
+        },
+        now=None,
+    )
+    # No clock: hourly buckets are not assigned, and the first daily
+    # bucket stands in for the forecast. This must not raise.
+    assert parsed["past_72h_in"] is None
+    assert parsed["current_precip_mm"] is None
+    assert parsed["forecast_24h_in"] == 1.0
+    assert parsed["forecast_24h_probability_pct"] == 80
+    assert parsed["forecast_daily_eto_in"] == round(5.08 / 25.4, 4)
 
 
 def test_rain_parser_falls_back_to_daily_sums():
