@@ -9,11 +9,12 @@
     "mature_size": "20 ft H × 15 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "tree",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer needed; as a nitrogen-fixing acacia it makes its own in lean desert soil.",
     "watering_guidance": "Deep-soak weekly through the first summer to establish, then a deep soak every 2-3 weeks in summer heat and monthly in winter."
   },
   {
@@ -26,11 +27,12 @@
     "mature_size": "10 ft H × 8 ft W",
     "bloom_season": "Spring-Summer",
     "bloom_color": "Yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "tree",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer needed; a nitrogen-fixing legume.",
     "watering_guidance": "Deep-soak every 2-3 weeks in summer and monthly in winter once established; highly drought tolerant."
   },
   {
@@ -43,11 +45,12 @@
     "mature_size": "30 ft H × 20 ft W",
     "bloom_season": "Fall-Winter",
     "bloom_color": "Cream",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "tree",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer needed; a nitrogen-fixing legume.",
     "watering_guidance": "Deep-soak weekly the first year, then only monthly once established; extremely drought tolerant and prone to root rot if overwatered."
   },
   {
@@ -60,11 +63,12 @@
     "mature_size": "30 ft H × 15 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Cream",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "tree",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer needed; a nitrogen-fixing legume.",
     "watering_guidance": "Deep-soak weekly through the first year, then every 2-3 weeks in summer once established."
   },
   {
@@ -77,11 +81,12 @@
     "mature_size": "12 ft H × 8 ft W",
     "bloom_season": "Spring-Summer",
     "bloom_color": "White/Pink",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "tree",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "A light spring feeding is optional; as a legume it needs little.",
     "watering_guidance": "Deep-soak every two weeks in summer once established; drought tolerant and undemanding."
   },
   {
@@ -94,11 +99,12 @@
     "mature_size": "25 ft H × 12 ft W",
     "bloom_season": "Summer",
     "bloom_color": "Cream",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "palm",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Apply a palm fertilizer with micronutrients (magnesium and manganese) two to three times spring through summer to prevent deficiency.",
     "watering_guidance": "Deep-soak every 2-3 weeks in summer and monthly in winter once established; drought tolerant for a palm."
   },
   {
@@ -111,11 +117,12 @@
     "mature_size": "30 ft H × 25 ft W",
     "bloom_season": "Fall",
     "bloom_color": "Pink-Red",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "tree",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Apply a balanced fertilizer in spring to support growth and fall bloom.",
     "watering_guidance": "Deep-soak weekly in summer heat and every 2-3 weeks in the cooler months; needs more water than desert-adapted trees."
   },
   {
@@ -128,11 +135,12 @@
     "mature_size": "25 ft H × 25 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Green",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "tree",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Minimal; a light feeding is optional.",
     "watering_guidance": "Deep-soak every 1-2 weeks in summer while young, then every 2-3 weeks once established; deep infrequent watering is best."
   },
   {
@@ -145,11 +153,12 @@
     "mature_size": "40 ft H × 25 ft W",
     "bloom_season": "Summer",
     "bloom_color": "White",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "tree",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer needed.",
     "watering_guidance": "Deep-soak every 2-3 weeks in summer once established; deep infrequent watering anchors the roots."
   },
   {
@@ -162,11 +171,12 @@
     "mature_size": "10 ft H × 10 ft W",
     "bloom_season": "Summer",
     "bloom_color": "Cream",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "palm",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Apply a balanced palm fertilizer once in spring.",
     "watering_guidance": "Water deeply every 2-3 weeks in summer once established. More drought tolerant than most palms."
   },
   {
@@ -179,11 +189,12 @@
     "mature_size": "25 ft H × 20 ft W",
     "bloom_season": "Spring-Fall",
     "bloom_color": "White/Pink/Purple",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "tree",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer needed; a tough native.",
     "watering_guidance": "Deep-soak every two weeks in summer for best bloom and monthly otherwise; flowering flushes after a deep soak or monsoon rain."
   },
   {
@@ -196,11 +207,12 @@
     "mature_size": "10 ft H × 8 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Purple",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "tree",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Light feeding only; tolerates poor soils as a nitrogen-fixing legume.",
     "watering_guidance": "Deep-soak every 2-3 weeks in summer once established; a slow grower that resents overwatering."
   },
   {
@@ -213,11 +225,12 @@
     "mature_size": "20 ft H × 15 ft W",
     "bloom_season": "Late Spring-Summer",
     "bloom_color": "Cream-Yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "tree",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer needed; a nitrogen-fixing legume.",
     "watering_guidance": "Deep-soak monthly in summer once established; extremely drought tolerant."
   },
   {
@@ -230,11 +243,12 @@
     "mature_size": "15 ft H × 10 ft W",
     "bloom_season": "Year-round",
     "bloom_color": "Yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "tree",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "A light balanced feeding in spring supports the heavy bloom.",
     "watering_guidance": "Deep-soak weekly in summer for continuous bloom and every two weeks in cooler months; more water yields more flowers."
   },
   {
@@ -247,11 +261,12 @@
     "mature_size": "35 ft H × 25 ft W",
     "bloom_season": "Summer",
     "bloom_color": "Cream",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "tree",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer needed.",
     "watering_guidance": "Deep-soak every 3-4 weeks in summer once established; extremely drought tolerant with deep infrequent watering."
   },
   {
@@ -264,11 +279,12 @@
     "mature_size": "15 ft H × 10 ft W",
     "bloom_season": "Summer",
     "bloom_color": "White",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "tree",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer needed; a nitrogen-fixing native.",
     "watering_guidance": "Deep-soak every two weeks in summer once established; bloom flushes after monsoon rains."
   },
   {
@@ -281,11 +297,12 @@
     "mature_size": "15 ft H × 15 ft W",
     "bloom_season": "Late Spring",
     "bloom_color": "Cream",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "tree",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer needed; a nitrogen-fixing native.",
     "watering_guidance": "Deep-soak weekly in peak summer and every two weeks otherwise once established."
   },
   {
@@ -298,11 +315,12 @@
     "mature_size": "30 ft H × 20 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Cream",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "tree",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer needed; a nitrogen-fixing legume.",
     "watering_guidance": "Deep-soak every 2-3 weeks in summer and monthly in cooler months once established."
   },
   {
@@ -315,11 +333,12 @@
     "mature_size": "25 ft H × 12 ft W",
     "bloom_season": "Summer",
     "bloom_color": "Cream",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "tree",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer needed; a nitrogen-fixing legume.",
     "watering_guidance": "Deep-soak every 2-3 weeks in summer once established; drought tolerant."
   },
   {
@@ -332,11 +351,12 @@
     "mature_size": "20 ft H × 10 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Cream",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "tree",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer needed; a nitrogen-fixing legume.",
     "watering_guidance": "Deep-soak every 2-3 weeks in summer once established; extremely drought tolerant with deep infrequent watering."
   },
   {
@@ -349,11 +369,12 @@
     "mature_size": "25 ft H × 25 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Cream",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "tree",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Minimal; a light spring feeding is optional.",
     "watering_guidance": "Deep-soak every 2-3 weeks in summer once established; deep infrequent watering, since overwatering forces weak growth."
   },
   {
@@ -366,11 +387,12 @@
     "mature_size": "25 ft H × 25 ft W",
     "bloom_season": "Late Spring",
     "bloom_color": "Dusty Lavender",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "tree",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer needed. Nitrogen-fixing legume tree.",
     "watering_guidance": "Once established, water deeply once a month. Extremely drought tolerant and overwatering can cause root rot."
   },
   {
@@ -383,11 +405,12 @@
     "mature_size": "30 ft H × 30 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Bright Yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "tree",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer needed. Native desert soil is sufficient.",
     "watering_guidance": "Once established, water deeply once a month in summer. Newly planted trees need weekly deep soaking for the first year."
   },
   {
@@ -400,11 +423,12 @@
     "mature_size": "25 ft H × 25 ft W",
     "bloom_season": "Spring-Summer",
     "bloom_color": "Yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "tree",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer needed; overfeeding and overwatering cause floppy growth on this nitrogen-fixing tree.",
     "watering_guidance": "Deep-soak weekly the first summer, then monthly once established; keep watering lean to avoid weak, floppy growth."
   },
   {
@@ -417,11 +441,12 @@
     "mature_size": "25 ft H × 30 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Bright Yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "tree",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer needed; a tough native.",
     "watering_guidance": "Deep-soak monthly in summer while establishing; needs essentially no supplemental water once mature."
   },
   {
@@ -434,11 +459,12 @@
     "mature_size": "15 ft H × 15 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Sulfur Yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "tree",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer needed; a nitrogen-fixing legume.",
     "watering_guidance": "Deep-soak monthly in summer once established; deep infrequent watering."
   },
   {
@@ -451,11 +477,12 @@
     "mature_size": "30 ft H × 30 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Yellow-Green",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "tree",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer needed; overwatering and feeding produce weak, storm-prone growth on this nitrogen-fixer.",
     "watering_guidance": "Deep-soak every two weeks in summer to drive growth, but favor deep infrequent watering to anchor roots and prevent blow-over."
   },
   {
@@ -468,11 +495,12 @@
     "mature_size": "30 ft H × 30 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Pale Yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "tree",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer needed; keep growth lean on this nitrogen-fixer.",
     "watering_guidance": "Deep-soak every 1-2 weeks in summer, favoring deep infrequent watering to prevent shallow roots and blow-over."
   },
   {
@@ -485,11 +513,12 @@
     "mature_size": "25 ft H × 25 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Pale Yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "tree",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer needed. Mesquite is a nitrogen-fixing legume.",
     "watering_guidance": "Once established, water deeply once a month. Overwatering encourages weak, fast growth prone to storm damage."
   },
   {
@@ -502,11 +531,12 @@
     "mature_size": "40 ft H × 50 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Green",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "tree",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Light feeding to establish; apply iron for chlorosis in alkaline soils.",
     "watering_guidance": "Deep-soak every 1-2 weeks in summer while young and every 2-3 weeks once established; irrigate the wide root zone deeply."
   },
   {
@@ -519,11 +549,12 @@
     "mature_size": "35 ft H × 35 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Pink",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "tree",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Minimal feeding.",
     "watering_guidance": "Deep-soak every two weeks in summer once established; a bit more water helps in reflected heat."
   },
   {
@@ -536,11 +567,12 @@
     "mature_size": "40 ft H × 40 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Green",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "tree",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Light feeding; apply iron for chlorosis if needed.",
     "watering_guidance": "Deep-soak every 1-2 weeks in summer and less in winter; drought tolerant once established."
   },
   {
@@ -553,11 +585,12 @@
     "mature_size": "12 ft H × 12 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Cream",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "tree",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer needed; a nitrogen-fixing legume.",
     "watering_guidance": "Deep-soak every 2-3 weeks in summer once established; drought tolerant."
   },
   {
@@ -570,11 +603,12 @@
     "mature_size": "20 ft H × 20 ft W",
     "bloom_season": "Winter-Spring",
     "bloom_color": "Yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "tree",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "A light spring feeding supports bloom.",
     "watering_guidance": "Deep-soak every two weeks in summer and less in winter; deep infrequent watering."
   },
   {
@@ -587,11 +621,12 @@
     "mature_size": "20 ft H × 20 ft W",
     "bloom_season": "Summer-Fall",
     "bloom_color": "Lavender/Pink/White",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "tree",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "A light spring feeding is sufficient.",
     "watering_guidance": "Deep-soak weekly in summer for best bloom and every two weeks in cooler months; tolerates lawn watering."
   },
   {
@@ -604,11 +639,12 @@
     "mature_size": "10 ft H × 15 ft W",
     "bloom_season": "Spring-Summer",
     "bloom_color": "Yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "tree",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer needed; a nitrogen-fixing native.",
     "watering_guidance": "Deep-soak every 3-4 weeks in summer once established; needs minimal water when mature."
   },
   {
@@ -621,11 +657,12 @@
     "mature_size": "20 ft H × 20 ft W",
     "bloom_season": "Late Winter-Spring",
     "bloom_color": "Golden Yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "tree",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer needed; a nitrogen-fixing native.",
     "watering_guidance": "Deep-soak every 2-3 weeks in summer once established; blooms with returning warmth."
   },
   {
@@ -638,11 +675,12 @@
     "mature_size": "15 ft H × 15 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Light Yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "tree",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer needed; a nitrogen-fixing legume.",
     "watering_guidance": "Deep-soak every 3-4 weeks in summer once established; needs minimal water when mature."
   },
   {
@@ -655,11 +693,12 @@
     "mature_size": "4 ft H × 4 ft W",
     "bloom_season": "Spring-Fall",
     "bloom_color": "Orange/Yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "shrub",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "A single light application of balanced or slow-release fertilizer in early spring is plenty; over-feeding produces leggy, floppy growth.",
     "watering_guidance": "Despite being a desert native, this species performs best with regular deep soaks every 5-7 days in summer heat; taper to every 2-3 weeks in winter to keep the velvety foliage full."
   },
   {
@@ -672,11 +711,12 @@
     "mature_size": "3 ft H × 4 ft W",
     "bloom_season": "Spring-Fall",
     "bloom_color": "White to pale purple",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "shrub",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Never needs fertilizer in native desert soil; feeding only encourages weak growth.",
     "watering_guidance": "Establish with occasional deep watering the first summer, then water only monthly or rely on rainfall; it is one of the most drought-adapted nurse plants of the Sonoran Desert."
   },
   {
@@ -689,11 +729,12 @@
     "mature_size": "6 ft H × 6 ft W",
     "bloom_season": "Summer-Late fall",
     "bloom_color": "Orange-red",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "shrub",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Light spring feeding is optional; native soils generally supply enough.",
     "watering_guidance": "Water deeply but infrequently, roughly every 10-14 days in summer once established; it blooms in flushes triggered by rain or irrigation."
   },
   {
@@ -706,11 +747,12 @@
     "mature_size": "1 ft H × 2 ft W",
     "bloom_season": "Summer-Late fall",
     "bloom_color": "Orange-red",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "shrub",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Little to no fertilizer is needed; a light spring feed can boost bloom in poor soil.",
     "watering_guidance": "Very drought tolerant; water every 2 weeks in peak summer for best bloom and let it go nearly dry between soaks the rest of the year."
   },
   {
@@ -723,11 +765,12 @@
     "mature_size": "5 ft H × 8 ft W",
     "bloom_season": "Spring-Summer",
     "bloom_color": "Green",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "shrub",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "A light spring application of balanced fertilizer supports its denser growth in lean desert soils.",
     "watering_guidance": "Water deeply every 7-10 days through summer to keep the dense evergreen foliage lush; it accepts more water than most desert shrubs but still tolerates dry spells."
   },
   {
@@ -740,11 +783,12 @@
     "mature_size": "5 ft H × 5 ft W",
     "bloom_season": "Late winter-Spring",
     "bloom_color": "Yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 4-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 4-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 4-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 4-11. Both are kept as printed.",
+    "category": "shrub",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Never fertilize; it thrives in poor, saline, and alkaline soils that defeat other plants.",
     "watering_guidance": "Extremely drought and salt tolerant; water monthly at most once established and it survives on rainfall alone, making it ideal for unirrigated zones."
   },
   {
@@ -757,11 +801,12 @@
     "mature_size": "5 ft H × 5 ft W",
     "bloom_season": "Spring-Midsummer",
     "bloom_color": "Orange",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "shrub",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "A light spring feeding is sufficient; too much nitrogen reduces the felty leaf character.",
     "watering_guidance": "Best with regular deep watering every 7-10 days in summer to keep the silvery woolly foliage full; avoid soggy soil, which it will not tolerate."
   },
   {
@@ -774,11 +819,12 @@
     "mature_size": "3 ft H × 3 ft W",
     "bloom_season": "Spring-Summer",
     "bloom_color": "Yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "shrub",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer needed in native soil.",
     "watering_guidance": "Very low water once established; water every 2-3 weeks in summer only, and lean drier to avoid a rangy, floppy habit."
   },
   {
@@ -791,11 +837,12 @@
     "mature_size": "5 ft H × 5 ft W",
     "bloom_season": "Spring-Fall",
     "bloom_color": "Red",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "shrub",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Minimal feeding needed; a light spring application supports the hard-pruned regrowth.",
     "watering_guidance": "Water every 7-10 days in summer for continuous bloom; it is heat-loving and drought-tolerant once established but flowers more with steady moisture."
   },
   {
@@ -808,11 +855,12 @@
     "mature_size": "6 ft H × 6 ft W",
     "bloom_season": "Late spring-Fall",
     "bloom_color": "Red",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "shrub",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Little fertilizer needed; a light spring feed is optional.",
     "watering_guidance": "Water deeply every 10-14 days in summer for near-continuous red bloom; it is drought tolerant but flowers far more with periodic moisture."
   },
   {
@@ -825,11 +873,12 @@
     "mature_size": "3 ft H × 4 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Pink",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 8-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 8-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed.",
+    "category": "shrub",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Needs no fertilizer in native desert soil.",
     "watering_guidance": "A tough native that wants only occasional deep water, roughly every 2 weeks in summer; established plants tolerate significant drought."
   },
   {
@@ -842,11 +891,12 @@
     "mature_size": "7 ft H × 7 ft W",
     "bloom_season": "Spring",
     "bloom_color": "White",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "shrub",
+    "heat_tolerance_f": 110,
+    "fertilizer_guidance": "Feed lightly in spring with a balanced fertilizer; yellowing in alkaline soil may call for chelated iron.",
     "watering_guidance": "Water deeply every 7-10 days in summer to keep the glossy foliage lush; it is moderately drought tolerant but looks best with steady moisture and good drainage."
   },
   {
@@ -859,11 +909,12 @@
     "mature_size": "10 ft H × 10 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Yellow-green",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 8-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 8-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed.",
+    "category": "shrub",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Generally needs no fertilizer in native soil.",
     "watering_guidance": "Water deeply every 1-2 weeks in summer to develop a dense screen; established plants are quite drought tolerant and can subsist on little once mature."
   },
   {
@@ -876,11 +927,12 @@
     "mature_size": "8 ft H × 10 ft W",
     "bloom_season": "Spring-Fall",
     "bloom_color": "White",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "shrub",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Little to no fertilizer required.",
     "watering_guidance": "Deep, infrequent water every 2 weeks in summer keeps it flowering; it is drought tolerant but blooms more reliably with occasional soaks and can go dry in winter."
   },
   {
@@ -893,11 +945,12 @@
     "mature_size": "6 ft H × 6 ft W",
     "bloom_season": "Spring-Fall",
     "bloom_color": "White",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 8-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 8-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed.",
+    "category": "shrub",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer needed in desert soils.",
     "watering_guidance": "Very drought tolerant; water every 2 weeks in summer to trigger the flushes of white bloom, then let it dry out, and reduce to monthly or less in winter."
   },
   {
@@ -910,11 +963,12 @@
     "mature_size": "3 ft H × 4 ft W",
     "bloom_season": "Fall-Early winter",
     "bloom_color": "Rose-purple",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 7-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 7-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 7-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 7-11. Both are kept as printed.",
+    "category": "shrub",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer needed; as a legume it fixes its own nitrogen.",
     "watering_guidance": "Low water; a deep soak every 2 weeks in summer is plenty and it tolerates real drought once established."
   },
   {
@@ -927,11 +981,12 @@
     "mature_size": "3 ft H × 4 ft W",
     "bloom_season": "Fall-Spring",
     "bloom_color": "Purple",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 8-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 8-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed.",
+    "category": "shrub",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "None needed; it is a nitrogen-fixing legume adapted to lean soils.",
     "watering_guidance": "Low water once established; soak deeply every 2 weeks in summer and rely mostly on cool-season rain when it does much of its blooming."
   },
   {
@@ -944,11 +999,12 @@
     "mature_size": "4 ft H × 5 ft W",
     "bloom_season": "Winter-Spring",
     "bloom_color": "Violet",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 8-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 8-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed.",
+    "category": "shrub",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer required for this nitrogen-fixing native.",
     "watering_guidance": "Low water; deep-soak every 2 weeks in summer and lean on cool-season rain, its main growth and bloom period."
   },
   {
@@ -961,11 +1017,12 @@
     "mature_size": "10 ft H × 8 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Yellow-green",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "shrub",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Light spring feeding speeds establishment; mature plants need little.",
     "watering_guidance": "Water deeply every 7-10 days in summer to grow a fast, dense screen; once established it becomes notably drought tolerant and can be weaned to less."
   },
   {
@@ -978,11 +1035,12 @@
     "mature_size": "3 ft H × 4 ft W",
     "bloom_season": "Winter-Spring",
     "bloom_color": "Yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 8-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 8-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed.",
+    "category": "shrub",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Never fertilize; it thrives in poor, rocky desert soil.",
     "watering_guidance": "Extremely drought tolerant; water only monthly or not at all once established, and avoid overwatering, which shortens its life and causes rot."
   },
   {
@@ -995,11 +1053,12 @@
     "mature_size": "4 ft H × 5 ft W",
     "bloom_season": "Late winter-Spring",
     "bloom_color": "Red",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 6-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 6-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 6-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 6-11. Both are kept as printed.",
+    "category": "shrub",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer needed in native soil.",
     "watering_guidance": "Very drought tolerant; water monthly at most in summer once established and never let it sit in wet soil, which it will not tolerate."
   },
   {
@@ -1012,11 +1071,12 @@
     "mature_size": "4 ft H × 4 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Green",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "shrub",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Little fertilizer needed; it is adapted to lean, mineral soils.",
     "watering_guidance": "Moderate but drainage-critical; water deeply every 10-14 days in summer and let the soil dry between soaks, since this Australian shrub rots in wet or heavy soil."
   },
   {
@@ -1029,11 +1089,12 @@
     "mature_size": "2 ft H × 3 ft W",
     "bloom_season": "Fall-Spring",
     "bloom_color": "Violet-blue",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "shrub",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Minimal feeding; too much water or fertilizer causes decline more than deficiency does.",
     "watering_guidance": "Water deeply but let it dry between soaks; despite a higher listed need, sharp drainage is essential and this Australian shrub rots quickly in soggy or clay soil."
   },
   {
@@ -1046,11 +1107,12 @@
     "mature_size": "2 ft H × 3 ft W",
     "bloom_season": "Late summer-Fall",
     "bloom_color": "Yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 7-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 7-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 7-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 7-11. Both are kept as printed.",
+    "category": "shrub",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer needed in native soil.",
     "watering_guidance": "Very drought tolerant; water monthly at most in summer once established and it survives on rainfall alone."
   },
   {
@@ -1063,11 +1125,12 @@
     "mature_size": "3 ft H × 4 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Pale pink-white",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 7-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 7-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 7-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 7-11. Both are kept as printed.",
+    "category": "shrub",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "A light spring feeding supports growth in lean soils.",
     "watering_guidance": "Water deeply every 10-14 days in summer; it is fairly drought tolerant once established but keeps fuller foliage with periodic moisture."
   },
   {
@@ -1080,11 +1143,12 @@
     "mature_size": "1 ft H × 2 ft W",
     "bloom_season": "Summer-Fall",
     "bloom_color": "White-pink aging to rust",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 7-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 7-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 7-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 7-11. Both are kept as printed.",
+    "category": "shrub",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer needed in native soil.",
     "watering_guidance": "Low water; a deep soak every 2 weeks in summer suffices and it tolerates real drought, resenting overly wet soil."
   },
   {
@@ -1097,11 +1161,12 @@
     "mature_size": "4 ft H × 5 ft W",
     "bloom_season": "Summer-Fall",
     "bloom_color": "Yellow/Red",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "shrub",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Little fertilizer needed in desert soil.",
     "watering_guidance": "Very drought tolerant; water every 2 weeks in summer to keep it full and blooming, then reduce sharply in winter when it may drop leaves."
   },
   {
@@ -1114,11 +1179,12 @@
     "mature_size": "6 ft H × 5 ft W",
     "bloom_season": "Spring-Fall",
     "bloom_color": "Yellow/Red",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 8-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 8-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed.",
+    "category": "shrub",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Minimal feeding needed.",
     "watering_guidance": "Low water; deep-soak every 10-14 days in summer for steady bloom and it tolerates considerable drought once established."
   },
   {
@@ -1131,11 +1197,12 @@
     "mature_size": "8 ft H × 8 ft W",
     "bloom_season": "Summer",
     "bloom_color": "Deep violet-blue",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 9b-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 9b-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 9b-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 9b-11. Both are kept as printed.",
+    "category": "shrub",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "A light spring feeding can help the slow growth in lean soil.",
     "watering_guidance": "This slow-growing tropical prefers regular deep water every 7-10 days in summer to establish; mature plants become quite drought tolerant but grow very slowly."
   },
   {
@@ -1148,11 +1215,12 @@
     "mature_size": "4 ft H × 4 ft W",
     "bloom_season": "Spring-Fall",
     "bloom_color": "Lavender-blue",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 8-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 8-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed.",
+    "category": "shrub",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer needed in native soil.",
     "watering_guidance": "Drought tolerant; water every 2 weeks in summer for a fuller look and rely on rain otherwise, avoiding overwatering that causes rangy growth."
   },
   {
@@ -1165,11 +1233,12 @@
     "mature_size": "4 ft H × 4 ft W",
     "bloom_season": "Summer",
     "bloom_color": "Red-orange",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "shrub",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "A light spring feeding supports the vigorous regrowth.",
     "watering_guidance": "Water every 7-10 days in summer for lush growth and continuous bloom; it is heat-loving and fairly drought tolerant once established."
   },
   {
@@ -1182,11 +1251,12 @@
     "mature_size": "10 ft H × 8 ft W",
     "bloom_season": "Winter-Spring",
     "bloom_color": "Orange-red",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 8-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 8-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed.",
+    "category": "shrub",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer needed in native soil.",
     "watering_guidance": "Low water; a deep soak every 2 weeks in summer is ample and it tolerates real drought, when it drops leaves and blooms on bare green stems."
   },
   {
@@ -1199,11 +1269,12 @@
     "mature_size": "3 ft H × 3 ft W",
     "bloom_season": "Fall-Spring",
     "bloom_color": "Bright red",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "shrub",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "A light spring feeding supports its lush growth.",
     "watering_guidance": "Prefers regular water, deep-soaking every 7-10 days in summer, especially with the afternoon shade it appreciates; keep it from drying out completely."
   },
   {
@@ -1216,11 +1287,12 @@
     "mature_size": "6 ft H × 6 ft W",
     "bloom_season": "Spring-Fall",
     "bloom_color": "Small yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 8-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 8-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed.",
+    "category": "shrub",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer needed; it flowers best in lean soil.",
     "watering_guidance": "Once established it is drought tolerant and prone to root rot from overwatering; water deeply but infrequently, roughly every 2 weeks in summer, with excellent drainage."
   },
   {
@@ -1233,11 +1305,12 @@
     "mature_size": "6 ft H × 6 ft W",
     "bloom_season": "Summer-Fall",
     "bloom_color": "White/Pink/Purple",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 8-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 8-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed.",
+    "category": "shrub",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Never fertilize; it thrives in the poorest desert soils and can live for centuries.",
     "watering_guidance": "Despite the high listing, established plants are among the most drought tolerant of all desert shrubs and need water only monthly at most; occasional deep soaks keep them denser and greener."
   },
   {
@@ -1250,11 +1323,12 @@
     "mature_size": "3 ft H × 3 ft W",
     "bloom_season": "Summer-Fall",
     "bloom_color": "Deep violet",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 8-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 8-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed.",
+    "category": "shrub",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer needed; lean soil produces the best flowering.",
     "watering_guidance": "Very drought tolerant and rot-prone if overwatered; water deeply only every 2-3 weeks in summer and never plant in irrigated lawn or clay."
   },
   {
@@ -1267,11 +1341,12 @@
     "mature_size": "4 ft H × 5 ft W",
     "bloom_season": "Summer-Fall",
     "bloom_color": "Lavender",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 8-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 8-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed.",
+    "category": "shrub",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer needed for good bloom.",
     "watering_guidance": "Drought tolerant once established and susceptible to root rot; water deeply but only every 2 weeks in summer with excellent drainage, never in soggy soil."
   },
   {
@@ -1284,11 +1359,12 @@
     "mature_size": "6 ft H × 6 ft W",
     "bloom_season": "Summer-Fall",
     "bloom_color": "Lavender",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 8-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 8-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed.",
+    "category": "shrub",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer needed in native soil.",
     "watering_guidance": "Water deeply every 1-2 weeks during its cool-season growth; it is drought-deciduous and naturally goes dormant and leafless through the hot, dry summer."
   },
   {
@@ -1301,11 +1377,12 @@
     "mature_size": "5 ft H × 5 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Green",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 8-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 8-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed.",
+    "category": "shrub",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer needed for good flowering.",
     "watering_guidance": "Drought tolerant once established and rot-prone if overwatered; deep-soak every 2 weeks in summer with good drainage and keep it out of soggy or lawn-adjacent soil."
   },
   {
@@ -1318,11 +1395,12 @@
     "mature_size": "8 ft H × 8 ft W",
     "bloom_season": "Late winter-Spring, Fall",
     "bloom_color": "White-lavender",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "shrub",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer needed; it tolerates poor, saline soils.",
     "watering_guidance": "Very drought and salt tolerant; water every 2-3 weeks in summer to keep the glossy evergreen foliage dense, then reduce in winter, relying largely on rain."
   },
   {
@@ -1335,11 +1413,12 @@
     "mature_size": "5 ft H × 4 ft W",
     "bloom_season": "Spring-Fall",
     "bloom_color": "White/Pink/Red",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 8-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 8-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed.",
+    "category": "shrub",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "A light spring feeding supports vigor; it is otherwise undemanding.",
     "watering_guidance": "Very adaptable; water deeply every 1-2 weeks in summer for lush growth, though established plants tolerate considerable drought once rooted."
   },
   {
@@ -1352,11 +1431,12 @@
     "mature_size": "8 ft H × 8 ft W",
     "bloom_season": "Summer-Fall",
     "bloom_color": "White",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 7-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 7-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 7-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 7-11. Both are kept as printed.",
+    "category": "shrub",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Feed lightly in early spring; too much nitrogen favors leaves over fruit.",
     "watering_guidance": "For good fruit, water deeply and consistently every 7-10 days from bloom through harvest; erratic watering causes the fruit to split, though the plant survives on much less."
   },
   {
@@ -1369,11 +1449,12 @@
     "mature_size": "3 ft H × 3 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Red buds/Cream",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "shrub",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "A light spring feeding supports growth in lean soil.",
     "watering_guidance": "Water every 7-10 days in summer, especially in the part shade it prefers; it is moderately drought tolerant but blooms and looks best with steady moisture."
   },
   {
@@ -1386,11 +1467,12 @@
     "mature_size": "8 ft H × 6 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Orange-red",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 8-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 8-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed.",
+    "category": "shrub",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer needed in native soil.",
     "watering_guidance": "Low water once established; deep-soak every 2 weeks in summer while young, then wean to occasional water, as it is adapted to chaparral and desert-edge dryness."
   },
   {
@@ -1403,11 +1485,12 @@
     "mature_size": "40 ft H × 10 ft W",
     "bloom_season": "Late spring",
     "bloom_color": "White",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "cactus",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "None required; saguaros thrive in lean desert soils and gain nothing from fertilizer.",
     "watering_guidance": "Established saguaros need no supplemental irrigation; water a newly transplanted specimen deeply once a month through its first two summers, then stop. Overwatering causes root and basal rot."
   },
   {
@@ -1420,11 +1503,12 @@
     "mature_size": "15 ft H × 10 ft W",
     "bloom_season": "Spring-summer",
     "bloom_color": "White",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "cactus",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Optional light feeding with a dilute cactus fertilizer once in spring; unnecessary in decent soil.",
     "watering_guidance": "Water deeply once or twice a month spring through fall and keep dry in winter; it tolerates neglect once established and rots if overwatered."
   },
   {
@@ -1437,11 +1521,12 @@
     "mature_size": "2 ft H × 2 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "cactus",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Little to none; a single dilute spring feeding is plenty.",
     "watering_guidance": "Water established plants only every 3-4 weeks in the hottest months; they store water internally and rot quickly in wet or poorly drained soil."
   },
   {
@@ -1454,11 +1539,12 @@
     "mature_size": "4 ft H × 5 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Red-yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "cactus",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "None; native chollas thrive in poor desert soils.",
     "watering_guidance": "Needs no irrigation once established; give an occasional deep soak only in extreme drought, as overwatering causes rot."
   },
   {
@@ -1471,11 +1557,12 @@
     "mature_size": "1 ft H × 2 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Magenta",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "cactus",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Not necessary in native desert soil.",
     "watering_guidance": "Water established clumps only during prolonged drought; they store water and rot easily in wet soil."
   },
   {
@@ -1488,11 +1575,12 @@
     "mature_size": "2 ft H × 3 ft W",
     "bloom_season": "Spring",
     "bloom_color": "White",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "cactus",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "A light spring feeding with dilute cactus food encourages bloom but is optional.",
     "watering_guidance": "Water every 2-3 weeks in the warm season and keep dry in winter; excellent drainage is essential to prevent rot."
   },
   {
@@ -1505,11 +1593,12 @@
     "mature_size": "20 ft H × 8 ft W",
     "bloom_season": "Spring",
     "bloom_color": "White",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "cactus",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "A light dilute cactus fertilizer once in spring supports the huge flowers.",
     "watering_guidance": "Water deeply every 2-3 weeks spring through fall and keep nearly dry in winter to force spring bloom and avoid rot."
   },
   {
@@ -1522,11 +1611,12 @@
     "mature_size": "2 ft H × 3 ft W",
     "bloom_season": "Spring-summer",
     "bloom_color": "Orange/red",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "cactus",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Optional light spring feeding.",
     "watering_guidance": "Water every 2-3 weeks in the warm months and keep dry in winter; sharp drainage prevents rot."
   },
   {
@@ -1539,11 +1629,12 @@
     "mature_size": "2 ft H × 4 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Magenta-pink",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "cactus",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "None needed in native soil.",
     "watering_guidance": "Established plants need little to no supplemental water; an occasional deep soak in extreme drought is plenty, and overwatering causes soft rot."
   },
   {
@@ -1556,11 +1647,12 @@
     "mature_size": "4 ft H × 8 ft W",
     "bloom_season": "Spring-early summer",
     "bloom_color": "Yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "cactus",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "None required.",
     "watering_guidance": "Needs almost no supplemental water once established; water sparingly and only in extended drought to avoid rot."
   },
   {
@@ -1573,11 +1665,12 @@
     "mature_size": "5 ft H × 2 ft W",
     "bloom_season": "Late spring-summer",
     "bloom_color": "Yellow-orange",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "cactus",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Not needed.",
     "watering_guidance": "Established plants need no irrigation; water a new transplant monthly its first summer only, keeping it dry thereafter to prevent rot."
   },
   {
@@ -1590,11 +1683,12 @@
     "mature_size": "15 ft H × 10 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Greenish-white",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "cactus",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Light spring feeding optional.",
     "watering_guidance": "Water established plants monthly in summer and none in winter; excellent drainage prevents rot."
   },
   {
@@ -1607,11 +1701,12 @@
     "mature_size": "10 ft H × 10 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "cactus",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Not necessary.",
     "watering_guidance": "Needs little supplemental water once established; deep-soak occasionally in extreme drought and avoid keeping the crown wet."
   },
   {
@@ -1624,11 +1719,12 @@
     "mature_size": "4 ft H × 5 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "cactus",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Light spring feeding optional.",
     "watering_guidance": "Water established plants monthly in summer only and keep dry in winter; sharp drainage prevents rot."
   },
   {
@@ -1641,11 +1737,12 @@
     "mature_size": "10 ft H × 6 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Pink",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "cactus",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "None needed; lean, dry conditions intensify the purple pad color.",
     "watering_guidance": "Needs very little water once established; an occasional deep soak keeps pads plump, but overwatering fades the purple color and causes rot."
   },
   {
@@ -1658,11 +1755,12 @@
     "mature_size": "12 ft H × 18 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Yellow-orange",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "cactus",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "A light spring feeding boosts fruit and pad production but is optional.",
     "watering_guidance": "Water established plants monthly at most; nearly spineless but still rot-prone if overwatered."
   },
   {
@@ -1675,11 +1773,12 @@
     "mature_size": "1 ft H × 3 ft W",
     "bloom_season": "Spring",
     "bloom_color": "White-pink",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "cactus",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Not necessary.",
     "watering_guidance": "Water lightly every 3-4 weeks in the warm season and keep dry in winter; the segmented joints rot fast in wet soil."
   },
   {
@@ -1692,11 +1791,12 @@
     "mature_size": "10 ft H × 10 ft W",
     "bloom_season": "Spring-summer",
     "bloom_color": "Pale pink",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "cactus",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Not needed.",
     "watering_guidance": "Established plants need no irrigation; water a young transplant monthly its first summer only, keeping it dry to prevent rot."
   },
   {
@@ -1709,11 +1809,12 @@
     "mature_size": "10 ft H × 10 ft W",
     "bloom_season": "Late spring-summer",
     "bloom_color": "Pink",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "cactus",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Not necessary.",
     "watering_guidance": "Established plants need little to no supplemental water; water a young plant monthly its first summer, then rely on rainfall. Rots if overwatered."
   },
   {
@@ -1726,11 +1827,12 @@
     "mature_size": "15 ft H × 10 ft W",
     "bloom_season": "Late spring-summer",
     "bloom_color": "Pink",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "cactus",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Light spring feeding optional.",
     "watering_guidance": "Water established plants monthly in summer only; the smooth stems rot if kept wet, so ensure sharp drainage."
   },
   {
@@ -1743,11 +1845,12 @@
     "mature_size": "4 ft H × 4 ft W",
     "bloom_season": "Late winter-spring",
     "bloom_color": "Yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "succulent",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Not necessary; agaves thrive in lean soil.",
     "watering_guidance": "Water deeply every 2-3 weeks in summer while establishing, then only monthly; agaves rot in soggy soil."
   },
   {
@@ -1760,11 +1863,12 @@
     "mature_size": "3 ft H × 3 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "succulent",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Optional light spring feeding speeds this already fast grower.",
     "watering_guidance": "Water every 2 weeks in summer while young, tapering to monthly once established; sharp drainage prevents rot."
   },
   {
@@ -1777,11 +1881,12 @@
     "mature_size": "3 ft H × 3 ft W",
     "bloom_season": "Winter",
     "bloom_color": "Yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "succulent",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Not necessary in lean soil.",
     "watering_guidance": "Water monthly in summer once established; keep dry in winter and provide excellent drainage."
   },
   {
@@ -1794,11 +1899,12 @@
     "mature_size": "4 ft H × 4 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Bright yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "succulent",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Optional light spring feeding.",
     "watering_guidance": "Water every 2 weeks while establishing, then monthly; avoid keeping the crown wet to prevent rot."
   },
   {
@@ -1811,11 +1917,12 @@
     "mature_size": "2 ft H × 2 ft W",
     "bloom_season": "Summer",
     "bloom_color": "Bright yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "succulent",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Not needed in native soil.",
     "watering_guidance": "Water monthly in summer once established; extremely drought tolerant and rot-prone if overwatered."
   },
   {
@@ -1828,11 +1935,12 @@
     "mature_size": "2 ft H × 3 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "succulent",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Optional light spring feeding.",
     "watering_guidance": "Water every 2-3 weeks in summer while establishing, then monthly; sharp drainage prevents rot."
   },
   {
@@ -1845,11 +1953,12 @@
     "mature_size": "4 ft H × 5 ft W",
     "bloom_season": "Winter",
     "bloom_color": "Red",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "succulent",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Optional light spring feeding supports its fast growth.",
     "watering_guidance": "Water every 2 weeks while young, then monthly; fast growing but still rot-prone in wet soil."
   },
   {
@@ -1862,11 +1971,12 @@
     "mature_size": "6 ft H × 6 ft W",
     "bloom_season": "Spring-summer",
     "bloom_color": "Yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "succulent",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Optional light spring feeding encourages bloom.",
     "watering_guidance": "Water every 1-2 weeks in summer and less in winter; aloes are more forgiving than agaves but still rot in soggy soil."
   },
   {
@@ -1879,11 +1989,12 @@
     "mature_size": "8 ft H × 3 ft W",
     "bloom_season": "Winter-spring",
     "bloom_color": "Orange-red",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "succulent",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Optional light spring feeding.",
     "watering_guidance": "Water every 2 weeks in the warm season and monthly in winter; provide excellent drainage."
   },
   {
@@ -1896,11 +2007,12 @@
     "mature_size": "4 ft H × 4 ft W",
     "bloom_season": "Spring-fall",
     "bloom_color": "White",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "succulent",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Not necessary; light feeding optional.",
     "watering_guidance": "Water every 1-2 weeks in summer and sparingly in winter; the fleshy leaves store water and rot if overwatered."
   },
   {
@@ -1913,11 +2025,12 @@
     "mature_size": "2 ft H × 5 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "accent",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Not necessary in native soil.",
     "watering_guidance": "Needs no supplemental water once established; give an occasional summer soak only in extreme drought."
   },
   {
@@ -1930,11 +2043,12 @@
     "mature_size": "1 ft H × 2 ft W",
     "bloom_season": "Winter-spring",
     "bloom_color": "Yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "succulent",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "A light spring feeding extends the long bloom season.",
     "watering_guidance": "Water every 1-2 weeks in the warm season to keep it flowering; more tolerant of regular water than most succulents but still needs drainage."
   },
   {
@@ -1947,11 +2061,12 @@
     "mature_size": "4 ft H × 4 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Brown",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "accent",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Not necessary; light spring feeding optional.",
     "watering_guidance": "Water established plants monthly; deep, infrequent irrigation encourages a stronger trunk."
   },
   {
@@ -1964,11 +2079,12 @@
     "mature_size": "5 ft H × 4 ft W",
     "bloom_season": "Late spring-summer",
     "bloom_color": "Cream",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "accent",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Feed with a palm/cycad fertilizer in spring and summer; sagos are prone to manganese deficiency showing as yellow new growth.",
     "watering_guidance": "Water every 1-2 weeks in summer and monthly in winter; sagos rot with poor drainage or constant moisture."
   },
   {
@@ -1981,11 +2097,12 @@
     "mature_size": "6 ft H × 6 ft W",
     "bloom_season": "Summer",
     "bloom_color": "White-cream",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "accent",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Not necessary in native soil.",
     "watering_guidance": "Water established plants monthly; drought tolerant and best with deep, infrequent soaks."
   },
   {
@@ -1998,11 +2115,12 @@
     "mature_size": "1.5 ft H × 4 ft W",
     "bloom_season": "Spring-summer",
     "bloom_color": "Pink/white",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "succulent",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Not necessary.",
     "watering_guidance": "Needs very little water; monthly in summer at most and none in winter. It rots in wet soil."
   },
   {
@@ -2015,11 +2133,12 @@
     "mature_size": "12 ft H × 10 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Red-orange",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "accent",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Not necessary.",
     "watering_guidance": "Established plants need no irrigation; water a new transplant every 1-2 weeks the first spring to trigger leaf-out, then wean off. Overwatering rots the roots."
   },
   {
@@ -2032,11 +2151,12 @@
     "mature_size": "3 ft H × 3 ft W",
     "bloom_season": "Late spring-summer",
     "bloom_color": "Red",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "succulent",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Not necessary; light spring feeding optional.",
     "watering_guidance": "Water monthly in summer and none in winter; the succulent stems rot easily if kept moist."
   },
   {
@@ -2049,11 +2169,12 @@
     "mature_size": "2 ft H × 3 ft W",
     "bloom_season": "Midwinter-spring",
     "bloom_color": "Chartreuse",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "succulent",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Not necessary in lean soil.",
     "watering_guidance": "Water monthly in the warm season and keep dry in winter; excellent drainage is essential."
   },
   {
@@ -2066,11 +2187,12 @@
     "mature_size": "10 ft H × 6 ft W",
     "bloom_season": "Summer",
     "bloom_color": "Yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "succulent",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Not necessary; lean, dry conditions intensify the orange-red winter color.",
     "watering_guidance": "Water monthly in the warm season and sparingly in winter; very drought tolerant and rot-prone if overwatered."
   },
   {
@@ -2083,11 +2205,12 @@
     "mature_size": "5 ft H × 5 ft W",
     "bloom_season": "Late spring-summer",
     "bloom_color": "Greenish-white",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "succulent",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Not necessary; light spring feeding optional.",
     "watering_guidance": "Needs little water once established; monthly deep soaks in summer keep it lush. Very rot-resistant but drainage still matters."
   },
   {
@@ -2100,11 +2223,12 @@
     "mature_size": "3 ft H × 5 ft W",
     "bloom_season": "Spring-summer",
     "bloom_color": "Coral-red",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "succulent",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Not necessary; it blooms best in lean soil.",
     "watering_guidance": "Extremely drought tolerant; water established plants monthly at most. Overwatering causes floppy growth and rot."
   },
   {
@@ -2117,11 +2241,12 @@
     "mature_size": "3 ft H × 4 ft W",
     "bloom_season": "Late spring-summer",
     "bloom_color": "Pale green",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "accent",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Not necessary in native soil.",
     "watering_guidance": "Water established plants monthly; drought tolerant and best with deep, infrequent soaks."
   },
   {
@@ -2134,11 +2259,12 @@
     "mature_size": "1 ft H × 1 ft W",
     "bloom_season": "Winter-spring",
     "bloom_color": "Salmon",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "succulent",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Not necessary; light feeding optional.",
     "watering_guidance": "Water every 2-3 weeks in summer and sparingly in winter; the small rosette rots quickly if overwatered."
   },
   {
@@ -2151,11 +2277,12 @@
     "mature_size": "20 ft H × 10 ft W",
     "bloom_season": "Late spring",
     "bloom_color": "White",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "accent",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Not necessary in native soil.",
     "watering_guidance": "Established plants need little to no irrigation; water a young plant monthly its first summer, then rely on rainfall."
   },
   {
@@ -2168,11 +2295,12 @@
     "mature_size": "2 ft H × 4 ft W",
     "bloom_season": "Late spring-summer",
     "bloom_color": "White",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "accent",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Not necessary.",
     "watering_guidance": "Water established plants monthly at most; very drought tolerant and rot-prone if overwatered."
   },
   {
@@ -2185,11 +2313,12 @@
     "mature_size": "3 ft H × 5 ft W",
     "bloom_season": "Spring-summer",
     "bloom_color": "White",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "succulent",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Light spring feeding optional; it thrives in lean soil.",
     "watering_guidance": "Water every 2-3 weeks in summer and monthly or less in winter; drought tolerant and rot-prone if overwatered."
   },
   {
@@ -2202,11 +2331,12 @@
     "mature_size": "4 ft H × 4 ft W",
     "bloom_season": "Late spring",
     "bloom_color": "White",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "accent",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Not necessary in native soil.",
     "watering_guidance": "Established plants need little to no water; water a young plant monthly its first summer only."
   },
   {
@@ -2219,11 +2349,12 @@
     "mature_size": "2 ft H × 10 ft W",
     "bloom_season": "Early spring",
     "bloom_color": "Yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "groundcover",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "As a nitrogen-fixing legume it needs little feeding; a single light application of balanced fertilizer in early spring is plenty on poor soils.",
     "watering_guidance": "Water deeply every 7-10 days through the first summer to establish the wide root system, then taper to every 2-3 weeks; the low cultivar Desert Carpet is far more drought tolerant than seed-grown plants."
   },
   {
@@ -2236,11 +2367,12 @@
     "mature_size": "3 ft H × 4 ft W",
     "bloom_season": "Fall",
     "bloom_color": "White",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "groundcover",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Rarely needs fertilizer; skip feeding entirely in native or low-water beds to avoid rank growth.",
     "watering_guidance": "Water every 10-14 days to establish, then only every 3-4 weeks once rooted; it tolerates poor drainage and reflected heat better than most groundcovers."
   },
   {
@@ -2253,11 +2385,12 @@
     "mature_size": "2 ft H × 6 ft W",
     "bloom_season": "Spring-summer",
     "bloom_color": "Lavender-purple",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 8-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 8-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed.",
+    "category": "groundcover",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "A nitrogen-fixing native that needs no fertilizer; feeding produces floppy, short-lived growth.",
     "watering_guidance": "Once established this is one of the most drought-tolerant groundcovers available, needing water only every 3-4 weeks in summer and almost none in winter; overwatering causes rot and legginess."
   },
   {
@@ -2270,11 +2403,12 @@
     "mature_size": "2 ft H × 3 ft W",
     "bloom_season": "Spring",
     "bloom_color": "White",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 8-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 8-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed.",
+    "category": "groundcover",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Feed sparingly with a balanced fertilizer once in early spring; too much nitrogen reduces the silvery leaf sheen.",
     "watering_guidance": "Despite its Mediterranean origin it wants regular deep water every 5-7 days in the heat of a low-desert summer, but it must have fast drainage or the crown rots quickly."
   },
   {
@@ -2287,11 +2421,12 @@
     "mature_size": "1 ft H × 3 ft W",
     "bloom_season": "Late winter-spring",
     "bloom_color": "Yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "groundcover",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Needs little to no fertilizer; a single light spring feeding is more than enough for bloom.",
     "watering_guidance": "Water every 10-14 days once established and allow the soil to dry between; overwatering and poor drainage are the most common cause of sudden collapse."
   },
   {
@@ -2304,11 +2439,12 @@
     "mature_size": "2 ft H × 3 ft W",
     "bloom_season": "Year-round",
     "bloom_color": "Yellow/orange/gold",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "groundcover",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Feed lightly with a balanced fertilizer in spring; excess nitrogen produces foliage at the expense of flowers.",
     "watering_guidance": "Water every 7-10 days in summer for continuous bloom, stretching to every 2-3 weeks in cooler months; it is heat-loving and tolerates some drought once established."
   },
   {
@@ -2321,11 +2457,12 @@
     "mature_size": "1 ft H × 6 ft W",
     "bloom_season": "Year-round",
     "bloom_color": "Lavender/yellow/white",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "groundcover",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "A light spring feeding is all it needs; heavy fertilizer promotes rank growth and fewer flowers.",
     "watering_guidance": "Water every 7-10 days in summer to keep the fast-trailing stems full; established plants tolerate longer intervals and light drought."
   },
   {
@@ -2338,11 +2475,12 @@
     "mature_size": "1 ft H × 4 ft W",
     "bloom_season": "Spring",
     "bloom_color": "White",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "groundcover",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Feed once in spring with a balanced fertilizer; generally low-input otherwise.",
     "watering_guidance": "Water every 7-10 days in summer to sustain its fast dense growth; it is thirstier than native groundcovers and thins out if allowed to dry hard, but drainage must still be good."
   },
   {
@@ -2355,11 +2493,12 @@
     "mature_size": "1 ft H × 2 ft W",
     "bloom_season": "Spring-fall",
     "bloom_color": "White fading to pink",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 4-9",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 4-9. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 4-9",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 4-9. Both are kept as printed.",
+    "category": "groundcover",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer is needed; feeding produces soft growth prone to rot in a low-water native bed.",
     "watering_guidance": "Water every 2-3 weeks once established and allow the soil to dry between; this low-water native rots in soggy, poorly drained ground."
   },
   {
@@ -2372,11 +2511,12 @@
     "mature_size": "1 ft H × 2 ft W",
     "bloom_season": "Spring-fall",
     "bloom_color": "Butter yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 8-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 8-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed.",
+    "category": "groundcover",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Needs little feeding; a single light spring application keeps foliage a healthy green in poor soils.",
     "watering_guidance": "Water every 10-14 days once established and let the soil dry between; this Mediterranean herb resents constant moisture and needs excellent drainage."
   },
   {
@@ -2389,11 +2529,12 @@
     "mature_size": "0.5-1 ft H × 4 ft W",
     "bloom_season": "Spring-fall",
     "bloom_color": "Yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 8-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 8-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed.",
+    "category": "groundcover",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "A single light spring feeding suffices; it grows and spreads readily without much input.",
     "watering_guidance": "Water every 7-10 days in summer to fuel its fast spread by runners; established plants tolerate less but bloom best with regular moisture and good drainage."
   },
   {
@@ -2406,11 +2547,12 @@
     "mature_size": "2 ft H × 4 ft W",
     "bloom_season": "Spring-fall",
     "bloom_color": "Purple",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 8-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 8-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed.",
+    "category": "groundcover",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Feed lightly in spring; it blooms freely without heavy fertilizing.",
     "watering_guidance": "Water every 7-10 days in summer for steady bloom; this compact dwarf ruellia tolerates a range of moisture and even brief flooding but keeps flowering best with regular water."
   },
   {
@@ -2423,11 +2565,12 @@
     "mature_size": "1 ft H × 3 ft W",
     "bloom_season": "Winter-spring",
     "bloom_color": "Pale pink",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 5-9",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 5-9. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 5-9",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 5-9. Both are kept as printed.",
+    "category": "groundcover",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Little feeding is needed; one light spring application maintains healthy dark-green foliage.",
     "watering_guidance": "Water every 10-14 days once established and let the soil dry between; like other Mediterranean subshrubs it demands sharp drainage and rots in wet ground."
   },
   {
@@ -2440,11 +2583,12 @@
     "mature_size": "2 ft H × 6 ft W",
     "bloom_season": "Spring-fall",
     "bloom_color": "Yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "groundcover",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Rarely needs fertilizer; it grows vigorously on its own, so avoid feeding that fuels invasive spread.",
     "watering_guidance": "Water every 5-7 days in summer for a lush tropical look; it is one of the thirstier groundcovers here and wilts quickly when dry, though it tolerates poor soils."
   },
   {
@@ -2457,11 +2601,12 @@
     "mature_size": "15 ft H × 15 ft W",
     "bloom_season": "Summer-fall",
     "bloom_color": "Bright pink",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 8-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 8-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed.",
+    "category": "vine",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Feed lightly in spring as growth resumes; it is a strong grower that needs little encouragement.",
     "watering_guidance": "Water deeply once or twice a week through summer for lush growth and heavy bloom; the tuberous root lets it survive drought, but it flowers far better with regular moisture."
   },
   {
@@ -2474,11 +2619,12 @@
     "mature_size": "15 ft H × 20 ft W",
     "bloom_season": "Year-round",
     "bloom_color": "Many colors",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 9b-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 9b-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 9b-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 9b-11. Both are kept as printed.",
+    "category": "vine",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Feed with a bloom-type (higher phosphorus) fertilizer during the warm season; go easy on nitrogen to keep flowering strong.",
     "watering_guidance": "Water deeply but infrequently, letting the soil dry well between; deliberate mild drought stress actually triggers the heaviest bloom, while overwatering yields all leaves and no color."
   },
   {
@@ -2491,11 +2637,12 @@
     "mature_size": "15 ft H × 15 ft W",
     "bloom_season": "Late spring-early summer",
     "bloom_color": "Yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "vine",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Needs little fertilizer; a light spring feeding is sufficient in poor soils.",
     "watering_guidance": "Water every 10-14 days in summer once established; this desert-adapted vine is quite drought tolerant but blooms more reliably with occasional deep soaks."
   },
   {
@@ -2508,11 +2655,12 @@
     "mature_size": "15 ft H × 10 ft W",
     "bloom_season": "Summer",
     "bloom_color": "Green",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 7-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 7-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 7-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 7-11. Both are kept as printed.",
+    "category": "vine",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer is needed for this tough native.",
     "watering_guidance": "Water every 2-3 weeks in summer once established; the fleshy tuberous root makes it very drought tolerant and it needs little supplemental water in native settings."
   },
   {
@@ -2525,11 +2673,12 @@
     "mature_size": "15 ft H × 10 ft W",
     "bloom_season": "Winter-spring",
     "bloom_color": "Purple",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "vine",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Feed lightly in early spring; as a legume it needs little nitrogen.",
     "watering_guidance": "Water every 7-10 days in summer and less in winter; it is moderately drought tolerant once established but insists on excellent drainage and dislikes soggy soil."
   },
   {
@@ -2542,11 +2691,12 @@
     "mature_size": "25 ft H × 15 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 8-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 8-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed.",
+    "category": "vine",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Do not fertilize; this vigorous grower needs no encouragement and feeding only worsens its spread.",
     "watering_guidance": "Water deeply about once a week in summer for fast cover; it is adaptable but grows most aggressively with ample moisture, so lean watering helps restrain it."
   },
   {
@@ -2559,11 +2709,12 @@
     "mature_size": "10 ft H × 10 ft W",
     "bloom_season": "Summer-fall",
     "bloom_color": "Bright yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "vine",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Little to no fertilizer is needed; it grows readily in lean desert soils.",
     "watering_guidance": "Water every 10-14 days in summer once established; the large caudex-forming root stores water and gives it strong drought tolerance, so avoid overwatering."
   },
   {
@@ -2576,11 +2727,12 @@
     "mature_size": "10 ft H × 10 ft W",
     "bloom_season": "Summer",
     "bloom_color": "White/purple",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "vine",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Little fertilizer is needed; a light spring feeding suffices.",
     "watering_guidance": "Water every 10-14 days in summer once established; this desert passionflower is drought tolerant but blooms and hosts caterpillars best with occasional deep water."
   },
   {
@@ -2593,11 +2745,12 @@
     "mature_size": "20 ft H × 10 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Pink",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 6-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 6-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 6-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 6-11. Both are kept as printed.",
+    "category": "vine",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Feed once in early spring with a rose or balanced fertilizer to support its vigorous growth and bloom.",
     "watering_guidance": "Water deeply every 7-10 days in summer; more drought tolerant than most roses once established, but a big climber needs consistent moisture to fill an arbor."
   },
   {
@@ -2610,11 +2763,12 @@
     "mature_size": "20 ft H × 15 ft W",
     "bloom_season": "Spring",
     "bloom_color": "White/pale yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "vine",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "A light spring feeding supports its heavy flowering; avoid excess nitrogen that pushes foliage over flowers.",
     "watering_guidance": "Water deeply every 7-10 days in summer to sustain fast growth and repeat bloom; established plants tolerate moderate drought but flower less."
   },
   {
@@ -2627,11 +2781,12 @@
     "mature_size": "2 ft H × 2 ft W",
     "bloom_season": "Summer-fall",
     "bloom_color": "Tan",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 4-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 4-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 4-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 4-11. Both are kept as printed.",
+    "category": "grass",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer is needed; native gramas thrive in lean, unamended desert soil.",
     "watering_guidance": "Water every 2-3 weeks in summer once established; this warm-season native is very drought tolerant and needs little to no water in cooler months."
   },
   {
@@ -2644,11 +2799,12 @@
     "mature_size": "2 ft H × 2 ft W",
     "bloom_season": "Summer",
     "bloom_color": "Tan",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 3-10",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 3-10. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 3-10",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 3-10. Both are kept as printed.",
+    "category": "grass",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Requires no fertilizer in native soils; heavy feeding is unnecessary and unwanted.",
     "watering_guidance": "Water every 2-3 weeks in summer once established; extremely drought tolerant and needs almost no supplemental water outside the warm season."
   },
   {
@@ -2661,11 +2817,12 @@
     "mature_size": "4 ft H × 4 ft W",
     "bloom_season": "Summer",
     "bloom_color": "Tan",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 7-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 7-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 7-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 7-11. Both are kept as printed.",
+    "category": "grass",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer needed; it flourishes in ordinary lean desert soil.",
     "watering_guidance": "Water every 1-2 weeks the first summer to establish, then every 2-3 weeks or less; it is very drought tolerant but stays greener and fuller with occasional deep water."
   },
   {
@@ -2678,11 +2835,12 @@
     "mature_size": "3 ft H × 3 ft W",
     "bloom_season": "Fall",
     "bloom_color": "Pink",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 6-10",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 6-10. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 6-10",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 6-10. Both are kept as printed.",
+    "category": "grass",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Little to no fertilizer; too much nitrogen makes it flop and reduces the plume show.",
     "watering_guidance": "Water every 1-2 weeks in summer to establish, then every 2-3 weeks; it is drought tolerant once rooted but forms the best plumes with regular deep water and good drainage."
   },
   {
@@ -2695,11 +2853,12 @@
     "mature_size": "4 ft H × 4 ft W",
     "bloom_season": "Summer",
     "bloom_color": "Green",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 8-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 8-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed.",
+    "category": "grass",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Feed lightly in spring if foliage pales; otherwise it needs little in decent soil.",
     "watering_guidance": "Water every 7-10 days in summer to keep the fine bamboo-like foliage lush and green; it is more moisture-appreciative than the grama grasses but still drought tolerant once established."
   },
   {
@@ -2712,11 +2871,12 @@
     "mature_size": "1 ft H × 1 ft W",
     "bloom_season": "Year-round",
     "bloom_color": "Yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "perennial",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer needed — rich soil produces leggy, floppy growth; it performs best in lean, gritty desert soil.",
     "watering_guidance": "Water established plants deeply every 2-3 weeks in summer and monthly in winter; overwatering shortens its life, so let soil dry between drinks."
   },
   {
@@ -2729,11 +2889,12 @@
     "mature_size": "1 ft H × 2 ft W",
     "bloom_season": "Spring-Fall",
     "bloom_color": "Yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 4-10",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 4-10. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 4-10",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 4-10. Both are kept as printed.",
+    "category": "perennial",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Skip fertilizer; lean native soil keeps it compact and free-flowering.",
     "watering_guidance": "Very drought tolerant — water every 2-3 weeks in summer heat and monthly the rest of the year; too much water makes it flop and reduces fragrance."
   },
   {
@@ -2746,11 +2907,12 @@
     "mature_size": "2 ft H × 2 ft W",
     "bloom_season": "Spring, Fall",
     "bloom_color": "Golden yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 8-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 8-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed.",
+    "category": "perennial",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Not needed; a single spring dose of light organic mulch is plenty.",
     "watering_guidance": "Water deeply every 1-2 weeks in summer once established, tapering to monthly in winter; excellent drainage is essential to prevent root rot."
   },
   {
@@ -2763,11 +2925,12 @@
     "mature_size": "1 ft H × 2 ft W",
     "bloom_season": "Summer-Fall",
     "bloom_color": "Orange-red",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 8-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 8-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed.",
+    "category": "perennial",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "A light feeding of balanced fertilizer in spring supports the heavy late-season bloom; otherwise unnecessary.",
     "watering_guidance": "Water weekly through the summer bloom period to keep flowers coming, then reduce to every 2-3 weeks; more water than most desert perennials, less than turf."
   },
   {
@@ -2780,11 +2943,12 @@
     "mature_size": "1 ft H × 2 ft W",
     "bloom_season": "Year-round",
     "bloom_color": "White",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 5-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 5-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 5-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 5-11. Both are kept as printed.",
+    "category": "perennial",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Never fertilize; rich or amended soil causes rot and floppy growth in this lean-soil specialist.",
     "watering_guidance": "Extremely drought tolerant — water every 2-3 weeks in summer and rarely in winter; sharp drainage is critical, as wet feet quickly kill it."
   },
   {
@@ -2797,11 +2961,12 @@
     "mature_size": "1 ft H × 3 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Lavender-pink",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 7-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 7-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 7-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 7-11. Both are kept as printed.",
+    "category": "perennial",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Generally unnecessary; a light spring feed can boost bloom in poor soil.",
     "watering_guidance": "Water weekly during spring bloom and every 1-2 weeks in summer; moderate but consistent moisture extends the flowering carpet."
   },
   {
@@ -2814,11 +2979,12 @@
     "mature_size": "1 ft H × 3 ft W",
     "bloom_season": "Spring-Fall",
     "bloom_color": "Purple",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 8-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 8-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed.",
+    "category": "perennial",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "A light spring feeding supports the extended bloom; otherwise not required.",
     "watering_guidance": "Water every 1-2 weeks through the long bloom season and every 2-3 weeks in winter; it flowers most heavily with steady but modest moisture."
   },
   {
@@ -2831,11 +2997,12 @@
     "mature_size": "10 ft H × 2 ft W",
     "bloom_season": "Fall",
     "bloom_color": "Yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 4-9",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 4-9. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 4-9",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 4-9. Both are kept as printed.",
+    "category": "perennial",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Little needed in decent soil; a spring feed can support the fast, tall growth if the soil is very lean.",
     "watering_guidance": "Water deeply every 1-2 weeks through the growing season to fuel its tall growth; it wilts and stays short if kept too dry."
   },
   {
@@ -2848,11 +3015,12 @@
     "mature_size": "2 ft H × 3 ft W",
     "bloom_season": "Summer-Fall",
     "bloom_color": "White/Pink",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 5-9",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 5-9. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 5-9",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 5-9. Both are kept as printed.",
+    "category": "perennial",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Minimal — too much fertilizer produces lax, floppy growth; lean soil keeps the wands upright.",
     "watering_guidance": "Water every 1-2 weeks in summer once its deep taproot is established; it is quite drought tolerant and dislikes soggy soil."
   },
   {
@@ -2865,11 +3033,12 @@
     "mature_size": "1 ft H × 2 ft W",
     "bloom_season": "Late Spring-Summer",
     "bloom_color": "Cherry red",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 7-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 7-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 7-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 7-11. Both are kept as printed.",
+    "category": "perennial",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "No fertilizer needed; it is adapted to lean, rocky, mineral soils.",
     "watering_guidance": "Water every 1-2 weeks in summer with excellent drainage; this rock-dweller rots quickly in heavy, wet soil."
   },
   {
@@ -2882,11 +3051,12 @@
     "mature_size": "1 ft H × 1.5 ft W",
     "bloom_season": "Late Winter-Spring",
     "bloom_color": "Scarlet",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 4-10",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 4-10. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 4-10",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 4-10. Both are kept as printed.",
+    "category": "perennial",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "None needed — lean, unamended desert soil is ideal.",
     "watering_guidance": "Water every 2-3 weeks during the cool bloom season and monthly or less in summer; the basal rosette needs dry summer conditions and sharp drainage to persist."
   },
   {
@@ -2899,11 +3069,12 @@
     "mature_size": "1.5 ft H × 1.5 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Hot pink",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 8-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 8-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed.",
+    "category": "perennial",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Not needed; thrives on lean native soil with no supplemental feeding.",
     "watering_guidance": "Water every 2-3 weeks through fall and spring to fuel bloom, then keep dry in summer; excess summer water rots the crown."
   },
   {
@@ -2916,11 +3087,12 @@
     "mature_size": "2 ft H × 3 ft W",
     "bloom_season": "Late Spring",
     "bloom_color": "Bright coral",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 8-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 8-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed.",
+    "category": "perennial",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "None required on native soils.",
     "watering_guidance": "Water every 2-3 weeks in the cool season to build strong rosettes, then keep dry in summer; sharp drainage is essential to avoid rot."
   },
   {
@@ -2933,11 +3105,12 @@
     "mature_size": "1 ft H × 2 ft W",
     "bloom_season": "Spring-Fall",
     "bloom_color": "Yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 8-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 8-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed.",
+    "category": "perennial",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Never fertilize; rich soil causes weak, floppy, short-lived growth.",
     "watering_guidance": "Extremely drought tolerant — water every 2-3 weeks in summer and rarely in winter; it blooms hardest after monsoon moisture and needs sharp drainage."
   },
   {
@@ -2950,11 +3123,12 @@
     "mature_size": "1.5 ft H × 2 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Rose-purple",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 8-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 8-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed.",
+    "category": "perennial",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "None needed on native desert soils.",
     "watering_guidance": "Water every 2-3 weeks through the cool season and sparingly in summer; well-drained soil is essential to prevent crown rot."
   },
   {
@@ -2967,11 +3141,12 @@
     "mature_size": "3 ft H × 3 ft W",
     "bloom_season": "Spring-Summer",
     "bloom_color": "Intense yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 7-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 7-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 7-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 7-11. Both are kept as printed.",
+    "category": "perennial",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Little to none; lean soil keeps the gray foliage compact and the plant long-lived.",
     "watering_guidance": "Water every 1-2 weeks in summer once established; this Mediterranean shrub is drought tolerant and needs good drainage to avoid rot."
   },
   {
@@ -2984,11 +3159,12 @@
     "mature_size": "3 ft H × 6 ft W",
     "bloom_season": "Spring-Fall",
     "bloom_color": "Yellow/Maroon",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 4-9",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 4-9. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 4-9",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 4-9. Both are kept as printed.",
+    "category": "perennial",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "None needed; rich soil makes it flop and spread aggressively.",
     "watering_guidance": "Water every 1-2 weeks in summer for continuous bloom; it is fairly drought tolerant once its taproot is deep and tolerates lean soil."
   },
   {
@@ -3001,11 +3177,12 @@
     "mature_size": "2 ft H × 1 ft W",
     "bloom_season": "Spring-Fall",
     "bloom_color": "Purple",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 8-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 8-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed.",
+    "category": "perennial",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "A light spring feeding boosts bloom, though it flowers well without it.",
     "watering_guidance": "Water weekly in summer to keep it blooming; it tolerates drought but flowers best with regular moisture and even handles periodically wet soil."
   },
   {
@@ -3018,11 +3195,12 @@
     "mature_size": "1.5 ft H × 1.5 ft W",
     "bloom_season": "Spring-Fall",
     "bloom_color": "Blue-purple",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 8-10",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-10. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 8-10",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-10. Both are kept as printed.",
+    "category": "perennial",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "A light spring feeding supports the long bloom; not essential in decent soil.",
     "watering_guidance": "Water weekly in summer to sustain continuous flowering; drought tolerant once established but blooms best with regular moisture and good drainage."
   },
   {
@@ -3035,11 +3213,12 @@
     "mature_size": "4 ft H × 4 ft W",
     "bloom_season": "Spring-Summer",
     "bloom_color": "Blue-violet",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 8-10",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-10. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 8-10",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-10. Both are kept as printed.",
+    "category": "perennial",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "None needed; lean, fast-draining soil keeps it healthiest and longest-lived.",
     "watering_guidance": "Water every 2 weeks in summer with excellent drainage; this dry-climate sage is prone to root rot from overwatering or heavy soil."
   },
   {
@@ -3052,11 +3231,12 @@
     "mature_size": "3 ft H × 4 ft W",
     "bloom_season": "Spring, Fall",
     "bloom_color": "Red/Pink/White",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 8-10",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-10. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 8-10",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-10. Both are kept as printed.",
+    "category": "perennial",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "A spring feeding fuels the strong fall bloom flush; otherwise minimal.",
     "watering_guidance": "Water weekly in summer to support its lush growth; moderate water and afternoon relief keep the velvety spikes looking their best in extreme heat."
   },
   {
@@ -3069,11 +3249,12 @@
     "mature_size": "2 ft H × 2 ft W",
     "bloom_season": "Spring-Fall",
     "bloom_color": "Red/Coral",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 6-9",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 6-9. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 6-9",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 6-9. Both are kept as printed.",
+    "category": "perennial",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Little needed; a light spring feed can support the long bloom in poor soil.",
     "watering_guidance": "Water every 1-2 weeks in summer; drought tolerant once established, it blooms nonstop with occasional deep soaks and good drainage."
   },
   {
@@ -3086,11 +3267,12 @@
     "mature_size": "4 ft H × 4 ft W",
     "bloom_season": "Late Spring-Fall",
     "bloom_color": "Yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 8-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 8-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed.",
+    "category": "perennial",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "None needed; as a legume it fixes its own nitrogen and prefers lean soil.",
     "watering_guidance": "Very drought tolerant — water every 2-3 weeks in summer and rarely in winter; it blooms with rainfall and needs sharp drainage."
   },
   {
@@ -3103,11 +3285,12 @@
     "mature_size": "3 ft H × 3 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Orange/White/Pink/Lavender",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 6-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 6-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 6-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 6-11. Both are kept as printed.",
+    "category": "perennial",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "None needed; it thrives on lean, unimproved desert soil.",
     "watering_guidance": "Extremely drought tolerant — water every 2-3 weeks in summer and rarely otherwise; it blooms on rainfall and rots in overly wet or poorly drained soil."
   },
   {
@@ -3120,11 +3303,12 @@
     "mature_size": "3 ft H × 3 ft W",
     "bloom_season": "Fall-Winter",
     "bloom_color": "Orange-yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 8-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 8-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed.",
+    "category": "perennial",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Little needed; over-rich soil produces rank growth at the expense of form.",
     "watering_guidance": "Water every 1-2 weeks in summer; moderate but regular moisture keeps this fast, soft-wooded shrub full and sets up its heavy fall bloom."
   },
   {
@@ -3137,11 +3321,12 @@
     "mature_size": "2 ft H × 3 ft W",
     "bloom_season": "Late Spring-Summer",
     "bloom_color": "Orange-yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 8-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 8-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed.",
+    "category": "perennial",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Minimal; it performs well in lean soil with little or no feeding.",
     "watering_guidance": "Water every 1-2 weeks in summer; drought tolerant once established, it flowers longest through the heat with occasional deep soaks and good drainage."
   },
   {
@@ -3154,11 +3339,12 @@
     "mature_size": "1 ft H × 1 ft W",
     "bloom_season": "Summer",
     "bloom_color": "White",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 7-10",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 7-10. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 7-10",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 7-10. Both are kept as printed.",
+    "category": "perennial",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "A light spring feeding of bulb fertilizer boosts flowering; otherwise minimal.",
     "watering_guidance": "Water every 1-2 weeks in the warm season; a deep soak after a dry spell triggers a fresh flush of blooms, mimicking the monsoon rains it is named for."
   },
   {
@@ -3171,11 +3357,12 @@
     "mature_size": "1 ft H × 1 ft W",
     "bloom_season": "Year-round",
     "bloom_color": "Golden yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 4-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 4-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 4-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 4-11. Both are kept as printed.",
+    "category": "perennial",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "None needed; it flowers relentlessly in lean soil without feeding.",
     "watering_guidance": "Water every 1-2 weeks in summer and every 2-3 weeks in winter; drought tolerant and long-blooming, it needs well-drained soil to avoid crown rot."
   },
   {
@@ -3188,11 +3375,12 @@
     "mature_size": "3 ft H × 3 ft W",
     "bloom_season": "Summer-Fall",
     "bloom_color": "White-Pink",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "annual",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Avoid rich soil and nitrogen fertilizer, which produce lush foliage and few flowers; lean soil yields the best bloom.",
     "watering_guidance": "Water weekly while growing and blooming; cosmos is fairly drought tolerant but flowers best with steady moisture and dislikes soggy soil."
   },
   {
@@ -3205,11 +3393,12 @@
     "mature_size": "1.5 ft H × 2 ft W",
     "bloom_season": "Summer-Fall",
     "bloom_color": "White/Pink/Purple/Red",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "annual",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "None needed; it thrives in lean native soil.",
     "watering_guidance": "Water every 1-2 weeks during active growth and bloom; this native tolerates dry spells but flowers most freely with modest moisture."
   },
   {
@@ -3222,11 +3411,12 @@
     "mature_size": "1.5 ft H × 1.5 ft W",
     "bloom_season": "Early Spring-Summer",
     "bloom_color": "Golden yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "annual",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "None needed; lean desert soil produces the best flower display.",
     "watering_guidance": "Water every 1-2 weeks through the cool growing season; winter rains often supply most of what it needs, and it dislikes soggy soil."
   },
   {
@@ -3239,11 +3429,12 @@
     "mature_size": "0.5 ft H × 0.5 ft W",
     "bloom_season": "Early-Late Spring",
     "bloom_color": "Rose-pink to purple",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "annual",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "None needed; it thrives in poor native soil.",
     "watering_guidance": "Rely mainly on winter rains, supplementing every 2-3 weeks in dry spells; it needs consistent cool-season moisture to establish and bloom."
   },
   {
@@ -3256,11 +3447,12 @@
     "mature_size": "1 ft H × 1 ft W",
     "bloom_season": "Late Winter-Spring",
     "bloom_color": "Yellow-gold",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 8-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 8-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed.",
+    "category": "annual",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "None needed; lean soil produces the most flowers.",
     "watering_guidance": "Winter rains usually suffice; supplement every 2-3 weeks during dry stretches from fall through spring to keep the display going."
   },
   {
@@ -3273,11 +3465,12 @@
     "mature_size": "1.5 ft H × 1.5 ft W",
     "bloom_season": "Late Spring-Fall",
     "bloom_color": "Yellow/Maroon",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "annual",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "None needed; rich soil reduces flowering and shortens its life.",
     "watering_guidance": "Water every 1-2 weeks; very drought and heat tolerant, it blooms longest with occasional deep soaks and sharp drainage."
   },
   {
@@ -3290,11 +3483,12 @@
     "mature_size": "2 ft H × 2 ft W",
     "bloom_season": "Summer",
     "bloom_color": "Bright red",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "annual",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "None needed; it thrives on lean, disturbed desert soil.",
     "watering_guidance": "A warm-season annual triggered by monsoon moisture; water deeply every 1-2 weeks in summer to mimic the rains, and it needs heat to germinate and bloom."
   },
   {
@@ -3307,11 +3501,12 @@
     "mature_size": "1 ft H × 3 ft W",
     "bloom_season": "Summer",
     "bloom_color": "Scarlet red",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "annual",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Minimal; lean soil keeps the wiry stems upright and free-flowering.",
     "watering_guidance": "Water weekly during growth and bloom; it likes even moisture but sharp drainage, and its delicate stems resent both drought stress and soggy soil."
   },
   {
@@ -3324,11 +3519,12 @@
     "mature_size": "3 ft H × 3 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Violet-blue",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "annual",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "None needed; as a legume it fixes its own nitrogen and prefers lean soil.",
     "watering_guidance": "Winter rains often carry it; supplement every 1-2 weeks in dry spells through the cool growing season, ensuring good drainage."
   },
   {
@@ -3341,11 +3537,12 @@
     "mature_size": "2 ft H × 1 ft W",
     "bloom_season": "Spring",
     "bloom_color": "White with purple spots",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "annual",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "None needed in reasonable soil.",
     "watering_guidance": "Water every 1-2 weeks through the cool season; this delicate annual prefers steady moisture and cooler conditions and fades quickly in heat and drought."
   },
   {
@@ -3358,11 +3555,12 @@
     "mature_size": "0.67 ft H × 0.67 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Red/Pink/White",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "annual",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "None needed; lean soil yields sturdy, free-flowering plants.",
     "watering_guidance": "Water every 1-2 weeks through the cool season; winter rains help, and it needs steady moisture to establish but resents wet, poorly drained soil."
   },
   {
@@ -3375,11 +3573,12 @@
     "mature_size": "2 ft H × 2 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Blue",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 5-9",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 5-9. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 5-9",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 5-9. Both are kept as printed.",
+    "category": "annual",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "None needed; lean native soil keeps the wiry stems upright.",
     "watering_guidance": "Water every 1-2 weeks in the cool season; drought tolerant once established, this native performs on modest moisture with good drainage."
   },
   {
@@ -3392,11 +3591,12 @@
     "mature_size": "1 ft H × 1 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Brilliant blue",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "annual",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "None needed; it thrives in lean, sandy desert soil.",
     "watering_guidance": "Winter rains often suffice; supplement every 2-3 weeks during dry cool-season spells, ensuring sharp drainage since it rots in wet soil."
   },
   {
@@ -3409,11 +3609,12 @@
     "mature_size": "1 ft H × 1 ft W",
     "bloom_season": "Summer-Fall",
     "bloom_color": "Rose/Red/Yellow/White",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "annual",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "None needed; lean, gritty soil suits it best.",
     "watering_guidance": "Very drought tolerant thanks to its succulent leaves — water every 1-2 weeks in summer and let it dry between; overwatering causes rot."
   },
   {
@@ -3426,11 +3627,12 @@
     "mature_size": "0.5 ft H × 1.5 ft W",
     "bloom_season": "Spring",
     "bloom_color": "Blue",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": null,
-      "note": null
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": null,
+    "hardiness_note": null,
+    "category": "annual",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "None needed; it thrives in lean native soil.",
     "watering_guidance": "Winter rains usually carry it; supplement every 2-3 weeks in dry cool-season spells, then let it dry as seeds mature."
   },
   {
@@ -3443,11 +3645,12 @@
     "mature_size": "0.5 ft H × 0.5 ft W",
     "bloom_season": "Late Spring-Fall",
     "bloom_color": "Yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "USDA zones 8-11",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "USDA zones 8-11",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists USDA zones 8-11. Both are kept as printed.",
+    "category": "annual",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "None needed; lean desert soil keeps it compact and floriferous.",
     "watering_guidance": "Water every 1-2 weeks in the warm season; drought tolerant once established, it blooms for months on modest moisture with good drainage."
   },
   {
@@ -3460,11 +3663,12 @@
     "mature_size": "50-80 ft H × 20-40 ft W",
     "bloom_season": null,
     "bloom_color": null,
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "Phoenix Zone 9b-10a",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists Phoenix Zone 9b-10a. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "Phoenix Zone 9b-10a",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists Phoenix Zone 9b-10a. Both are kept as printed.",
+    "category": "palm",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Apply a slow-release palm fertilizer (with manganese and magnesium) in March and September.",
     "watering_guidance": "Water deeply once a week in summer for established palms. Keep soil moist but not waterlogged."
   },
   {
@@ -3477,11 +3681,12 @@
     "mature_size": "6-12 ft H × 6-10 ft W",
     "bloom_season": "Spring-Fall",
     "bloom_color": "Yellow",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "Phoenix Zone 9b-10a",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists Phoenix Zone 9b-10a. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "Phoenix Zone 9b-10a",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists Phoenix Zone 9b-10a. Both are kept as printed.",
+    "category": "shrub",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Feed lightly with a balanced or bloom fertilizer in spring; native soils usually suffice, so avoid over-feeding which yields leaves at the expense of flowers.",
     "watering_guidance": "Water deeply every 7-14 days in summer to sustain bloom, tapering to monthly or less in winter. Established plants are drought-tolerant but flower more freely with regular deep soaks."
   },
   {
@@ -3494,11 +3699,12 @@
     "mature_size": "3-6 ft H × 6-10 ft W",
     "bloom_season": null,
     "bloom_color": null,
-    "hardiness": {
-      "quick_stats": "USDA 8-11",
-      "narrative": "Phoenix Zone 8b-10a",
-      "note": "Quick Stats lists USDA 8-11; the page narrative lists Phoenix Zone 8b-10a. Both are kept as printed."
-    },
+    "usda_zone": "USDA 8-11",
+    "hardiness_alt": "Phoenix Zone 8b-10a",
+    "hardiness_note": "Quick Stats lists USDA 8-11; the page narrative lists Phoenix Zone 8b-10a. Both are kept as printed.",
+    "category": "succulent",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Rarely needs fertilizer; if desired, apply a light dose of low-nitrogen cactus food once in spring. Over-fertilizing produces soft, floppy growth.",
     "watering_guidance": "Water established plants only once or twice a month in the hottest months and rarely in winter. It stores water in its leaves and rots easily in soggy or poorly drained soil."
   },
   {
@@ -3511,11 +3717,12 @@
     "mature_size": "3-5 ft H × 3-4 ft W",
     "bloom_season": "Summer-Fall",
     "bloom_color": "Purple",
-    "hardiness": {
-      "quick_stats": "USDA 9-11",
-      "narrative": "Phoenix Zone 9b-10a",
-      "note": "Quick Stats lists USDA 9-11; the page narrative lists Phoenix Zone 9b-10a. Both are kept as printed."
-    },
+    "usda_zone": "USDA 9-11",
+    "hardiness_alt": "Phoenix Zone 9b-10a",
+    "hardiness_note": "Quick Stats lists USDA 9-11; the page narrative lists Phoenix Zone 9b-10a. Both are kept as printed.",
+    "category": "grass",
+    "heat_tolerance_f": null,
+    "fertilizer_guidance": "Apply a light application of balanced fertilizer in spring as growth resumes; it is not a heavy feeder and needs little else through the season.",
     "watering_guidance": "Water established clumps every 10-14 days in summer and monthly in cooler months. It tolerates low water but looks fullest with regular deep irrigation during peak heat."
   }
 ]

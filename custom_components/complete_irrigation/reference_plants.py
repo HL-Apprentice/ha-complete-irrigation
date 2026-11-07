@@ -1,13 +1,9 @@
-"""Read-only Outdoor Dream Builder plant reference.
+"""Outdoor Dream Builder plant pages, stored as printed.
 
-Pages fetched 2026-11-07 from https://www.outdoordreambuilder.com/plants are
-stored as printed: water class, sun, size, bloom, hardiness, and the watering
-sentence. Where a page states two different hardiness ranges, both are kept
-and a note says so. Nothing here is a WUCOLS category, a temperature, or a
-watering interval.
-
-lookup_reference is not used by lookup_care, care presets, schedules, zones,
-or the rain lockout. Importing this module does not change those.
+Pages fetched 2026-11-07 from https://www.outdoordreambuilder.com/plants.
+usda_zone is the Quick Stats USDA range. When the narrative prints a different
+range, that text is hardiness_alt and hardiness_note. lookup_reference only
+returns these page records. The operational merge lives in odb_care.
 """
 
 from __future__ import annotations

@@ -8,13 +8,17 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- **Outdoor Dream Builder plant reference (reference-only).** 207 plant pages
-  from [Outdoor Dream Builder](https://www.outdoordreambuilder.com/plants),
-  fetched 2026-11-07, are stored as printed in
-  `reference/outdoordreambuilder_plants.json`. `reference_plants.lookup_reference`
-  reads that file and is not consulted by curated care, schedules, zones, or
-  the rain lockout. Outdoor Dream Builder water classes are not mapped to WUCOLS.
-  Where a page prints two hardiness ranges, both are kept.
+- **Outdoor Dream Builder plants now feed curated care.** 207 pages from
+  [Outdoor Dream Builder](https://www.outdoordreambuilder.com/plants), fetched
+  2026-11-07, are stored as printed and merged into `lookup_care`. The USDA
+  Quick Stats range is the canonical zone; a conflicting narrative range is
+  kept beside it and is not used for the cold limit. Cold tolerance is that
+  zone's USDA minimum (zone 9 is 20 F). The site's water classes are mapped
+  onto the existing irrigation labels; they are not the UC WUCOLS dataset.
+  A stated hot-season interval uses its shorter end. An existing species row
+  is never given a longer gap between waterings. Genus rows stay. Schedules,
+  zones, and the rain lockout are unchanged. Naming a plant that these pages
+  cover can now set a different cadence than the old table.
 
 ## v1.64.0 — 2026-11-04 — minor
 

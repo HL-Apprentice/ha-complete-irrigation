@@ -1,4 +1,4 @@
-"""Outdoor Dream Builder plant reference. Read-only, off the watering path."""
+"""Outdoor Dream Builder page records, including canonical USDA zones."""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ import re
 from pathlib import Path
 
 from custom_components.complete_irrigation.hydraulics import WUCOLS_FACTORS
-from custom_components.complete_irrigation.plant_care_db import CURATED_CARE, lookup_care
 from custom_components.complete_irrigation.reference_plants import (
     REFERENCE_PATH,
     load_reference,
@@ -26,46 +25,18 @@ _FIELDS = (
     "mature_size",
     "bloom_season",
     "bloom_color",
-    "hardiness",
+    "usda_zone",
+    "hardiness_alt",
+    "hardiness_note",
+    "category",
+    "heat_tolerance_f",
+    "fertilizer_guidance",
     "watering_guidance",
 )
 # Water classes as Outdoor Dream Builder prints them. Not WUCOLS keys.
 _WATER_CLASSES = {"Very Low (Xeric)", "Low", "Moderate"}
 _SUN_VALUES = {"full sun", "partial shade", "any"}
 _NOTE = "Quick Stats lists {quick}; the page narrative lists {narrative}. Both are kept as printed."
-_PENSTEMON = {
-    "common": "Penstemon",
-    "wucols": "low",
-    "sun": "full_sun",
-    "temp_low": 0,
-    "temp_high": 110,
-    "preset": "flower",
-    "water_days": 10,
-    "fert_days": 0,
-    "note": "Desert wildflower; low water, spring bloom.",
-}
-_OLEANDER = {
-    "common": "Oleander",
-    "wucols": "low",
-    "sun": "full_sun",
-    "temp_low": 15,
-    "temp_high": 115,
-    "preset": "shrub",
-    "water_days": 10,
-    "fert_days": 0,
-    "note": "Very drought-tolerant flowering shrub (all parts toxic).",
-}
-_NATAL_PLUM = {
-    "common": "Natal Plum",
-    "wucols": "low",
-    "sun": "full_sun",
-    "temp_low": 25,
-    "temp_high": 110,
-    "preset": "shrub",
-    "water_days": 10,
-    "fert_days": 60,
-    "note": "Dense glossy evergreen shrub with fragrant white flowers.",
-}
 
 
 def test_dataset_loads_207_unique_source_urls():
@@ -102,17 +73,17 @@ def test_records_keep_page_values_and_drop_page_text():
         assert rec["sun"] not in {"full_sun", "partial_sun", "bright_shade", "deep_shade"}
         assert "page_text" not in rec
         assert "Companion" not in rec["watering_guidance"]
-        hardiness = rec["hardiness"]
-        assert set(hardiness) == {"quick_stats", "narrative", "note"}
-        assert isinstance(hardiness["quick_stats"], str) and hardiness["quick_stats"]
-        if hardiness["narrative"] is None:
-            assert hardiness["note"] is None
+        assert isinstance(rec["usda_zone"], str) and rec["usda_zone"].startswith("USDA ")
+        assert isinstance(rec["category"], str) and rec["category"]
+        assert isinstance(rec["fertilizer_guidance"], str) and rec["fertilizer_guidance"]
+        if rec["hardiness_alt"] is None:
+            assert rec["hardiness_note"] is None
         else:
-            assert hardiness["note"] == _NOTE.format(
-                quick=hardiness["quick_stats"],
-                narrative=hardiness["narrative"],
+            assert rec["hardiness_note"] == _NOTE.format(
+                quick=rec["usda_zone"],
+                narrative=rec["hardiness_alt"],
             )
-            assert hardiness["narrative"] != hardiness["quick_stats"]
+            assert rec["hardiness_alt"] != rec["usda_zone"]
 
 
 def test_not_stated_bloom_fields_stay_null():
@@ -130,8 +101,10 @@ def test_not_stated_bloom_fields_stay_null():
     assert date["botanical_name"] == "Phoenix dactylifera"
     assert century["botanical_name"] == "Agave americana"
     assert date["water_needs"] == "Moderate"
-    assert century["hardiness"]["quick_stats"] == "USDA 8-11"
-    assert century["hardiness"]["narrative"] == "Phoenix Zone 8b-10a"
+    assert century["usda_zone"] == "USDA 8-11"
+    assert century["hardiness_alt"] == "Phoenix Zone 8b-10a"
+    alts = [rec for rec in load_reference() if rec["hardiness_alt"]]
+    assert len(alts) == 76
 
 
 def test_canyon_penstemon_keeps_both_hardiness_values():
@@ -144,10 +117,10 @@ def test_canyon_penstemon_keeps_both_hardiness_values():
     assert rec["mature_size"] == "1.5 ft H \u00d7 2 ft W"
     assert rec["bloom_season"] == "Spring"
     assert rec["bloom_color"] == "Rose-purple"
-    assert rec["hardiness"]["quick_stats"] == "USDA 9-11"
-    assert rec["hardiness"]["narrative"] == "USDA zones 8-11"
-    assert "USDA 9-11" in rec["hardiness"]["note"]
-    assert "USDA zones 8-11" in rec["hardiness"]["note"]
+    assert rec["usda_zone"] == "USDA 9-11"
+    assert rec["hardiness_alt"] == "USDA zones 8-11"
+    assert "USDA 9-11" in rec["hardiness_note"]
+    assert "USDA zones 8-11" in rec["hardiness_note"]
     assert rec["watering_guidance"] == (
         "Water every 2-3 weeks through the cool season and sparingly in summer; "
         "well-drained soil is essential to prevent crown rot."
@@ -171,37 +144,27 @@ def test_lookup_is_case_insensitive_and_unknown_names_are_none():
 def test_lookup_returns_a_copy():
     first = lookup_reference("Canyon Penstemon")
     first["water_needs"] = "changed"
-    first["hardiness"]["narrative"] = "changed"
+    first["hardiness_alt"] = "changed"
     second = lookup_reference("Canyon Penstemon")
     assert second["water_needs"] == "Low"
-    assert second["hardiness"]["narrative"] == "USDA zones 8-11"
+    assert second["hardiness_alt"] == "USDA zones 8-11"
     assert first is not second
 
 
-def test_curated_care_and_lookup_care_are_unchanged():
-    assert len(CURATED_CARE) == 82
-    assert lookup_care("Nerium oleander") == _OLEANDER
-    assert lookup_care("Carissa macrocarpa") == _NATAL_PLUM
-    # The species string contains the curated genus key, so the operational
-    # lookup still returns that genus row. It does not return the reference page.
-    assert lookup_care("Penstemon pseudospectabilis") == _PENSTEMON
-    assert lookup_care("Canyon Penstemon") == _PENSTEMON
-    assert lookup_care("Oleander") is None
-    assert "source_url" not in lookup_care("Penstemon pseudospectabilis")
-    for rec in CURATED_CARE.values():
-        assert "source_url" not in rec
-        assert "watering_guidance" not in rec
-
-
-def test_reference_loader_is_not_wired_into_runtime_modules():
+def test_page_loader_is_not_imported_by_schedule_or_rain_code():
     root = Path(REFERENCE_PATH).parent.parent
+    allowed = {"reference_plants.py", "odb_care.py"}
     for path in root.rglob("*.py"):
-        if path.name == "reference_plants.py":
+        if path.name in allowed:
             continue
         text = path.read_text(encoding="utf-8")
         assert "lookup_reference" not in text, path
         assert "outdoordreambuilder_plants" not in text, path
         assert "reference_plants" not in text, path
+    for name in ("schedule.py", "rain_lockout.py", "zone_region.py"):
+        text = (root / name).read_text(encoding="utf-8")
+        assert "odb_care" not in text
+        assert "lookup_care" not in text
     tree = ast.parse((root / "reference_plants.py").read_text(encoding="utf-8"))
     imported: list[str] = []
     for node in ast.walk(tree):
