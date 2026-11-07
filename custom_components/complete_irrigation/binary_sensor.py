@@ -78,6 +78,12 @@ class RainLockoutBinarySensor(BinarySensorEntity):
             "event_rain_in": snapshot.get("event_rain_in") if isinstance(snapshot, dict) else None,
             "rain_sources": snapshot.get("sources") if isinstance(snapshot, dict) else None,
             "zone_lockout_types": snapshot.get("zones") if isinstance(snapshot, dict) else None,
+            "forecast_high_f": snapshot.get("forecast_high_f")
+            if isinstance(snapshot, dict)
+            else None,
+            "forecast_fresh": bool(snapshot.get("forecast_fresh"))
+            if isinstance(snapshot, dict)
+            else False,
         }
 
     def _lockout_changed(self) -> None:

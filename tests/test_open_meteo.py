@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
+import pytest
+
 from custom_components.complete_irrigation.open_meteo import (
     open_meteo_rain_url,
     open_meteo_url,
@@ -73,9 +75,32 @@ def test_rain_url_asks_for_three_past_days_and_no_key():
     assert "hourly=precipitation,precipitation_probability" in url
     assert "precipitation_sum" in url
     assert "et0_fao_evapotranspiration" in url
-    assert "temperature_2m_max" not in url
+    assert "temperature_2m_max" in url
     assert "timezone=America" in url
     assert "key" not in url.lower()
+
+
+def test_rain_parser_uses_today_and_tomorrow_highs_not_past_days():
+    now = datetime(2026, 11, 7, 18, 0)
+    # 50C on a past day is 122F. Tomorrow is 115F. The past day must not win.
+    tomorrow_c = (115.0 - 32.0) * 5.0 / 9.0
+    parsed = parse_open_meteo_rain(
+        {
+            "daily": {
+                "time": [
+                    "2026-11-04",
+                    "2026-11-05",
+                    "2026-11-06",
+                    "2026-11-07",
+                    "2026-11-08",
+                ],
+                "temperature_2m_max": [50.0, 49.0, 48.0, 20.0, tomorrow_c],
+            }
+        },
+        now=now,
+    )
+    assert parsed["forecast_high_f"] == pytest.approx(115.0, abs=0.05)
+    assert parsed["forecast_high_f"] < 120
 
 
 def test_rain_parser_sums_72h_and_the_next_24h():

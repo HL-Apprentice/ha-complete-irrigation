@@ -141,6 +141,12 @@ _RESUME_MAX_ATTEMPTS = 5
 # connect / sock_read / total are all set so a hung TLS handshake cannot sit
 # on the tick. A cached or failed response must not extend a lockout.
 _OM_CACHE = timedelta(minutes=30)
+# Forecast daily high used by the heat ceiling. Older than this, the ceiling
+# falls back to the current temperature and the sensor says the forecast is stale.
+_FORECAST_HIGH_MAX_AGE = timedelta(hours=36)
+# A missing forecast is logged once, then again only after this gap. The tick
+# itself must not warn every time.
+_FORECAST_STALE_WARN_EVERY = timedelta(hours=6)
 # Tempest history is local and moves when rain is falling. Five minutes,
 # and any change in the live sensor, is as stale as this cache gets.
 _TEMPEST_CACHE = timedelta(minutes=5)
@@ -400,9 +406,11 @@ class ScheduleCoordinator:
         # Near-term forecast daily HIGH (F) + when it was cached — fed into the
         # rain-lockout ceiling so it reflects the heat the plants will face
         # DURING the lockout, not just the (often cool) temp when rain falls.
-        # Cached alongside the auto-ETo forecast fetch; None when auto-ETo is off.
+        # The 30-minute rain fetch refreshes it (today + tomorrow), including
+        # when auto-ETo is off. The auto-ETo refresh writes the same cache.
         self._forecast_high_f: float | None = None
         self._forecast_high_at: datetime | None = None
+        self._forecast_stale_warned_at: datetime | None = None
         self._cancel_eto = None
         # v1.30 — restart fail-over: a one-shot timer that resumes any run
         # interrupted by an HA restart (see _resume_interrupted_runs).
@@ -612,6 +620,10 @@ class ScheduleCoordinator:
             # Runs the lockout removed before conflict resolution. They are
             # not scheduled; this is only so the panel can see them.
             "blocked_runs": list(self._lockout_blocked_runs),
+            # Last forecast daily high and whether it is still inside the
+            # 36-hour window the ceiling will actually use.
+            "forecast_high_f": self._forecast_high_f,
+            "forecast_fresh": self._forecast_high_is_fresh(),
         }
 
     async def async_setup(self) -> None:
@@ -2745,6 +2757,7 @@ class ScheduleCoordinator:
             if isinstance(parsed, dict):
                 self._open_meteo_rain = parsed
                 self._om_unconsumed_fresh = True
+                self._store_forecast_high(parsed, now)
             else:
                 # Failure drops the payload. The timestamp still blocks a
                 # retry on every tick. The blend must not keep a dead source.
@@ -2781,8 +2794,57 @@ class ScheduleCoordinator:
             for zone_type in HOLDING_ZONE_TYPES
         )
 
+    def _store_forecast_high(self, parsed: dict[str, Any], now: datetime) -> None:
+        """Remember today+tomorrow's high from a rain fetch. In memory only."""
+        high = parsed.get("forecast_high_f")
+        if isinstance(high, bool) or not isinstance(high, (int, float)):
+            return
+        if not math.isfinite(float(high)):
+            return
+        self._forecast_high_f = float(high)
+        self._forecast_high_at = now
+        self._forecast_stale_warned_at = None
+
+    def _forecast_high_is_fresh(self, now: datetime | None = None) -> bool:
+        """True when the cached forecast high is young enough to cap the lockout."""
+        high = self._forecast_high_f
+        cached_at = self._forecast_high_at
+        if isinstance(high, bool) or not isinstance(high, (int, float)) or cached_at is None:
+            return False
+        if not math.isfinite(float(high)):
+            return False
+        if now is None:
+            from homeassistant.util import dt as dt_util
+
+            now = dt_util.now()
+        try:
+            age = now - cached_at
+        except TypeError:
+            return False
+        return age <= _FORECAST_HIGH_MAX_AGE
+
+    def _note_forecast_freshness(self, now: datetime) -> None:
+        """Warn when the ceiling has no fresh forecast. Not on every tick."""
+        if self._forecast_high_is_fresh(now):
+            self._forecast_stale_warned_at = None
+            return
+        last = self._forecast_stale_warned_at
+        if last is not None:
+            try:
+                if now - last < _FORECAST_STALE_WARN_EVERY:
+                    return
+            except TypeError:
+                pass
+        self._forecast_stale_warned_at = now
+        _LOGGER.warning(
+            "Rain lockout heat ceiling has no fresh forecast high "
+            "(forecast_fresh=false). Until the next Open-Meteo rain fetch, "
+            "the ceiling uses the current temperature only."
+        )
+
     async def _evaluate_lockout(self, now: datetime) -> None:
         """72h rainfall + temperature/ETo -> per-zone-type lockout clocks."""
+        self._note_forecast_freshness(now)
         today = self._read_today_rain_inches()
         history = None
         entity = self._config.get("rain_sensor")
@@ -3183,13 +3245,10 @@ class ScheduleCoordinator:
             if f is not None:
                 vals.append(f)
             break  # first usable weather entity is enough
-        # (c) cached forecast daily high, if fresh (<=36h, matching the ETo gate)
-        if self._forecast_high_f is not None and self._forecast_high_at is not None:
-            from homeassistant.util import dt as dt_util
-
-            age_h = (dt_util.now() - self._forecast_high_at).total_seconds() / 3600
-            if age_h <= 36:
-                vals.append(self._forecast_high_f)
+        # (c) cached forecast daily high, today+tomorrow, while it is fresh.
+        # The rain fetch refreshes this every 30 minutes. Auto-ETo does too.
+        if self._forecast_high_is_fresh():
+            vals.append(float(self._forecast_high_f))
         return max(vals) if vals else None
 
     def _read_current_wind_mph(self) -> float | None:
